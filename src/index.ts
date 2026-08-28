@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// FINAL — SERVICE BINDING
+// FINAL — SERVICE BINDING + DIAGNOSTICS
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -260,6 +260,11 @@ async function processTracker(env) {
   let entries = 0;
   let goals = 0;
   let noGoals = 0;
+  let candidates = 0;
+  let duplicates = 0;
+  let matchErrors = 0;
+
+  const errorDetails = [];
 
 
   for (
@@ -303,7 +308,46 @@ async function processTracker(env) {
 
       }
 
+
+      if (
+        result === "CANDIDATE"
+      ) {
+
+        candidates++;
+
+      }
+
+
+      if (
+        result === "DUPLICATE"
+      ) {
+
+        duplicates++;
+
+      }
+
     } catch (error) {
+
+      matchErrors++;
+
+      const detail = {
+
+        id:
+          match?.id || null,
+
+        match:
+          match?.match || null,
+
+        error:
+          error?.message ||
+          String(error)
+
+      };
+
+      errorDetails.push(
+        detail
+      );
+
 
       console.error(
         "MATCH ERROR",
@@ -339,12 +383,25 @@ async function processTracker(env) {
     source_matches:
       matches.length,
 
+    candidates,
+
+    duplicates,
+
     entries,
 
     goals,
 
     no_goals:
-      noGoals
+      noGoals,
+
+    match_errors:
+      matchErrors,
+
+    error_details:
+      errorDetails.slice(
+        0,
+        10
+      )
 
   };
 
@@ -570,6 +627,14 @@ async function processMatch(
 
 
   // ==========================================================
+  // CANDIDATE FOUND
+  // ==========================================================
+
+  // This is returned only when the match
+  // passes all Hunter filters.
+
+
+  // ==========================================================
   // DUPLICATE PROTECTION
   // ==========================================================
 
@@ -590,7 +655,7 @@ async function processMatch(
 
   if (duplicate) {
 
-    return null;
+    return "DUPLICATE";
 
   }
 
@@ -1038,9 +1103,6 @@ async function sendTelegram(
     );
 
 
-  // Telegram maximum = 4096
-  // Keep margin below maximum.
-
   const MAX_LENGTH = 4000;
 
 
@@ -1469,4 +1531,4 @@ function json(
 
   );
 
-  }
+}
