@@ -777,6 +777,10 @@ footer{
     </span>
 
     <span>
+      Второ полувреме: всички live мачове
+    </span>
+
+    <span>
       xG не се измисля
     </span>
 
@@ -818,6 +822,9 @@ footer{
     10' и 45' и ги подрежда по сила
     според наличните live показатели.
 
+    Второто полувреме се показва
+    отделно като live категория.
+
   </p>
 
 
@@ -831,6 +838,13 @@ footer{
     <b>Score ≥ 60</b>.
 
     Най-силните мачове са най-отгоре.
+
+    <br><br>
+
+    <b>SECOND HALF:</b>
+
+    всички live мачове в 2H,
+    без ограничение 0:0.
 
   </div>
 
@@ -999,11 +1013,11 @@ footer{
     GOAL WATCH V27 · NEXT GOAL HUNTER
   </b>
 
-  · само 0:0 в 1H
-
-  · 10'–45'
+  · 1H 0:0 · 10'–45'
 
   · NEXT GOAL HUNTER SCORE ≥ 60
+
+  · 2H всички live мачове
 
   · подреждане по сила
 
@@ -1032,12 +1046,6 @@ const HUNTER_MINUTE_FROM =
 const HUNTER_MINUTE_TO =
   45;
 
-
-/*
-   Минимален Hunter Score,
-   необходим за таба
-   "Next Goal Hunter".
-*/
 
 const NEXT_GOAL_HUNTER_MIN_SCORE =
   60;
@@ -1654,12 +1662,10 @@ function setStatus(
 
 
 /* =========================================================
-   HUNTER ELIGIBILITY
+   PERIOD DETECTION
 ========================================================= */
 
-function isFirstHalf(
-  m
-){
+function isFirstHalf(m){
 
   const period =
     String(
@@ -1678,9 +1684,26 @@ function isFirstHalf(
 }
 
 
-function isZeroZero(
-  m
-){
+function isSecondHalf(m){
+
+  const period =
+    String(
+      m.period || ""
+    ).toUpperCase();
+
+
+  return (
+    period === "2H" ||
+    period === "SECOND" ||
+    period === "SECOND HALF" ||
+    period === "2ND HALF" ||
+    period.includes("2H")
+  );
+
+}
+
+
+function isZeroZero(m){
 
   return (
     m.scoreH === 0 &&
@@ -1690,9 +1713,11 @@ function isZeroZero(
 }
 
 
-function hunterEligible(
-  m
-){
+/* =========================================================
+   HUNTER ELIGIBILITY
+========================================================= */
+
+function hunterEligible(m){
 
   if(
     !isFirstHalf(m)
@@ -1738,23 +1763,10 @@ function hunterEligible(
 
 
 /* =========================================================
-   NEXT GOAL HUNTER FILTER
+   NEXT GOAL HUNTER
 ========================================================= */
 
-/*
-   Това е ДОПЪЛНИТЕЛНИЯТ филтър само за
-   таба "Next Goal Hunter".
-
-   Базовият Hunter остава:
-   1H + 0:0 + 10'–45'
-
-   Next Goal Hunter добавя:
-   Score >= 60
-*/
-
-function nextGoalHunterEligible(
-  m
-){
+function nextGoalHunterEligible(m){
 
   if(
     !hunterEligible(m)
@@ -1783,59 +1795,34 @@ function nextGoalHunterEligible(
 
 function hunterScore(m){
 
-  const backend =
-    m.signalScore;
+  /*
+    V27 Worker вече изчислява
+    истинския Goal Signal Score.
 
+    HTML НЕ го променя.
+  */
 
   if(
-    backend !== null
+    m.signalScore !== null
   ){
-
-    let score =
-      backend * 0.75;
-
-
-    if(
-      m.goalPressure !== null
-    ){
-
-      score +=
-        Math.min(
-          15,
-          Math.max(
-            0,
-            m.goalPressure * 0.15
-          )
-        );
-
-    }
-
-
-    if(
-      m.dangerIndex !== null
-    ){
-
-      score +=
-        Math.min(
-          10,
-          Math.max(
-            0,
-            m.dangerIndex * 0.10
-          )
-        );
-
-    }
-
 
     return Math.round(
       Math.min(
         100,
-        score
+        Math.max(
+          0,
+          m.signalScore
+        )
       )
     );
 
   }
 
+
+  /*
+    Fallback само ако Worker
+    няма signalScore.
+  */
 
   let score =
     0;
@@ -1926,12 +1913,93 @@ function hunterScore(m){
 
 
 /* =========================================================
+   SECOND HALF SCORE
+========================================================= */
+
+function secondHalfScore(m){
+
+  /*
+    За 2H използваме V27 Signal Score,
+    ако Worker го е изчислил.
+
+    Ако няма Signal Score,
+    подреждаме по наличните показатели.
+  */
+
+  if(
+    m.signalScore !== null
+  ){
+
+    return m.signalScore;
+
+  }
+
+
+  let score =
+    0;
+
+
+  if(
+    m.goalPressure !== null
+  ){
+
+    score +=
+      m.goalPressure * 0.40;
+
+  }
+
+
+  if(
+    m.dangerIndex !== null
+  ){
+
+    score +=
+      m.dangerIndex * 0.30;
+
+  }
+
+
+  if(
+    m.attackScore !== null
+  ){
+
+    score +=
+      m.attackScore * 0.20;
+
+  }
+
+
+  if(
+    m.sotPerMinute !== null
+  ){
+
+    score +=
+      Math.min(
+        10,
+        m.sotPerMinute * 10
+      );
+
+  }
+
+
+  return Math.round(
+    Math.min(
+      100,
+      Math.max(
+        0,
+        score
+      )
+    )
+  );
+
+}
+
+
+/* =========================================================
    SORT HUNTER
 ========================================================= */
 
-function sortHunter(
-  list
-){
+function sortHunter(list){
 
   return [...list].sort(
     (a,b) => {
@@ -1941,6 +2009,68 @@ function sortHunter(
 
       const scoreB =
         hunterScore(b);
+
+
+      if(
+        scoreA !==
+        scoreB
+      ){
+
+        return (
+          scoreB -
+          scoreA
+        );
+
+      }
+
+
+      const pressureA =
+        a.goalPressure ??
+        -1;
+
+      const pressureB =
+        b.goalPressure ??
+        -1;
+
+
+      if(
+        pressureA !==
+        pressureB
+      ){
+
+        return (
+          pressureB -
+          pressureA
+        );
+
+      }
+
+
+      return (
+        b.minute -
+        a.minute
+      );
+
+    }
+  );
+
+}
+
+
+/* =========================================================
+   SORT SECOND HALF
+========================================================= */
+
+function sortSecondHalf(list){
+
+  return [...list].sort(
+    (a,b) => {
+
+      const scoreA =
+        secondHalfScore(a);
+
+      const scoreB =
+        secondHalfScore(b);
 
 
       if(
@@ -2015,9 +2145,7 @@ function sortHunter(
    SIGNAL
 ========================================================= */
 
-function signalClass(
-  signal
-){
+function signalClass(signal){
 
   if(
     signal ===
@@ -2044,9 +2172,7 @@ function signalClass(
 }
 
 
-function signalColor(
-  signal
-){
+function signalColor(signal){
 
   if(
     signal ===
@@ -2163,23 +2289,15 @@ function statRow(
     <div class="stat-row">
 
       <div class="stat-home">
-
         ${displayNumber(home)}
-
       </div>
-
 
       <div class="stat-name">
-
         ${escapeHtml(name)}
-
       </div>
 
-
       <div class="stat-away">
-
         ${displayNumber(away)}
-
       </div>
 
     </div>
@@ -2282,7 +2400,6 @@ function renderCard(m){
       class="card ${signalClass(m.signal)}"
     >
 
-
       <div class="card-top">
 
         <div>
@@ -2327,7 +2444,17 @@ function renderCard(m){
               m.period
             )}
 
-            · 0:0 · HUNTER
+            ·
+
+            ${m.scoreH}:${m.scoreA}
+
+            ·
+
+            ${
+              isSecondHalf(m)
+                ? "2H LIVE"
+                : "HUNTER"
+            }
 
           </div>
 
@@ -2440,7 +2567,7 @@ function renderCard(m){
 
         <span>
 
-          🎯 NEXT GOAL HUNTER SCORE
+          🎯 SCORE
 
         </span>
 
@@ -2857,7 +2984,6 @@ function renderCard(m){
 
         </span>
 
-
       </div>
 
 
@@ -2881,20 +3007,25 @@ function renderFilterBar(){
 
 
   /*
-     Лигите във филтрите се вземат от
-     Next Goal Hunter, тоест само Score >= 60.
+    Филтрите се правят от всички
+    мачове, които могат да се виждат
+    в сайта:
+      - Hunter 1H
+      - Second Half
   */
 
-  const hunterMatches =
+  const visibleMatches =
     matches.filter(
-      nextGoalHunterEligible
+      m =>
+        nextGoalHunterEligible(m) ||
+        isSecondHalf(m)
     );
 
 
   const leagues =
     [
       ...new Set(
-        hunterMatches
+        visibleMatches
           .map(
             m => m.league
           )
@@ -2989,7 +3120,8 @@ function renderFilterBar(){
 
 function renderList(
   list,
-  targetId
+  targetId,
+  sorter = sortHunter
 ){
 
   const el =
@@ -3027,7 +3159,7 @@ function renderList(
 
 
   el.innerHTML =
-    sortHunter(list)
+    sorter(list)
       .map(
         renderCard
       )
@@ -3047,8 +3179,7 @@ function render(){
 
   /*
      NEXT GOAL HUNTER
-     
-     Тук вече има:
+
      1H
      0:0
      10'–45'
@@ -3062,7 +3193,40 @@ function render(){
 
 
   /*
-     League filter
+     HUNTER 1H
+
+     Всички:
+     1H
+     0:0
+     10'–45'
+  */
+
+  let firstHalf =
+    matches.filter(
+      hunterEligible
+    );
+
+
+  /*
+     SECOND HALF
+
+     Всички live мачове,
+     които са във 2H.
+
+     Няма ограничение:
+     - резултат
+     - минута
+     - score
+  */
+
+  let secondHalf =
+    matches.filter(
+      isSecondHalf
+    );
+
+
+  /*
+     LEAGUE FILTER
   */
 
   if(
@@ -3077,29 +3241,17 @@ function render(){
           activeLeagueFilter
       );
 
-  }
-
-
-  /*
-     Hunter — 1H · 0:0
-     
-     Тук НЕ слагаме Score >= 60.
-     Остават всички валидни 1H 0:0 10'–45'.
-  */
-
-  let firstHalf =
-    matches.filter(
-      hunterEligible
-    );
-
-
-  if(
-    activeLeagueFilter !==
-    "all"
-  ){
 
     firstHalf =
       firstHalf.filter(
+        m =>
+          m.league ===
+          activeLeagueFilter
+      );
+
+
+    secondHalf =
+      secondHalf.filter(
         m =>
           m.league ===
           activeLeagueFilter
@@ -3109,12 +3261,8 @@ function render(){
 
 
   /*
-     Второто полувреме нарочно е празно.
+     COUNTS
   */
-
-  const secondHalf =
-    [];
-
 
   document.getElementById(
     "countAll"
@@ -3134,21 +3282,28 @@ function render(){
     secondHalf.length;
 
 
+  /*
+     RENDER
+  */
+
   renderList(
     nextGoalHunter,
-    "allList"
+    "allList",
+    sortHunter
   );
 
 
   renderList(
     firstHalf,
-    "firstList"
+    "firstList",
+    sortHunter
   );
 
 
   renderList(
     secondHalf,
-    "secondList"
+    "secondList",
+    sortSecondHalf
   );
 
 }
@@ -3277,12 +3432,38 @@ async function loadMatches(){
       await fetchWorker();
 
 
+    /*
+      Поддържаме директния формат
+      на V27:
+
+      data.matches
+
+      и резервно:
+
+      data.feed.matches
+      data.data.matches
+    */
+
     const raw =
       Array.isArray(
         data.matches
       )
+
         ? data.matches
-        : [];
+
+        : Array.isArray(
+            data.feed?.matches
+          )
+
+          ? data.feed.matches
+
+          : Array.isArray(
+              data.data?.matches
+            )
+
+            ? data.data.matches
+
+            : [];
 
 
     matches =
@@ -3326,6 +3507,18 @@ async function loadMatches(){
       ).length;
 
 
+    const firstHalfCount =
+      matches.filter(
+        hunterEligible
+      ).length;
+
+
+    const secondHalfCount =
+      matches.filter(
+        isSecondHalf
+      ).length;
+
+
     const timestamp =
       data.timestamp
 
@@ -3350,6 +3543,10 @@ async function loadMatches(){
       `${liveCount} live · ` +
 
       `Hunter ≥60: ${hunterCount} · ` +
+
+      `1H: ${firstHalfCount} · ` +
+
+      `2H: ${secondHalfCount} · ` +
 
       `получени ${returned} · ` +
 
