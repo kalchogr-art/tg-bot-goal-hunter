@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// OPTIMIZED — LOW DB LOAD
+// FIXED — MISSING MATCH FINALIZATION
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -8,6 +8,18 @@ const HUNTER_FROM = 10;
 const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
+
+// Минимално време, след което липсващ TRACKING мач
+// може да бъде приет за приключил.
+// Изчислява се спрямо минутата на ENTRY.
+//
+// ENTRY 10'  -> около 100 минути чакане
+// ENTRY 20'  -> около 90 минути чакане
+// ENTRY 30'  -> около 80 минути чакане
+// ENTRY 42'  -> около 68 минути чакане
+//
+// Има буфер за почивка + добавено време.
+const FINAL_BUFFER_MINUTES = 20;
 
 
 // ============================================================
@@ -305,11 +317,39 @@ async function processTracker(env) {
       continue;
 
 
-    // Keep latest signal
     trackingMap.set(
       matchId,
       signal
     );
+
+  }
+
+
+  // ==========================================================
+  // CURRENT V27 MATCH IDS
+  // ==========================================================
+
+  const currentMatchIds =
+    new Set();
+
+
+  for (
+    const match of matches
+  ) {
+
+    const id =
+      String(
+        match?.id || ""
+      );
+
+
+    if (id) {
+
+      currentMatchIds.add(
+        id
+      );
+
+    }
 
   }
 
@@ -329,6 +369,10 @@ async function processTracker(env) {
   let duplicates = 0;
 
   let matchErrors = 0;
+
+  let missingChecked = 0;
+
+  let missingFinalized = 0;
 
 
   const errorDetails = [];
@@ -433,6 +477,102 @@ async function processTracker(env) {
 
 
   // ==========================================================
+  // MISSING TRACKING FINALIZATION
+  //
+  // IMPORTANT:
+  //
+  // Ако TRACKING мачът вече не е във V27,
+  // processMatch() никога няма да бъде извикан.
+  //
+  // Затова тук проверяваме всички останали TRACKING
+  // сигнали след обработката на текущите live мачове.
+  // ==========================================================
+
+  for (
+    const signal of trackingSignals
+  ) {
+
+    const matchId =
+      String(
+        signal?.match_id || ""
+      );
+
+
+    if (!matchId)
+      continue;
+
+
+    // Все още е live във V27.
+    if (
+      currentMatchIds.has(
+        matchId
+      )
+    ) {
+
+      continue;
+
+    }
+
+
+    missingChecked++;
+
+
+    try {
+
+      const finalized =
+        await finalizeMissingTracking(
+          env,
+          signal,
+          now
+        );
+
+
+      if (finalized) {
+
+        missingFinalized++;
+
+        noGoals++;
+
+      }
+
+    } catch (error) {
+
+      matchErrors++;
+
+
+      const detail = {
+
+        id:
+          matchId,
+
+        match:
+          signal?.match_name ||
+          null,
+
+        error:
+          error?.message ||
+          String(error)
+
+      };
+
+
+      errorDetails.push(
+        detail
+      );
+
+
+      console.error(
+        "MISSING TRACKING ERROR",
+        matchId,
+        error
+      );
+
+    }
+
+  }
+
+
+  // ==========================================================
   // RESULT
   // ==========================================================
 
@@ -468,6 +608,12 @@ async function processTracker(env) {
 
     no_goals:
       noGoals,
+
+    missing_tracking_checked:
+      missingChecked,
+
+    missing_finalized:
+      missingFinalized,
 
     match_errors:
       matchErrors,
@@ -693,14 +839,6 @@ async function processMatch(
 
 
   // ==========================================================
-  // CANDIDATE
-  // ==========================================================
-
-  // The caller counts this result.
-  // No DB query is needed here.
-
-
-  // ==========================================================
   // DATA
   // ==========================================================
 
@@ -826,6 +964,9 @@ async function processMatch(
 
       league,
 
+      entry_time:
+        now.toISOString(),
+
       entry_minute:
         minute,
 
@@ -857,6 +998,167 @@ async function processMatch(
 
 
   return "ENTRY";
+
+}
+
+
+// ============================================================
+// MISSING TRACKING FINALIZER
+// ============================================================
+
+async function finalizeMissingTracking(
+  env,
+  signal,
+  now
+) {
+
+  const entryMinute =
+    Number(
+      signal?.entry_minute || 0
+    );
+
+
+  // Ако по някаква причина минутата липсва,
+  // използваме консервативен максимум.
+  const safeEntryMinute =
+    Math.max(
+      0,
+      Math.min(
+        42,
+        entryMinute
+      )
+    );
+
+
+  // Очаквано оставащо време до края
+  // + halftime + buffer.
+  //
+  // 90 - ENTRY + 15 halftime + 20 buffer
+  //
+  // ENTRY 42:
+  // 90 - 42 + 15 + 20 = 83 мин.
+  //
+  // ENTRY 10:
+  // 90 - 10 + 15 + 20 = 115 мин.
+  const requiredMinutes =
+    Math.max(
+      68,
+      (90 - safeEntryMinute) +
+      15 +
+      FINAL_BUFFER_MINUTES
+    );
+
+
+  const entryTime =
+    new Date(
+      signal?.entry_time ||
+      signal?.created_at ||
+      ""
+    );
+
+
+  if (
+    Number.isNaN(
+      entryTime.getTime()
+    )
+  ) {
+
+    return false;
+
+  }
+
+
+  const ageMinutes =
+    (
+      now.getTime() -
+      entryTime.getTime()
+    ) /
+    60000;
+
+
+  // Все още е твърде рано да приемаме,
+  // че мачът е приключил.
+  if (
+    ageMinutes <
+    requiredMinutes
+  ) {
+
+    return false;
+
+  }
+
+
+  // ==========================================================
+  // ВАЖНО:
+  //
+  // Този сигнал е изчезнал от V27.
+  // Изчакали сме достатъчно време.
+  //
+  // При HUNTER ENTRY винаги започваме от 0:0,
+  // затова липсата на GOAL до този момент означава
+  // NO GOAL за проследяването.
+  // ==========================================================
+
+  const update =
+    await env.DB
+      .prepare(
+        `
+        UPDATE hunter_signals
+
+        SET
+          status = 'NO_GOAL',
+          result = 'NO GOAL',
+          updated_at = ?
+
+        WHERE id = ?
+          AND status = 'TRACKING'
+        `
+      )
+      .bind(
+        now.toISOString(),
+        signal.id
+      )
+      .run();
+
+
+  // Ако нищо не е обновено,
+  // друг процес вероятно вече го е финализирал.
+  if (
+    !update ||
+    Number(
+      update?.meta?.changes || 0
+    ) < 1
+  ) {
+
+    return false;
+
+  }
+
+
+  // ==========================================================
+  // TELEGRAM
+  // ==========================================================
+
+  await sendTelegram(
+    env,
+    formatNoGoalMessage(
+      signal,
+      {
+        score: {
+          home:
+            signal?.entry_home_score ??
+            0,
+
+          away:
+            signal?.entry_away_score ??
+            0
+        }
+      }
+    )
+  );
+
+
+  return true;
 
 }
 
@@ -1217,7 +1519,8 @@ async function sendTelegram(
 
             })
 
-        }
+          }
+
       );
 
 
@@ -1606,4 +1909,4 @@ function json(
 
   );
 
-    }
+      }
