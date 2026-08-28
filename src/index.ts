@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// CPU OPTIMIZED + DUPLICATE TELEGRAM PROTECTION
+// LOW CPU / ANTI DUPLICATE VERSION
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -9,8 +9,6 @@ const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
 
-// След този период TRACKING мач,
-// който е изчезнал от V27, се приема за NO GOAL.
 const FINAL_BUFFER_MINUTES = 20;
 
 
@@ -20,45 +18,51 @@ const FINAL_BUFFER_MINUTES = 20;
 
 export default {
 
+  // ----------------------------------------------------------
+  // BROWSER / MANUAL STATUS
+  //
+  // IMPORTANT:
+  // fetch() НЕ стартира tracker-а.
+  // Това предотвратява двойни изпълнения при refresh.
+  // ----------------------------------------------------------
+
   async fetch(request, env) {
 
     if (request.method === "OPTIONS") {
+
       return new Response(null, {
         status: 204,
         headers: corsHeaders()
       });
-    }
-
-    try {
-
-      const result = await processTracker(env);
-
-      return json(result);
-
-    } catch (error) {
-
-      console.error(
-        "TRACKER ERROR:",
-        error?.message || String(error)
-      );
-
-      return json({
-        success: false,
-        error: error?.message || String(error)
-      }, 500);
 
     }
+
+    return json({
+      success: true,
+      worker: "GOAL WATCH — HUNTER TRACKER",
+      status: "ONLINE",
+      mode: "CRON ONLY",
+      message: "Tracker runs only from Cron.",
+      time: getSofiaTime(new Date()).text
+    });
+
   },
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // CRON
-  // ==========================================================
+  // ----------------------------------------------------------
 
   async scheduled(event, env, ctx) {
 
     ctx.waitUntil(
       processTracker(env)
+        .catch(error => {
+          console.error(
+            "TRACKER ERROR",
+            error?.message || String(error)
+          );
+        })
     );
 
   }
@@ -73,7 +77,6 @@ export default {
 async function processTracker(env) {
 
   const now = new Date();
-
   const local = getSofiaTime(now);
 
 
@@ -105,12 +108,7 @@ async function processTracker(env) {
 
     await sendDailyReport(env, local);
 
-    return {
-      success: true,
-      action: "DAILY_REPORT",
-      local_time: local.text
-    };
-
+    return;
   }
 
 
@@ -118,19 +116,17 @@ async function processTracker(env) {
   // TRACKING WINDOW
   // ==========================================================
 
-  if (local.hour < 12) {
+  if (
+    local.hour < 12 ||
+    local.hour >= 24
+  ) {
 
-    return {
-      success: true,
-      action: "OUTSIDE_WINDOW",
-      local_time: local.text
-    };
-
+    return;
   }
 
 
   // ==========================================================
-  // V27
+  // GET V27
   // ==========================================================
 
   const response = await env.V27.fetch(
@@ -148,21 +144,19 @@ async function processTracker(env) {
 
   if (!response.ok) {
 
-    const errorText =
-      await response.text();
+    const text = await response.text();
 
     throw new Error(
-      "V27 SERVICE HTTP " +
+      "V27 HTTP " +
       response.status +
       " | " +
-      errorText.substring(0, 300)
+      text.substring(0, 300)
     );
 
   }
 
 
-  const data =
-    await response.json();
+  const data = await response.json();
 
 
   if (data?.success !== true) {
@@ -175,7 +169,7 @@ async function processTracker(env) {
 
 
   const matches =
-    Array.isArray(data?.matches)
+    Array.isArray(data.matches)
       ? data.matches
       : [];
 
@@ -184,42 +178,31 @@ async function processTracker(env) {
   // LOAD TRACKING SIGNALS ONCE
   // ==========================================================
 
-  const trackingResult =
+  const result =
     await env.DB
       .prepare(`
-        SELECT
-          id,
-          match_id,
-          match_name,
-          league,
-          entry_time,
-          entry_minute,
-          hunter_score,
-          entry_home_score,
-          entry_away_score
+        SELECT *
         FROM hunter_signals
         WHERE status = 'TRACKING'
       `)
       .all();
 
 
-  const trackingSignals =
-    trackingResult?.results || [];
+  const signals =
+    result?.results || [];
 
 
   const trackingMap =
     new Map();
 
 
-  for (const signal of trackingSignals) {
+  for (const signal of signals) {
 
     const id =
       String(signal?.match_id || "");
 
-    if (!id)
-      continue;
-
-    trackingMap.set(id, signal);
+    if (id)
+      trackingMap.set(id, signal);
 
   }
 
@@ -228,7 +211,7 @@ async function processTracker(env) {
   // CURRENT MATCH IDS
   // ==========================================================
 
-  const currentMatchIds =
+  const currentIds =
     new Set();
 
   for (const match of matches) {
@@ -237,25 +220,9 @@ async function processTracker(env) {
       String(match?.id || "");
 
     if (id)
-      currentMatchIds.add(id);
+      currentIds.add(id);
 
   }
-
-
-  // ==========================================================
-  // COUNTERS
-  // ==========================================================
-
-  let entries = 0;
-  let goals = 0;
-  let noGoals = 0;
-  let candidates = 0;
-  let duplicates = 0;
-  let missingChecked = 0;
-  let missingFinalized = 0;
-  let matchErrors = 0;
-
-  const errorDetails = [];
 
 
   // ==========================================================
@@ -266,60 +233,20 @@ async function processTracker(env) {
 
     try {
 
-      const result =
-        await processMatch(
-          env,
-          match,
-          now,
-          local,
-          trackingMap
-        );
-
-
-      switch (result) {
-
-        case "ENTRY":
-          entries++;
-          break;
-
-        case "GOAL":
-          goals++;
-          break;
-
-        case "NO_GOAL":
-          noGoals++;
-          break;
-
-        case "CANDIDATE":
-          candidates++;
-          break;
-
-        case "DUPLICATE":
-          duplicates++;
-          break;
-
-      }
+      await processMatch(
+        env,
+        match,
+        now,
+        local,
+        trackingMap
+      );
 
     } catch (error) {
-
-      matchErrors++;
-
-      if (errorDetails.length < 10) {
-
-        errorDetails.push({
-          id: match?.id || null,
-          match: match?.match || null,
-          error:
-            error?.message ||
-            String(error)
-        });
-
-      }
 
       console.error(
         "MATCH ERROR",
         match?.id,
-        error
+        error?.message || String(error)
       );
 
     }
@@ -328,120 +255,42 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // FINALIZE MISSING TRACKING
+  // MISSING TRACKING
+  //
+  // Only check signals that disappeared from V27.
   // ==========================================================
 
-  for (const signal of trackingSignals) {
+  for (const signal of signals) {
 
-    const matchId =
+    const id =
       String(signal?.match_id || "");
 
-    if (!matchId)
+    if (!id)
       continue;
 
-
-    // Still live.
-    if (currentMatchIds.has(matchId))
+    if (currentIds.has(id))
       continue;
-
-
-    missingChecked++;
 
 
     try {
 
-      const finalized =
-        await finalizeMissingTracking(
-          env,
-          signal,
-          now
-        );
-
-
-      if (finalized) {
-
-        missingFinalized++;
-        noGoals++;
-
-      }
+      await finalizeMissingTracking(
+        env,
+        signal,
+        now
+      );
 
     } catch (error) {
 
-      matchErrors++;
-
-      if (errorDetails.length < 10) {
-
-        errorDetails.push({
-          id: matchId,
-          match:
-            signal?.match_name || null,
-          error:
-            error?.message ||
-            String(error)
-        });
-
-      }
-
       console.error(
-        "MISSING TRACKING ERROR",
-        matchId,
-        error
+        "FINALIZE ERROR",
+        id,
+        error?.message || String(error)
       );
 
     }
 
   }
-
-
-  // ==========================================================
-  // RESULT
-  // ==========================================================
-
-  return {
-
-    success: true,
-
-    action: "TRACKING",
-
-    local_time:
-      local.text,
-
-    source:
-      "V27 SERVICE BINDING",
-
-    source_status:
-      response.status,
-
-    source_matches:
-      matches.length,
-
-    active_tracking:
-      trackingMap.size,
-
-    candidates,
-
-    duplicates,
-
-    entries,
-
-    goals,
-
-    no_goals:
-      noGoals,
-
-    missing_tracking_checked:
-      missingChecked,
-
-    missing_finalized:
-      missingFinalized,
-
-    match_errors:
-      matchErrors,
-
-    error_details:
-      errorDetails
-
-  };
 
 }
 
@@ -462,7 +311,7 @@ async function processMatch(
     String(m?.id || "");
 
   if (!id)
-    return null;
+    return;
 
 
   const home =
@@ -486,14 +335,10 @@ async function processMatch(
   if (existing) {
 
     const entryHome =
-      Number(
-        existing.entry_home_score || 0
-      );
+      Number(existing.entry_home_score || 0);
 
     const entryAway =
-      Number(
-        existing.entry_away_score || 0
-      );
+      Number(existing.entry_away_score || 0);
 
 
     // ========================================================
@@ -511,9 +356,7 @@ async function processMatch(
           : null;
 
       const entryMinute =
-        Number(
-          existing.entry_minute || 0
-        );
+        Number(existing.entry_minute || 0);
 
       const afterMinutes =
         goalMinute !== null
@@ -523,15 +366,6 @@ async function processMatch(
             )
           : null;
 
-
-      // IMPORTANT:
-      // DB UPDATE FIRST.
-      //
-      // Only the process that successfully changes
-      // TRACKING -> GOAL is allowed to send Telegram.
-      //
-      // This prevents duplicate messages when the
-      // Worker is triggered twice at the same time.
 
       const update =
         await env.DB
@@ -563,14 +397,15 @@ async function processMatch(
         );
 
 
+      // IMPORTANT:
+      // Telegram is sent ONLY if DB update succeeded.
+      // This prevents duplicate notifications.
+
+      if (changes < 1)
+        return;
+
+
       trackingMap.delete(id);
-
-
-      if (changes < 1) {
-
-        return "DUPLICATE";
-
-      }
 
 
       await sendTelegram(
@@ -584,8 +419,7 @@ async function processMatch(
       );
 
 
-      return "GOAL";
-
+      return;
     }
 
 
@@ -593,7 +427,9 @@ async function processMatch(
     // NO GOAL — SECOND HALF
     // ========================================================
 
-    if (isFirstHalfFinished(m)) {
+    if (
+      isFirstHalfFinished(m)
+    ) {
 
       const update =
         await env.DB
@@ -621,14 +457,11 @@ async function processMatch(
         );
 
 
+      if (changes < 1)
+        return;
+
+
       trackingMap.delete(id);
-
-
-      if (changes < 1) {
-
-        return "DUPLICATE";
-
-      }
 
 
       await sendTelegram(
@@ -640,18 +473,16 @@ async function processMatch(
       );
 
 
-      return "NO_GOAL";
-
+      return;
     }
 
 
-    return null;
-
+    return;
   }
 
 
   // ==========================================================
-  // HUNTER CANDIDATE
+  // NEW HUNTER ENTRY
   // ==========================================================
 
   const hunterScore =
@@ -665,20 +496,13 @@ async function processMatch(
     )
   ) {
 
-    return null;
-
+    return;
   }
 
 
   // ==========================================================
-  // CANDIDATE COUNTER
+  // DATA
   // ==========================================================
-
-  // We continue directly to INSERT.
-  // No extra SELECT is performed here.
-  //
-  // This is important for CPU/DB efficiency.
-
 
   const matchName =
     m?.match ||
@@ -711,18 +535,11 @@ async function processMatch(
 
 
   // ==========================================================
-  // SAFE ENTRY INSERT
+  // DUPLICATE PROTECTION
+  //
+  // No extra SELECT.
+  // trackingMap already contains active signals.
   // ==========================================================
-  //
-  // INSERT only when another TRACKING signal for the same
-  // match does not already exist.
-  //
-  // This protects against:
-  // refresh + cron
-  // refresh + refresh
-  // cron + cron
-  //
-  // without an additional SELECT.
 
   const insert =
     await env.DB
@@ -752,7 +569,7 @@ async function processMatch(
 
         )
 
-        SELECT
+        VALUES (
 
           ?, ?, ?,
 
@@ -766,13 +583,6 @@ async function processMatch(
           NULL,
 
           ?, ?
-
-        WHERE NOT EXISTS (
-
-          SELECT 1
-          FROM hunter_signals
-          WHERE match_id = ?
-            AND status = 'TRACKING'
 
         )
       `)
@@ -794,13 +604,15 @@ async function processMatch(
         away,
 
         now.toISOString(),
-        now.toISOString(),
-
-        id
+        now.toISOString()
 
       )
       .run();
 
+
+  // ==========================================================
+  // INSERT SUCCESS
+  // ==========================================================
 
   const changes =
     Number(
@@ -808,55 +620,46 @@ async function processMatch(
     );
 
 
-  // ==========================================================
-  // DUPLICATE ENTRY
-  // ==========================================================
-
-  if (changes < 1) {
-
-    return "DUPLICATE";
-
-  }
+  if (changes < 1)
+    return;
 
 
   // ==========================================================
-  // ADD TO LOCAL MAP
+  // ADD TO MEMORY MAP
   // ==========================================================
-
-  const newSignal = {
-
-    id:
-      insert?.meta?.last_row_id || null,
-
-    match_id:
-      id,
-
-    match_name:
-      matchName,
-
-    league,
-
-    entry_time:
-      now.toISOString(),
-
-    entry_minute:
-      minute,
-
-    hunter_score:
-      hunterScore,
-
-    entry_home_score:
-      home,
-
-    entry_away_score:
-      away
-
-  };
-
 
   trackingMap.set(
     id,
-    newSignal
+    {
+
+      id:
+        insert?.meta?.last_row_id ||
+        null,
+
+      match_id:
+        id,
+
+      match_name:
+        matchName,
+
+      league,
+
+      entry_time:
+        now.toISOString(),
+
+      entry_minute:
+        minute,
+
+      hunter_score:
+        hunterScore,
+
+      entry_home_score:
+        home,
+
+      entry_away_score:
+        away
+
+    }
   );
 
 
@@ -872,9 +675,6 @@ async function processMatch(
       local
     )
   );
-
-
-  return "ENTRY";
 
 }
 
@@ -905,10 +705,6 @@ async function finalizeMissingTracking(
     );
 
 
-  // ==========================================================
-  // EXPECTED MATCH END
-  // ==========================================================
-
   const requiredMinutes =
     Math.max(
       68,
@@ -921,6 +717,7 @@ async function finalizeMissingTracking(
   const entryTime =
     new Date(
       signal?.entry_time ||
+      signal?.created_at ||
       ""
     );
 
@@ -931,8 +728,7 @@ async function finalizeMissingTracking(
     )
   ) {
 
-    return false;
-
+    return;
   }
 
 
@@ -948,21 +744,13 @@ async function finalizeMissingTracking(
     requiredMinutes
   ) {
 
-    return false;
-
+    return;
   }
 
 
   // ==========================================================
-  // ATOMIC FINALIZATION
+  // FINALIZE ONLY IF STILL TRACKING
   // ==========================================================
-  //
-  // Only one Worker instance can change:
-  //
-  // TRACKING -> NO_GOAL
-  //
-  // The one that changes it gets permission
-  // to send Telegram.
 
   const update =
     await env.DB
@@ -990,11 +778,8 @@ async function finalizeMissingTracking(
     );
 
 
-  if (changes < 1) {
-
-    return false;
-
-  }
+  if (changes < 1)
+    return;
 
 
   // ==========================================================
@@ -1007,6 +792,7 @@ async function finalizeMissingTracking(
       signal,
       {
         score: {
+
           home:
             signal?.entry_home_score ??
             0,
@@ -1014,13 +800,11 @@ async function finalizeMissingTracking(
           away:
             signal?.entry_away_score ??
             0
+
         }
       }
     )
   );
-
-
-  return true;
 
 }
 
@@ -1035,9 +819,7 @@ function isHunterCandidate(
 ) {
 
   const minute =
-    Number(
-      m?.minute ?? 0
-    );
+    Number(m?.minute ?? 0);
 
 
   const period =
@@ -1047,15 +829,11 @@ function isHunterCandidate(
 
 
   const home =
-    Number(
-      m?.score?.home ?? 0
-    );
+    Number(m?.score?.home ?? 0);
 
 
   const away =
-    Number(
-      m?.score?.away ?? 0
-    );
+    Number(m?.score?.away ?? 0);
 
 
   const firstHalf =
@@ -1159,10 +937,6 @@ async function sendDailyReport(
     );
 
 
-  // ==========================================================
-  // CHECK EXISTING REPORT
-  // ==========================================================
-
   const already =
     await env.DB
       .prepare(`
@@ -1178,10 +952,6 @@ async function sendDailyReport(
   if (already)
     return;
 
-
-  // ==========================================================
-  // STATS
-  // ==========================================================
 
   const stats =
     await env.DB
@@ -1252,7 +1022,6 @@ async function sendDailyReport(
 
 
   const message =
-
 `📊 DAILY HUNTER REPORT
 
 📅 ${reportDate}
@@ -1276,10 +1045,6 @@ NEXT GOAL HUNTER
     message
   );
 
-
-  // ==========================================================
-  // SAVE REPORT
-  // ==========================================================
 
   await env.DB
     .prepare(`
@@ -1338,71 +1103,47 @@ async function sendTelegram(
     return;
 
 
-  const url =
-    `https://api.telegram.org/bot${token}/sendMessage`;
+  const response =
+    await fetch(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      {
 
+        method: "POST",
 
-  const MAX_LENGTH = 4000;
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
 
+        body:
+          JSON.stringify({
 
-  for (
-    let i = 0;
-    i < text.length;
-    i += MAX_LENGTH
-  ) {
+            chat_id:
+              chatId,
 
-    const part =
-      text.substring(
-        i,
-        i + MAX_LENGTH
-      );
+            text
 
+          })
 
-    const response =
-      await fetch(
-        url,
-        {
-
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
-
-          body:
-            JSON.stringify({
-
-              chat_id:
-                chatId,
-
-              text:
-                part
-
-            })
-
-          }
+        }
 
       );
 
 
-    if (!response.ok) {
+  if (!response.ok) {
 
-      const errorText =
-        await response.text();
+    const errorText =
+      await response.text();
 
-
-      throw new Error(
-        "Telegram HTTP " +
-        response.status +
-        " | " +
-        errorText.substring(
-          0,
-          500
-        )
-      );
-
-    }
+    throw new Error(
+      "Telegram HTTP " +
+      response.status +
+      " | " +
+      errorText.substring(
+        0,
+        500
+      )
+    );
 
   }
 
@@ -1592,26 +1333,25 @@ function getSofiaTime(date) {
   const year =
     get("year");
 
+
   const month =
     get("month");
+
 
   const day =
     get("day");
 
+
   const hour =
-    Number(
-      get("hour")
-    );
+    Number(get("hour"));
+
 
   const minute =
-    Number(
-      get("minute")
-    );
+    Number(get("minute"));
+
 
   const second =
-    Number(
-      get("second")
-    );
+    Number(get("second"));
 
 
   return {
@@ -1747,7 +1487,9 @@ function json(
   return new Response(
 
     JSON.stringify(
-      data
+      data,
+      null,
+      2
     ),
 
     {
@@ -1767,4 +1509,4 @@ function json(
 
   );
 
-  }
+      }
