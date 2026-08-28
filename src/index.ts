@@ -1,83 +1,42 @@
-// ============================================================
-// GOAL WATCH — HUNTER TRACKER
-// FIXED — MISSING MATCH FINALIZATION
-// ============================================================
-
 const HUNTER_MIN_SCORE = 60;
 const HUNTER_FROM = 10;
 const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
-
-// Минимално време, след което липсващ TRACKING мач
-// може да бъде приет за приключил.
-// Изчислява се спрямо минутата на ENTRY.
-//
-// ENTRY 10'  -> около 100 минути чакане
-// ENTRY 20'  -> около 90 минути чакане
-// ENTRY 30'  -> около 80 минути чакане
-// ENTRY 42'  -> около 68 минути чакане
-//
-// Има буфер за почивка + добавено време.
 const FINAL_BUFFER_MINUTES = 20;
 
-
-// ============================================================
-// MAIN
-// ============================================================
-
 export default {
-
-  // ----------------------------------------------------------
-  // MANUAL TEST
-  // ----------------------------------------------------------
 
   async fetch(request, env) {
 
     if (request.method === "OPTIONS") {
-
       return new Response(null, {
         status: 204,
         headers: corsHeaders()
       });
-
     }
 
     try {
-
-      const result =
-        await processTracker(env);
-
+      const result = await processTracker(env);
       return json(result);
 
     } catch (error) {
 
-      console.error(error);
+      console.error("TRACKER ERROR", error);
 
       return json({
         success: false,
-        error:
-          error?.message ||
-          String(error)
+        error: error?.message || String(error)
       }, 500);
-
     }
-
   },
-
-
-  // ----------------------------------------------------------
-  // CRON
-  // ----------------------------------------------------------
 
   async scheduled(event, env, ctx) {
 
     ctx.waitUntil(
       processTracker(env)
     );
-
   }
-
 };
 
 
@@ -87,52 +46,20 @@ export default {
 
 async function processTracker(env) {
 
-  const now =
-    new Date();
+  const now = new Date();
+  const local = getSofiaTime(now);
 
+  if (!env.V27)
+    throw new Error("V27 Service Binding missing");
 
-  const local =
-    getSofiaTime(now);
+  if (!env.DB)
+    throw new Error("DB binding missing");
 
+  if (!env.TELEGRAM_BOT_TOKEN)
+    throw new Error("TELEGRAM_BOT_TOKEN missing");
 
-  // ==========================================================
-  // CONFIGURATION CHECK
-  // ==========================================================
-
-  if (!env.V27) {
-
-    throw new Error(
-      "V27 Service Binding missing"
-    );
-
-  }
-
-
-  if (!env.DB) {
-
-    throw new Error(
-      "DB binding missing"
-    );
-
-  }
-
-
-  if (!env.TELEGRAM_BOT_TOKEN) {
-
-    throw new Error(
-      "TELEGRAM_BOT_TOKEN missing"
-    );
-
-  }
-
-
-  if (!env.TELEGRAM_CHAT_ID) {
-
-    throw new Error(
-      "TELEGRAM_CHAT_ID missing"
-    );
-
-  }
+  if (!env.TELEGRAM_CHAT_ID)
+    throw new Error("TELEGRAM_CHAT_ID missing");
 
 
   // ==========================================================
@@ -149,19 +76,11 @@ async function processTracker(env) {
       local
     );
 
-
     return {
-
       success: true,
-
-      action:
-        "DAILY_REPORT",
-
-      local_time:
-        local.text
-
+      action: "DAILY_REPORT",
+      local_time: local.text
     };
-
   }
 
 
@@ -175,44 +94,29 @@ async function processTracker(env) {
   ) {
 
     return {
-
       success: true,
-
-      action:
-        "OUTSIDE_WINDOW",
-
-      local_time:
-        local.text
-
+      action: "OUTSIDE_WINDOW",
+      local_time: local.text
     };
-
   }
 
 
   // ==========================================================
-  // FETCH V27 THROUGH SERVICE BINDING
+  // V27
   // ==========================================================
-
-  const v27Request =
-    new Request(
-      "https://v27.internal/",
-      {
-        method: "GET",
-
-        headers: {
-          "Accept":
-            "application/json"
-        }
-
-      }
-    );
-
 
   const response =
     await env.V27.fetch(
-      v27Request
+      new Request(
+        "https://v27.internal/",
+        {
+          method: "GET",
+          headers: {
+            "Accept": "application/json"
+          }
+        }
+      )
     );
-
 
   const responseText =
     await response.text();
@@ -224,17 +128,12 @@ async function processTracker(env) {
       "V27 SERVICE HTTP " +
       response.status +
       " | " +
-      responseText.substring(
-        0,
-        500
-      )
+      responseText.substring(0, 500)
     );
-
   }
 
 
   let data;
-
 
   try {
 
@@ -243,16 +142,12 @@ async function processTracker(env) {
         responseText
       );
 
-  } catch (error) {
+  } catch {
 
     throw new Error(
       "V27 JSON ERROR | " +
-      responseText.substring(
-        0,
-        500
-      )
+      responseText.substring(0, 500)
     );
-
   }
 
 
@@ -263,7 +158,6 @@ async function processTracker(env) {
     throw new Error(
       "V27 returned success=false"
     );
-
   }
 
 
@@ -276,14 +170,23 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD ALL ACTIVE TRACKING SIGNALS ONCE
+  // LOAD TRACKING SIGNALS
   // ==========================================================
 
   const trackingResult =
     await env.DB
       .prepare(
         `
-        SELECT *
+        SELECT
+          id,
+          match_id,
+          match_name,
+          league,
+          entry_time,
+          entry_minute,
+          hunter_score,
+          entry_home_score,
+          entry_away_score
         FROM hunter_signals
         WHERE status = 'TRACKING'
         `
@@ -296,7 +199,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // MAP ACTIVE SIGNALS BY MATCH ID
+  // TRACKING MAP
   // ==========================================================
 
   const trackingMap =
@@ -307,20 +210,20 @@ async function processTracker(env) {
     const signal of trackingSignals
   ) {
 
-    const matchId =
+    const id =
       String(
         signal?.match_id || ""
       );
 
 
-    if (!matchId)
-      continue;
+    if (id) {
 
+      trackingMap.set(
+        id,
+        signal
+      );
 
-    trackingMap.set(
-      matchId,
-      signal
-    );
+    }
 
   }
 
@@ -355,28 +258,24 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // PROCESS MATCHES
+  // COUNTERS
   // ==========================================================
 
   let entries = 0;
-
   let goals = 0;
-
   let noGoals = 0;
-
   let candidates = 0;
-
-  let duplicates = 0;
-
   let matchErrors = 0;
-
   let missingChecked = 0;
-
   let missingFinalized = 0;
 
 
   const errorDetails = [];
 
+
+  // ==========================================================
+  // PROCESS CURRENT MATCHES
+  // ==========================================================
 
   for (
     const match of matches
@@ -400,41 +299,23 @@ async function processTracker(env) {
 
         entries++;
 
-      }
-
-
-      if (
+      } else if (
         result === "GOAL"
       ) {
 
         goals++;
 
-      }
-
-
-      if (
+      } else if (
         result === "NO_GOAL"
       ) {
 
         noGoals++;
 
-      }
-
-
-      if (
+      } else if (
         result === "CANDIDATE"
       ) {
 
         candidates++;
-
-      }
-
-
-      if (
-        result === "DUPLICATE"
-      ) {
-
-        duplicates++;
 
       }
 
@@ -478,14 +359,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // MISSING TRACKING FINALIZATION
-  //
-  // IMPORTANT:
-  //
-  // Ако TRACKING мачът вече не е във V27,
-  // processMatch() никога няма да бъде извикан.
-  //
-  // Затова тук проверяваме всички останали TRACKING
-  // сигнали след обработката на текущите live мачове.
   // ==========================================================
 
   for (
@@ -502,7 +375,6 @@ async function processTracker(env) {
       continue;
 
 
-    // Все още е live във V27.
     if (
       currentMatchIds.has(
         matchId
@@ -530,7 +402,6 @@ async function processTracker(env) {
       if (finalized) {
 
         missingFinalized++;
-
         noGoals++;
 
       }
@@ -540,7 +411,7 @@ async function processTracker(env) {
       matchErrors++;
 
 
-      const detail = {
+      errorDetails.push({
 
         id:
           matchId,
@@ -553,12 +424,7 @@ async function processTracker(env) {
           error?.message ||
           String(error)
 
-      };
-
-
-      errorDetails.push(
-        detail
-      );
+      });
 
 
       console.error(
@@ -599,8 +465,6 @@ async function processTracker(env) {
       trackingMap.size,
 
     candidates,
-
-    duplicates,
 
     entries,
 
@@ -647,33 +511,12 @@ async function processMatch(
     );
 
 
-  if (!id) {
-
+  if (!id)
     return null;
-
-  }
-
-
-  const home =
-    Number(
-      m?.score?.home ?? 0
-    );
-
-
-  const away =
-    Number(
-      m?.score?.away ?? 0
-    );
-
-
-  const minute =
-    Number(
-      m?.minute ?? 0
-    );
 
 
   // ==========================================================
-  // EXISTING TRACKING SIGNAL
+  // EXISTING TRACKING
   // ==========================================================
 
   const existing =
@@ -681,6 +524,18 @@ async function processMatch(
 
 
   if (existing) {
+
+    const home =
+      Number(
+        m?.score?.home ?? 0
+      );
+
+
+    const away =
+      Number(
+        m?.score?.away ?? 0
+      );
+
 
     const entryHome =
       Number(
@@ -702,6 +557,12 @@ async function processMatch(
       home > entryHome ||
       away > entryAway
     ) {
+
+      const minute =
+        Number(
+          m?.minute || 0
+        );
+
 
       const goalMinute =
         minute > 0
@@ -738,6 +599,7 @@ async function processMatch(
             updated_at = ?
 
           WHERE id = ?
+            AND status = 'TRACKING'
           `
         )
         .bind(
@@ -749,7 +611,9 @@ async function processMatch(
         .run();
 
 
-      trackingMap.delete(id);
+      trackingMap.delete(
+        id
+      );
 
 
       await sendTelegram(
@@ -764,7 +628,6 @@ async function processMatch(
 
 
       return "GOAL";
-
     }
 
 
@@ -787,6 +650,7 @@ async function processMatch(
             updated_at = ?
 
           WHERE id = ?
+            AND status = 'TRACKING'
           `
         )
         .bind(
@@ -796,7 +660,9 @@ async function processMatch(
         .run();
 
 
-      trackingMap.delete(id);
+      trackingMap.delete(
+        id
+      );
 
 
       await sendTelegram(
@@ -809,28 +675,57 @@ async function processMatch(
 
 
       return "NO_GOAL";
-
     }
 
+
+    return null;
+  }
+
+
+  // ==========================================================
+  // FAST FILTER
+  // ==========================================================
+
+  const minute =
+    Number(
+      m?.minute ?? 0
+    );
+
+
+  if (
+    minute < HUNTER_FROM ||
+    minute > HUNTER_TO
+  ) {
 
     return null;
 
   }
 
 
-  // ==========================================================
-  // NEW HUNTER CANDIDATE
-  // ==========================================================
+  const home =
+    Number(
+      m?.score?.home ?? 0
+    );
 
-  const hunterScore =
-    getHunterScore(m);
+
+  const away =
+    Number(
+      m?.score?.away ?? 0
+    );
 
 
   if (
-    !isHunterCandidate(
-      m,
-      hunterScore
-    )
+    home !== 0 ||
+    away !== 0
+  ) {
+
+    return null;
+
+  }
+
+
+  if (
+    !isFirstHalf(m)
   ) {
 
     return null;
@@ -839,7 +734,25 @@ async function processMatch(
 
 
   // ==========================================================
-  // DATA
+  // HUNTER SCORE
+  // ==========================================================
+
+  const hunterScore =
+    getHunterScore(m);
+
+
+  if (
+    hunterScore <
+    HUNTER_MIN_SCORE
+  ) {
+
+    return null;
+
+  }
+
+
+  // ==========================================================
+  // ENTRY DATA
   // ==========================================================
 
   const matchName =
@@ -947,7 +860,7 @@ async function processMatch(
 
 
   // ==========================================================
-  // ADD NEW SIGNAL TO MAP
+  // MAP
   // ==========================================================
 
   trackingMap.set(
@@ -998,7 +911,6 @@ async function processMatch(
 
 
   return "ENTRY";
-
 }
 
 
@@ -1018,8 +930,6 @@ async function finalizeMissingTracking(
     );
 
 
-  // Ако по някаква причина минутата липсва,
-  // използваме консервативен максимум.
   const safeEntryMinute =
     Math.max(
       0,
@@ -1030,16 +940,6 @@ async function finalizeMissingTracking(
     );
 
 
-  // Очаквано оставащо време до края
-  // + halftime + buffer.
-  //
-  // 90 - ENTRY + 15 halftime + 20 buffer
-  //
-  // ENTRY 42:
-  // 90 - 42 + 15 + 20 = 83 мин.
-  //
-  // ENTRY 10:
-  // 90 - 10 + 15 + 20 = 115 мин.
   const requiredMinutes =
     Math.max(
       68,
@@ -1076,8 +976,6 @@ async function finalizeMissingTracking(
     60000;
 
 
-  // Все още е твърде рано да приемаме,
-  // че мачът е приключил.
   if (
     ageMinutes <
     requiredMinutes
@@ -1089,14 +987,7 @@ async function finalizeMissingTracking(
 
 
   // ==========================================================
-  // ВАЖНО:
-  //
-  // Този сигнал е изчезнал от V27.
-  // Изчакали сме достатъчно време.
-  //
-  // При HUNTER ENTRY винаги започваме от 0:0,
-  // затова липсата на GOAL до този момент означава
-  // NO GOAL за проследяването.
+  // ATOMIC UPDATE
   // ==========================================================
 
   const update =
@@ -1121,8 +1012,6 @@ async function finalizeMissingTracking(
       .run();
 
 
-  // Ако нищо не е обновено,
-  // друг процес вероятно вече го е финализирал.
   if (
     !update ||
     Number(
@@ -1145,6 +1034,7 @@ async function finalizeMissingTracking(
       signal,
       {
         score: {
+
           home:
             signal?.entry_home_score ??
             0,
@@ -1152,6 +1042,7 @@ async function finalizeMissingTracking(
           away:
             signal?.entry_away_score ??
             0
+
         }
       }
     )
@@ -1159,24 +1050,14 @@ async function finalizeMissingTracking(
 
 
   return true;
-
 }
 
 
 // ============================================================
-// HUNTER FILTER
+// FIRST HALF
 // ============================================================
 
-function isHunterCandidate(
-  m,
-  score
-) {
-
-  const minute =
-    Number(
-      m?.minute ?? 0
-    );
-
+function isFirstHalf(m) {
 
   const period =
     String(
@@ -1184,52 +1065,13 @@ function isHunterCandidate(
     ).toUpperCase();
 
 
-  const home =
-    Number(
-      m?.score?.home ?? 0
-    );
-
-
-  const away =
-    Number(
-      m?.score?.away ?? 0
-    );
-
-
-  const firstHalf =
+  return (
     period === "1H" ||
     period === "FIRST" ||
     period === "FIRST HALF" ||
     period === "1ST HALF" ||
-    period.includes("1H");
-
-
-  if (!firstHalf)
-    return false;
-
-
-  if (
-    home !== 0 ||
-    away !== 0
-  )
-    return false;
-
-
-  if (
-    minute < HUNTER_FROM ||
-    minute > HUNTER_TO
-  )
-    return false;
-
-
-  if (
-    score < HUNTER_MIN_SCORE
-  )
-    return false;
-
-
-  return true;
-
+    period.includes("1H")
+  );
 }
 
 
@@ -1246,29 +1088,28 @@ function getHunterScore(m) {
 
 
   if (
-    score !== null
+    score === null
   ) {
 
-    return Math.round(
-      Math.max(
-        0,
-        Math.min(
-          100,
-          score
-        )
-      )
-    );
+    return 0;
 
   }
 
 
-  return 0;
-
+  return Math.round(
+    Math.max(
+      0,
+      Math.min(
+        100,
+        score
+      )
+    )
+  );
 }
 
 
 // ============================================================
-// FIRST HALF FINISHED
+// SECOND HALF
 // ============================================================
 
 function isFirstHalfFinished(m) {
@@ -1283,7 +1124,6 @@ function isFirstHalfFinished(m) {
     period === "2H" ||
     period.includes("2H")
   );
-
 }
 
 
@@ -1312,15 +1152,14 @@ async function sendDailyReport(
         LIMIT 1
         `
       )
-      .bind(reportDate)
+      .bind(
+        reportDate
+      )
       .first();
 
 
-  if (already) {
-
+  if (already)
     return;
-
-  }
 
 
   const stats =
@@ -1354,10 +1193,11 @@ async function sendDailyReport(
           1,
           10
         ) = ?
-
         `
       )
-      .bind(reportDate)
+      .bind(
+        reportDate
+      )
       .first();
 
 
@@ -1386,16 +1226,13 @@ async function sendDailyReport(
 
   const rate =
     resolved > 0
-      ? (
-          goals /
-          resolved *
-          100
-        )
+      ? goals /
+        resolved *
+        100
       : 0;
 
 
   const message =
-
 `📊 DAILY HUNTER REPORT
 
 📅 ${reportDate}
@@ -1448,7 +1285,6 @@ NEXT GOAL HUNTER
 
     )
     .run();
-
 }
 
 
@@ -1479,7 +1315,8 @@ async function sendTelegram(
     );
 
 
-  const MAX_LENGTH = 4000;
+  const MAX_LENGTH =
+    4000;
 
 
   for (
@@ -1487,13 +1324,6 @@ async function sendTelegram(
     i < text.length;
     i += MAX_LENGTH
   ) {
-
-    const part =
-      text.substring(
-        i,
-        i + MAX_LENGTH
-      );
-
 
     const response =
       await fetch(
@@ -1515,16 +1345,20 @@ async function sendTelegram(
                 chatId,
 
               text:
-                part
+                text.substring(
+                  i,
+                  i + MAX_LENGTH
+                )
 
             })
 
-          }
-
+        }
       );
 
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
 
       const errorText =
         await response.text();
@@ -1536,11 +1370,8 @@ async function sendTelegram(
         " | " +
         errorText
       );
-
     }
-
   }
-
 }
 
 
@@ -1596,7 +1427,6 @@ function formatEntryMessage(
 🕐 ${local.text}
 
 STATUS: TRACKING`;
-
 }
 
 
@@ -1641,7 +1471,6 @@ ${existing.hunter_score}/100
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
 
 RESULT: GOAL HIT`;
-
 }
 
 
@@ -1672,7 +1501,6 @@ ${existing.hunter_score}/100
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
 
 RESULT: NO GOAL`;
-
 }
 
 
@@ -1772,7 +1600,6 @@ function getSofiaTime(date) {
       `${String(second).padStart(2, "0")}`
 
   };
-
 }
 
 
@@ -1812,16 +1639,21 @@ function getPreviousSofiaDate(
 
     String(
       d.getUTCMonth() + 1
-    ).padStart(2, "0") +
+    ).padStart(
+      2,
+      "0"
+    ) +
 
     "-" +
 
     String(
       d.getUTCDate()
-    ).padStart(2, "0")
+    ).padStart(
+      2,
+      "0"
+    )
 
   );
-
 }
 
 
@@ -1829,7 +1661,9 @@ function getPreviousSofiaDate(
 // NUMBER
 // ============================================================
 
-function numberOrNull(value) {
+function numberOrNull(
+  value
+) {
 
   if (
     value === null ||
@@ -1849,7 +1683,6 @@ function numberOrNull(value) {
   return Number.isFinite(n)
     ? n
     : null;
-
 }
 
 
@@ -1871,7 +1704,6 @@ function corsHeaders() {
       "Content-Type"
 
   };
-
 }
 
 
@@ -1908,5 +1740,4 @@ function json(
     }
 
   );
-
-      }
+        }
