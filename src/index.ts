@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// CPU OPTIMIZED VERSION
+// CPU OPTIMIZED
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -9,8 +9,10 @@ const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
 
-// Буфер след очаквания край на мача
+// След колко време липсващ TRACKING мач може да бъде
+// приет за приключил.
 const FINAL_BUFFER_MINUTES = 20;
+
 
 // ============================================================
 // MAIN
@@ -43,6 +45,7 @@ export default {
       }, 500);
 
     }
+
   },
 
 
@@ -66,9 +69,10 @@ async function processTracker(env) {
   const now = new Date();
   const local = getSofiaTime(now);
 
-  // ==========================================================
+
+  // ----------------------------------------------------------
   // CONFIG CHECK
-  // ==========================================================
+  // ----------------------------------------------------------
 
   if (!env.V27)
     throw new Error("V27 Service Binding missing");
@@ -83,30 +87,37 @@ async function processTracker(env) {
     throw new Error("TELEGRAM_CHAT_ID missing");
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // DAILY REPORT
-  // ==========================================================
+  // ----------------------------------------------------------
 
   if (
     local.hour === 0 &&
     local.minute === 0
   ) {
 
-    await sendDailyReport(env, local);
+    await sendDailyReport(
+      env,
+      local
+    );
 
     return {
       success: true,
       action: "DAILY_REPORT",
       local_time: local.text
     };
+
   }
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // TRACKING WINDOW
-  // ==========================================================
+  // ----------------------------------------------------------
 
-  if (local.hour < 12) {
+  if (
+    local.hour < 12 ||
+    local.hour >= 24
+  ) {
 
     return {
       success: true,
@@ -117,42 +128,62 @@ async function processTracker(env) {
   }
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // V27
-  // ==========================================================
+  // ----------------------------------------------------------
 
-  const response = await env.V27.fetch(
-    new Request(
-      "https://v27.internal/",
-      {
-        method: "GET",
-        headers: {
-          "Accept": "application/json"
+  const response =
+    await env.V27.fetch(
+      new Request(
+        "https://v27.internal/",
+        {
+          method: "GET",
+          headers: {
+            "Accept": "application/json"
+          }
         }
-      }
-    )
-  );
+      )
+    );
+
+
+  const responseText =
+    await response.text();
 
 
   if (!response.ok) {
-
-    const text = await response.text();
 
     throw new Error(
       "V27 SERVICE HTTP " +
       response.status +
       " | " +
-      text.substring(0, 300)
+      responseText.slice(0, 300)
     );
 
   }
 
 
-  const data = await response.json();
+  let data;
+
+  try {
+
+    data = JSON.parse(responseText);
+
+  } catch {
+
+    throw new Error(
+      "V27 JSON ERROR | " +
+      responseText.slice(0, 300)
+    );
+
+  }
 
 
   if (data?.success !== true) {
-    throw new Error("V27 returned success=false");
+
+    throw new Error(
+      "V27 returned success=false"
+    );
+
   }
 
 
@@ -162,9 +193,9 @@ async function processTracker(env) {
       : [];
 
 
-  // ==========================================================
-  // LOAD ONLY REQUIRED DB FIELDS
-  // ==========================================================
+  // ----------------------------------------------------------
+  // LOAD ONLY WHAT WE NEED FROM DB
+  // ----------------------------------------------------------
 
   const trackingResult =
     await env.DB
@@ -189,15 +220,17 @@ async function processTracker(env) {
     trackingResult?.results || [];
 
 
-  // ==========================================================
-  // TRACKING MAP
-  // ==========================================================
+  // ----------------------------------------------------------
+  // MAP TRACKING
+  // ----------------------------------------------------------
 
-  const trackingMap = new Map();
+  const trackingMap =
+    new Map();
 
   for (const signal of trackingSignals) {
 
-    const id = String(signal.match_id || "");
+    const id =
+      String(signal?.match_id || "");
 
     if (id) {
       trackingMap.set(id, signal);
@@ -206,26 +239,28 @@ async function processTracker(env) {
   }
 
 
-  // ==========================================================
-  // CURRENT MATCH IDS
-  // ==========================================================
+  // ----------------------------------------------------------
+  // CURRENT V27 IDS
+  // ----------------------------------------------------------
 
-  const currentMatchIds = new Set();
+  const currentIds =
+    new Set();
 
   for (const match of matches) {
 
-    const id = String(match?.id || "");
+    const id =
+      String(match?.id || "");
 
     if (id) {
-      currentMatchIds.add(id);
+      currentIds.add(id);
     }
 
   }
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // COUNTERS
-  // ==========================================================
+  // ----------------------------------------------------------
 
   let entries = 0;
   let goals = 0;
@@ -235,44 +270,67 @@ async function processTracker(env) {
   let missingFinalized = 0;
   let matchErrors = 0;
 
+  const errorDetails = [];
+
 
   // ==========================================================
-  // PROCESS LIVE MATCHES
+  // PROCESS ONLY RELEVANT MATCHES
   // ==========================================================
 
   for (const match of matches) {
 
     try {
 
-      const result = await processMatch(
-        env,
-        match,
-        now,
-        local,
-        trackingMap
-      );
+      const result =
+        await processMatch(
+          env,
+          match,
+          now,
+          local,
+          trackingMap
+        );
 
 
-      if (result === "ENTRY")
-        entries++;
+      switch (result) {
 
-      else if (result === "GOAL")
-        goals++;
+        case "ENTRY":
+          entries++;
+          break;
 
-      else if (result === "NO_GOAL")
-        noGoals++;
+        case "GOAL":
+          goals++;
+          break;
 
-      else if (result === "CANDIDATE")
-        candidates++;
+        case "NO_GOAL":
+          noGoals++;
+          break;
+
+        case "CANDIDATE":
+          candidates++;
+          break;
+
+      }
 
     } catch (error) {
 
       matchErrors++;
 
+      if (errorDetails.length < 5) {
+
+        errorDetails.push({
+          id: match?.id || null,
+          match: match?.match || null,
+          error:
+            error?.message ||
+            String(error)
+        });
+
+      }
+
       console.error(
         "MATCH ERROR",
         match?.id,
-        error?.message || error
+        error
       );
 
     }
@@ -286,15 +344,15 @@ async function processTracker(env) {
 
   for (const signal of trackingSignals) {
 
-    const matchId =
-      String(signal.match_id || "");
+    const id =
+      String(signal?.match_id || "");
 
-    if (!matchId)
+    if (!id)
       continue;
 
 
-    // Мачът още съществува във V27
-    if (currentMatchIds.has(matchId))
+    // Still live.
+    if (currentIds.has(id))
       continue;
 
 
@@ -322,10 +380,23 @@ async function processTracker(env) {
 
       matchErrors++;
 
+      if (errorDetails.length < 5) {
+
+        errorDetails.push({
+          id,
+          match:
+            signal?.match_name || null,
+          error:
+            error?.message ||
+            String(error)
+        });
+
+      }
+
       console.error(
-        "FINALIZATION ERROR",
-        matchId,
-        error?.message || error
+        "FINALIZE ERROR",
+        id,
+        error
       );
 
     }
@@ -343,15 +414,20 @@ async function processTracker(env) {
 
     action: "TRACKING",
 
-    local_time: local.text,
+    local_time:
+      local.text,
 
-    source: "V27 SERVICE BINDING",
+    source:
+      "V27 SERVICE BINDING",
 
-    source_status: response.status,
+    source_status:
+      response.status,
 
-    source_matches: matches.length,
+    source_matches:
+      matches.length,
 
-    active_tracking: trackingMap.size,
+    active_tracking:
+      trackingMap.size,
 
     candidates,
 
@@ -359,13 +435,20 @@ async function processTracker(env) {
 
     goals,
 
-    no_goals: noGoals,
+    no_goals:
+      noGoals,
 
-    missing_tracking_checked: missingChecked,
+    missing_tracking_checked:
+      missingChecked,
 
-    missing_finalized: missingFinalized,
+    missing_finalized:
+      missingFinalized,
 
-    match_errors: matchErrors
+    match_errors:
+      matchErrors,
+
+    error_details:
+      errorDetails
 
   };
 
@@ -384,7 +467,8 @@ async function processMatch(
   trackingMap
 ) {
 
-  const id = String(m?.id || "");
+  const id =
+    String(m?.id || "");
 
   if (!id)
     return null;
@@ -411,15 +495,19 @@ async function processMatch(
   if (existing) {
 
     const entryHome =
-      Number(existing.entry_home_score || 0);
+      Number(
+        existing.entry_home_score || 0
+      );
 
     const entryAway =
-      Number(existing.entry_away_score || 0);
+      Number(
+        existing.entry_away_score || 0
+      );
 
 
-    // ========================================================
+    // --------------------------------------------------------
     // GOAL
-    // ========================================================
+    // --------------------------------------------------------
 
     if (
       home > entryHome ||
@@ -433,7 +521,9 @@ async function processMatch(
 
 
       const entryMinute =
-        Number(existing.entry_minute || 0);
+        Number(
+          existing.entry_minute || 0
+        );
 
 
       const afterMinutes =
@@ -448,14 +538,12 @@ async function processMatch(
       await env.DB
         .prepare(`
           UPDATE hunter_signals
-
           SET
             status = 'GOAL',
             goal_minute = ?,
             goal_after_minutes = ?,
             result = 'GOAL HIT',
             updated_at = ?
-
           WHERE id = ?
             AND status = 'TRACKING'
         `)
@@ -487,21 +575,21 @@ async function processMatch(
     }
 
 
-    // ========================================================
-    // SECOND HALF = NO GOAL
-    // ========================================================
+    // --------------------------------------------------------
+    // FIRST HALF FINISHED
+    // --------------------------------------------------------
 
-    if (isFirstHalfFinished(m)) {
+    if (
+      isFirstHalfFinished(m)
+    ) {
 
       await env.DB
         .prepare(`
           UPDATE hunter_signals
-
           SET
             status = 'NO_GOAL',
             result = 'NO GOAL',
             updated_at = ?
-
           WHERE id = ?
             AND status = 'TRACKING'
         `)
@@ -555,7 +643,7 @@ async function processMatch(
 
 
   // ==========================================================
-  // DATA
+  // ENTRY DATA
   // ==========================================================
 
   const matchName =
@@ -588,115 +676,121 @@ async function processMatch(
     );
 
 
-  const timestamp =
-    now.toISOString();
-
-
   // ==========================================================
-  // INSERT
+  // SAVE ENTRY
   // ==========================================================
 
-  await env.DB
-    .prepare(`
-      INSERT INTO hunter_signals (
+  const result =
+    await env.DB
+      .prepare(`
+        INSERT INTO hunter_signals (
 
-        match_id,
-        match_name,
+          match_id,
+          match_name,
+          league,
+
+          entry_time,
+          entry_minute,
+
+          hunter_score,
+          goal_pressure,
+          danger_index,
+          attack_score,
+
+          entry_home_score,
+          entry_away_score,
+
+          status,
+          result,
+
+          created_at,
+          updated_at
+
+        )
+
+        VALUES (
+
+          ?, ?, ?,
+
+          ?, ?,
+
+          ?, ?, ?, ?,
+
+          ?, ?,
+
+          'TRACKING',
+          NULL,
+
+          ?, ?
+
+        )
+      `)
+      .bind(
+
+        id,
+        matchName,
         league,
 
-        entry_time,
-        entry_minute,
+        now.toISOString(),
+        minute,
 
-        hunter_score,
-        goal_pressure,
-        danger_index,
-        attack_score,
+        hunterScore,
+        goalPressure,
+        dangerIndex,
+        attackScore,
 
-        entry_home_score,
-        entry_away_score,
+        home,
+        away,
 
-        status,
-        result,
-
-        created_at,
-        updated_at
+        now.toISOString(),
+        now.toISOString()
 
       )
-
-      VALUES (
-
-        ?, ?, ?,
-
-        ?, ?,
-
-        ?, ?, ?, ?,
-
-        ?, ?,
-
-        'TRACKING',
-        NULL,
-
-        ?, ?
-
-      )
-    `)
-    .bind(
-
-      id,
-      matchName,
-      league,
-
-      timestamp,
-      minute,
-
-      hunterScore,
-      goalPressure,
-      dangerIndex,
-      attackScore,
-
-      home,
-      away,
-
-      timestamp,
-      timestamp
-
-    )
-    .run();
+      .run();
 
 
-  // ==========================================================
-  // ADD TO MEMORY
-  // ==========================================================
+  // ----------------------------------------------------------
+  // ADD TO MAP
+  // ----------------------------------------------------------
 
   trackingMap.set(
     id,
     {
 
-      id: null,
+      id:
+        result?.meta?.last_row_id ||
+        null,
 
-      match_id: id,
+      match_id:
+        id,
 
-      match_name: matchName,
+      match_name:
+        matchName,
 
       league,
 
-      entry_time: timestamp,
+      entry_time:
+        now.toISOString(),
 
-      entry_minute: minute,
+      entry_minute:
+        minute,
 
-      hunter_score: hunterScore,
+      hunter_score:
+        hunterScore,
 
-      entry_home_score: home,
+      entry_home_score:
+        home,
 
-      entry_away_score: away
+      entry_away_score:
+        away
 
     }
   );
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // TELEGRAM ENTRY
-  // ==========================================================
+  // ----------------------------------------------------------
 
   await sendTelegram(
     env,
@@ -714,7 +808,7 @@ async function processMatch(
 
 
 // ============================================================
-// MISSING TRACKING FINALIZATION
+// FINALIZE MISSING TRACKING
 // ============================================================
 
 async function finalizeMissingTracking(
@@ -724,38 +818,37 @@ async function finalizeMissingTracking(
 ) {
 
   const entryMinute =
-    Number(signal?.entry_minute || 0);
+    Number(
+      signal?.entry_minute || 0
+    );
 
 
   const safeEntryMinute =
     Math.max(
       0,
       Math.min(
-        HUNTER_TO,
+        42,
         entryMinute
       )
     );
 
 
-  // ==========================================================
-  // REQUIRED AGE
-  //
-  // ENTRY 10'  -> 115 min
-  // ENTRY 20'  -> 105 min
-  // ENTRY 30'  -> 95 min
-  // ENTRY 42'  -> 83 min
-  // ==========================================================
+  // ----------------------------------------------------------
+  // Expected match completion time
+  // ----------------------------------------------------------
 
   const requiredMinutes =
-    (90 - safeEntryMinute) +
-    15 +
-    FINAL_BUFFER_MINUTES;
+    Math.max(
+      68,
+      (90 - safeEntryMinute) +
+      15 +
+      FINAL_BUFFER_MINUTES
+    );
 
 
   const entryTime =
     new Date(
       signal?.entry_time ||
-      signal?.created_at ||
       ""
     );
 
@@ -775,7 +868,8 @@ async function finalizeMissingTracking(
     (
       now.getTime() -
       entryTime.getTime()
-    ) / 60000;
+    ) /
+    60000;
 
 
   if (
@@ -788,9 +882,9 @@ async function finalizeMissingTracking(
   }
 
 
-  // ==========================================================
-  // FINALIZE ONLY IF STILL TRACKING
-  // ==========================================================
+  // ----------------------------------------------------------
+  // ATOMIC UPDATE
+  // ----------------------------------------------------------
 
   const update =
     await env.DB
@@ -822,9 +916,9 @@ async function finalizeMissingTracking(
     return false;
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // TELEGRAM
-  // ==========================================================
+  // ----------------------------------------------------------
 
   await sendTelegram(
     env,
@@ -833,10 +927,12 @@ async function finalizeMissingTracking(
       {
         score: {
           home:
-            signal?.entry_home_score ?? 0,
+            signal?.entry_home_score ??
+            0,
 
           away:
-            signal?.entry_away_score ?? 0
+            signal?.entry_away_score ??
+            0
         }
       }
     )
@@ -864,16 +960,12 @@ function isHunterCandidate(
   if (
     minute < HUNTER_FROM ||
     minute > HUNTER_TO
-  ) {
-
+  )
     return false;
-
-  }
 
 
   const home =
     Number(m?.score?.home ?? 0);
-
 
   const away =
     Number(m?.score?.away ?? 0);
@@ -882,11 +974,8 @@ function isHunterCandidate(
   if (
     home !== 0 ||
     away !== 0
-  ) {
-
+  )
     return false;
-
-  }
 
 
   const period =
@@ -895,17 +984,16 @@ function isHunterCandidate(
     ).toUpperCase();
 
 
-  if (
-    period !== "1H" &&
-    period !== "FIRST" &&
-    period !== "FIRST HALF" &&
-    period !== "1ST HALF" &&
-    !period.includes("1H")
-  ) {
+  const firstHalf =
+    period === "1H" ||
+    period === "FIRST" ||
+    period === "FIRST HALF" ||
+    period === "1ST HALF" ||
+    period.includes("1H");
 
+
+  if (!firstHalf)
     return false;
-
-  }
 
 
   return score >= HUNTER_MIN_SCORE;
@@ -1031,10 +1119,8 @@ async function sendDailyReport(
   const total =
     Number(stats?.total || 0);
 
-
   const goals =
     Number(stats?.goals || 0);
-
 
   const noGoals =
     Number(stats?.no_goals || 0);
@@ -1046,7 +1132,11 @@ async function sendDailyReport(
 
   const rate =
     resolved > 0
-      ? goals / resolved * 100
+      ? (
+          goals /
+          resolved *
+          100
+        )
       : 0;
 
 
@@ -1079,16 +1169,13 @@ NEXT GOAL HUNTER
   await env.DB
     .prepare(`
       INSERT INTO daily_reports (
-
         report_date,
         total,
         goals,
         no_goals,
         success_rate,
         created_at
-
       )
-
       VALUES (?, ?, ?, ?, ?, ?)
     `)
     .bind(
@@ -1113,24 +1200,19 @@ async function sendTelegram(
   message
 ) {
 
-  const text =
-    String(message || "");
-
-
-  if (!text)
-    return;
-
-
   const url =
     `https://api.telegram.org/bot` +
     `${env.TELEGRAM_BOT_TOKEN}` +
     `/sendMessage`;
 
 
+  const text =
+    String(message || "");
+
+
   const MAX_LENGTH = 4000;
 
 
-  // Telegram изпращаме само необходимите части
   for (
     let i = 0;
     i < text.length;
@@ -1148,7 +1230,6 @@ async function sendTelegram(
       await fetch(
         url,
         {
-
           method: "POST",
 
           headers: {
@@ -1161,9 +1242,10 @@ async function sendTelegram(
               chat_id:
                 env.TELEGRAM_CHAT_ID,
 
-              text: part
+              text:
+                part
             })
-
+          }
         }
       );
 
@@ -1173,15 +1255,11 @@ async function sendTelegram(
       const errorText =
         await response.text();
 
-
       throw new Error(
         "Telegram HTTP " +
         response.status +
         " | " +
-        errorText.substring(
-          0,
-          300
-        )
+        errorText
       );
 
     }
@@ -1200,14 +1278,6 @@ function formatEntryMessage(
   score,
   local
 ) {
-
-  const home =
-    m?.score?.home ?? 0;
-
-
-  const away =
-    m?.score?.away ?? 0;
-
 
   const minute =
     m?.minute_display ||
@@ -1232,7 +1302,11 @@ function formatEntryMessage(
 
 ⏱ ${minute}
 
-📊 Резултат: ${home}:${away}
+📊 Резултат: ${
+    m?.score?.home ?? 0
+  }:${
+    m?.score?.away ?? 0
+  }
 
 🔥 HUNTER SCORE: ${score}/100
 
@@ -1331,188 +1405,12 @@ function getSofiaTime(date) {
     new Intl.DateTimeFormat(
       "en-GB",
       {
-        timeZone: TIME_ZONE,
+        timeZone:
+          TIME_ZONE,
+
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
+
         hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hourCycle: "h23"
-      }
-    )
-    .formatToParts(date);
-
-
-  const get =
-    type =>
-      parts.find(
-        p => p.type === type
-      )?.value;
-
-
-  const year = get("year");
-  const month = get("month");
-  const day = get("day");
-
-  const hour =
-    Number(get("hour"));
-
-  const minute =
-    Number(get("minute"));
-
-  const second =
-    Number(get("second"));
-
-
-  return {
-
-    date:
-      `${year}-${month}-${day}`,
-
-    hour,
-    minute,
-    second,
-
-    text:
-      `${day}.${month}.${year} ` +
-      `${String(hour).padStart(2, "0")}:` +
-      `${String(minute).padStart(2, "0")}:` +
-      `${String(second).padStart(2, "0")}`
-
-  };
-
-}
-
-
-// ============================================================
-// PREVIOUS DATE
-// ============================================================
-
-function getPreviousSofiaDate(
-  dateString
-) {
-
-  const parts =
-    dateString
-      .split("-")
-      .map(Number);
-
-
-  const d =
-    new Date(
-      Date.UTC(
-        parts[0],
-        parts[1] - 1,
-        parts[2]
-      )
-    );
-
-
-  d.setUTCDate(
-    d.getUTCDate() - 1
-  );
-
-
-  return (
-
-    d.getUTCFullYear() +
-    "-" +
-
-    String(
-      d.getUTCMonth() + 1
-    ).padStart(2, "0") +
-
-    "-" +
-
-    String(
-      d.getUTCDate()
-    ).padStart(2, "0")
-
-  );
-
-}
-
-
-// ============================================================
-// NUMBER
-// ============================================================
-
-function numberOrNull(value) {
-
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-
-    return null;
-
-  }
-
-
-  const n =
-    Number(value);
-
-
-  return Number.isFinite(n)
-    ? n
-    : null;
-
-}
-
-
-// ============================================================
-// CORS
-// ============================================================
-
-function corsHeaders() {
-
-  return {
-
-    "Access-Control-Allow-Origin": "*",
-
-    "Access-Control-Allow-Methods":
-      "GET,HEAD,OPTIONS",
-
-    "Access-Control-Allow-Headers":
-      "Content-Type"
-
-  };
-
-}
-
-
-// ============================================================
-// JSON
-// ============================================================
-
-function json(
-  data,
-  status = 200
-) {
-
-  return new Response(
-
-    JSON.stringify(
-      data
-    ),
-
-    {
-
-      status,
-
-      headers: {
-
-        "Content-Type":
-          "application/json; charset=utf-8",
-
-        ...corsHeaders()
-
-      }
-
-    }
-
-  );
-
-      }
+        minute
