@@ -1,11 +1,11 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// FINAL — SERVICE BINDING + DIAGNOSTICS
+// OPTIMIZED — LOW DB LOAD
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
 const HUNTER_FROM = 10;
-const HUNTER_TO = 45;
+const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
 
@@ -44,7 +44,9 @@ export default {
 
       return json({
         success: false,
-        error: error?.message || String(error)
+        error:
+          error?.message ||
+          String(error)
       }, 500);
 
     }
@@ -73,7 +75,9 @@ export default {
 
 async function processTracker(env) {
 
-  const now = new Date();
+  const now =
+    new Date();
+
 
   const local =
     getSofiaTime(now);
@@ -91,6 +95,7 @@ async function processTracker(env) {
 
   }
 
+
   if (!env.DB) {
 
     throw new Error(
@@ -99,6 +104,7 @@ async function processTracker(env) {
 
   }
 
+
   if (!env.TELEGRAM_BOT_TOKEN) {
 
     throw new Error(
@@ -106,6 +112,7 @@ async function processTracker(env) {
     );
 
   }
+
 
   if (!env.TELEGRAM_CHAT_ID) {
 
@@ -130,6 +137,7 @@ async function processTracker(env) {
       local
     );
 
+
     return {
 
       success: true,
@@ -147,7 +155,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // TRACKING WINDOW
-  // 12:00 - 23:59
   // ==========================================================
 
   if (
@@ -179,10 +186,12 @@ async function processTracker(env) {
       "https://v27.internal/",
       {
         method: "GET",
+
         headers: {
           "Accept":
             "application/json"
         }
+
       }
     );
 
@@ -213,6 +222,7 @@ async function processTracker(env) {
 
 
   let data;
+
 
   try {
 
@@ -254,15 +264,72 @@ async function processTracker(env) {
 
 
   // ==========================================================
+  // LOAD ALL ACTIVE TRACKING SIGNALS ONCE
+  // ==========================================================
+
+  const trackingResult =
+    await env.DB
+      .prepare(
+        `
+        SELECT *
+        FROM hunter_signals
+        WHERE status = 'TRACKING'
+        `
+      )
+      .all();
+
+
+  const trackingSignals =
+    trackingResult?.results || [];
+
+
+  // ==========================================================
+  // MAP ACTIVE SIGNALS BY MATCH ID
+  // ==========================================================
+
+  const trackingMap =
+    new Map();
+
+
+  for (
+    const signal of trackingSignals
+  ) {
+
+    const matchId =
+      String(
+        signal?.match_id || ""
+      );
+
+
+    if (!matchId)
+      continue;
+
+
+    // Keep latest signal
+    trackingMap.set(
+      matchId,
+      signal
+    );
+
+  }
+
+
+  // ==========================================================
   // PROCESS MATCHES
   // ==========================================================
 
   let entries = 0;
+
   let goals = 0;
+
   let noGoals = 0;
+
   let candidates = 0;
+
   let duplicates = 0;
+
   let matchErrors = 0;
+
 
   const errorDetails = [];
 
@@ -278,7 +345,8 @@ async function processTracker(env) {
           env,
           match,
           now,
-          local
+          local,
+          trackingMap
         );
 
 
@@ -330,19 +398,23 @@ async function processTracker(env) {
 
       matchErrors++;
 
+
       const detail = {
 
         id:
-          match?.id || null,
+          match?.id ||
+          null,
 
         match:
-          match?.match || null,
+          match?.match ||
+          null,
 
         error:
           error?.message ||
           String(error)
 
       };
+
 
       errorDetails.push(
         detail
@@ -383,6 +455,9 @@ async function processTracker(env) {
     source_matches:
       matches.length,
 
+    active_tracking:
+      trackingMap.size,
+
     candidates,
 
     duplicates,
@@ -416,7 +491,8 @@ async function processMatch(
   env,
   m,
   now,
-  local
+  local,
+  trackingMap
 ) {
 
   const id =
@@ -455,24 +531,8 @@ async function processMatch(
   // ==========================================================
 
   const existing =
-    await env.DB
-      .prepare(
-        `
-        SELECT *
-        FROM hunter_signals
-        WHERE match_id = ?
-        AND status = 'TRACKING'
-        ORDER BY id DESC
-        LIMIT 1
-        `
-      )
-      .bind(id)
-      .first();
+    trackingMap.get(id);
 
-
-  // ==========================================================
-  // EXISTING SIGNAL
-  // ==========================================================
 
   if (existing) {
 
@@ -488,9 +548,9 @@ async function processMatch(
       );
 
 
-    // --------------------------------------------------------
+    // ========================================================
     // GOAL
-    // --------------------------------------------------------
+    // ========================================================
 
     if (
       home > entryHome ||
@@ -543,6 +603,9 @@ async function processMatch(
         .run();
 
 
+      trackingMap.delete(id);
+
+
       await sendTelegram(
         env,
         formatGoalMessage(
@@ -559,9 +622,9 @@ async function processMatch(
     }
 
 
-    // --------------------------------------------------------
-    // NO GOAL — 2H
-    // --------------------------------------------------------
+    // ========================================================
+    // NO GOAL — SECOND HALF
+    // ========================================================
 
     if (
       isFirstHalfFinished(m)
@@ -587,6 +650,9 @@ async function processMatch(
         .run();
 
 
+      trackingMap.delete(id);
+
+
       await sendTelegram(
         env,
         formatNoGoalMessage(
@@ -607,7 +673,7 @@ async function processMatch(
 
 
   // ==========================================================
-  // NEW ENTRY
+  // NEW HUNTER CANDIDATE
   // ==========================================================
 
   const hunterScore =
@@ -627,37 +693,11 @@ async function processMatch(
 
 
   // ==========================================================
-  // CANDIDATE FOUND
+  // CANDIDATE
   // ==========================================================
 
-  // This is returned only when the match
-  // passes all Hunter filters.
-
-
-  // ==========================================================
-  // DUPLICATE PROTECTION
-  // ==========================================================
-
-  const duplicate =
-    await env.DB
-      .prepare(
-        `
-        SELECT id
-        FROM hunter_signals
-        WHERE match_id = ?
-        AND created_at >= datetime('now','-1 day')
-        LIMIT 1
-        `
-      )
-      .bind(id)
-      .first();
-
-
-  if (duplicate) {
-
-    return "DUPLICATE";
-
-  }
+  // The caller counts this result.
+  // No DB query is needed here.
 
 
   // ==========================================================
@@ -695,7 +735,7 @@ async function processMatch(
 
 
   // ==========================================================
-  // SAVE
+  // SAVE ENTRY
   // ==========================================================
 
   await env.DB
@@ -766,6 +806,40 @@ async function processMatch(
 
     )
     .run();
+
+
+  // ==========================================================
+  // ADD NEW SIGNAL TO MAP
+  // ==========================================================
+
+  trackingMap.set(
+    id,
+    {
+
+      id: null,
+
+      match_id:
+        id,
+
+      match_name:
+        matchName,
+
+      league,
+
+      entry_minute:
+        minute,
+
+      hunter_score:
+        hunterScore,
+
+      entry_home_score:
+        home,
+
+      entry_away_score:
+        away
+
+    }
+  );
 
 
   // ==========================================================
@@ -1516,6 +1590,7 @@ function json(
     ),
 
     {
+
       status,
 
       headers: {
@@ -1531,4 +1606,4 @@ function json(
 
   );
 
-}
+    }
