@@ -1,31 +1,33 @@
 // ============================================================
 // GOAL WATCH — COLLECTOR V1
-// FLASHScore ONLY
+// ============================================================
+// FLASHscore ONLY
 //
-// PURPOSE:
-//   Collect ALL LIVE match data for Worker 2.
+// COLLECTOR = DATA ONLY
 //
-// INCLUDES:
-//   - match ID
-//   - league / tournament
-//   - home / away
-//   - LIVE status
-//   - minute / seconds
-//   - period
-//   - score
-//   - Flashscore statistics
-//   - xG / xGOT / xA
-//   - raw Flashscore fields
+// ВРЪЩА:
+// - всички LIVE мачове
+// - league / country (best effort)
+// - home / away
+// - minute / seconds / period
+// - score
+// - xG
+// - xG share
+// - xGOT
+// - xA
+// - key statistics
+// - data quality
+// - raw Flashscore data
 //
-// DOES NOT INCLUDE:
-//   - Hunter Score
-//   - Attack Score
-//   - Danger Index
-//   - Goal Pressure
-//   - signals
-//   - ENTRY
-//   - Tracker
-//   - Telegram
+// НЕ ВРЪЩА:
+// - Hunter Score
+// - Attack Score
+// - Danger Index
+// - Goal Pressure
+// - Goal Signal
+// - ENTRY
+// - Tracker
+// - Telegram
 // ============================================================
 
 const MAIN_URL =
@@ -37,30 +39,18 @@ const STAT_URL =
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-  "Access-Control-Allow-Headers":
-    "Content-Type, Authorization"
+  "Access-Control-Allow-Headers": "Content-Type, Authorization"
 };
 
 const flashscoreHeaders = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36",
-
   "Accept": "*/*",
-
-  "Accept-Language":
-    "en-US,en;q=0.9",
-
-  "Referer":
-    "https://www.flashscore.com/",
-
-  "Origin":
-    "https://www.flashscore.com",
-
-  "x-fsign":
-    "SW9D1eZo",
-
-  "Cache-Control":
-    "no-cache"
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://www.flashscore.com/",
+  "Origin": "https://www.flashscore.com",
+  "x-fsign": "SW9D1eZo",
+  "Cache-Control": "no-cache"
 };
 
 
@@ -73,7 +63,7 @@ export default {
   async fetch(request: Request) {
 
     // --------------------------------------------------------
-    // CORS
+    // OPTIONS
     // --------------------------------------------------------
 
     if (request.method === "OPTIONS") {
@@ -84,6 +74,11 @@ export default {
       });
 
     }
+
+
+    // --------------------------------------------------------
+    // METHOD
+    // --------------------------------------------------------
 
     if (
       request.method !== "GET" &&
@@ -104,7 +99,7 @@ export default {
     try {
 
       // ======================================================
-      // 1. FLASHScore MAIN LIVE FEED
+      // 1. MAIN FLASHSCORE FEED
       // ======================================================
 
       const feedResponse = await fetch(
@@ -115,6 +110,7 @@ export default {
         }
       );
 
+
       const feedText =
         await feedResponse.text();
 
@@ -124,24 +120,14 @@ export default {
         return json(
           {
             success: false,
-
-            collector:
-              "COLLECTOR V1",
-
-            source:
-              "FLASHSCORE ONLY",
-
-            stage:
-              "main_feed",
-
-            feed_status:
-              feedResponse.status,
-
-            feed_length:
-              feedText.length,
-
+            collector: "COLLECTOR V1",
+            source: "FLASHSCORE ONLY",
+            feed: {
+              status: feedResponse.status,
+              length: feedText.length
+            },
             error:
-              "Flashscore live feed failed"
+              "Flashscore feed request failed"
           },
           503
         );
@@ -150,46 +136,38 @@ export default {
 
 
       // ======================================================
-      // 2. PARSE ALL MATCHES
+      // 2. PARSE ALL EVENTS
       // ======================================================
 
-      const parsedMatches =
+      const parsed =
         parseMainFeed(feedText);
 
 
       // ======================================================
-      // 3. ALL LIVE MATCHES
+      // 3. LIVE EVENTS
       // AB = 2
+      //
+      // НЯМАМЕ:
+      // - minute filter
+      // - 0:0 filter
+      // - Hunter filter
       // ======================================================
 
-      const liveMatches =
-        parsedMatches.filter(
-          match =>
-            match.raw.AB === "2"
+      const live =
+        parsed.filter(
+          m => m.raw.AB === "2"
         );
 
 
       // ======================================================
-      // 4. BUILD COLLECTOR OUTPUT
+      // 4. BUILD ALL LIVE MATCHES
       // ======================================================
 
       const matches = [];
 
 
-      // ------------------------------------------------------
-      // IMPORTANT
-      //
-      // Collector V1 reads ALL LIVE matches.
-      //
-      // Statistics are requested for ALL LIVE matches.
-      //
-      // NO limit of 50.
-      // NO Hunter filtering.
-      // NO minute filtering.
-      // ------------------------------------------------------
-
       for (
-        const match of liveMatches
+        const match of live
       ) {
 
         try {
@@ -199,13 +177,14 @@ export default {
 
 
           // ==================================================
-          // BASIC MATCH INFORMATION
+          // TEAMS
           // ==================================================
 
           const home =
             cleanText(
               r.AE
             );
+
 
           const away =
             cleanText(
@@ -219,19 +198,18 @@ export default {
 
           // ==================================================
           // SCORE
-          //
-          // AG = home
-          // AH = away
-          //
-          // This is REAL MATCH SCORE.
-          // It is NOT Hunter Score.
           // ==================================================
 
           const scoreHome =
-            toNumberOrNull(r.AG);
+            numberOrNull(
+              r.AG
+            );
+
 
           const scoreAway =
-            toNumberOrNull(r.AH);
+            numberOrNull(
+              r.AH
+            );
 
 
           const totalGoals =
@@ -243,149 +221,36 @@ export default {
 
           // ==================================================
           // TIME
-          // Same time engine concept as V27
           // ==================================================
 
-          const timeInfo =
+          const time =
             getMinuteInfo(r);
 
 
           // ==================================================
-          // LEAGUE / TOURNAMENT
+          // LEAGUE
           //
-          // Flashscore can expose tournament/category fields
-          // under different feed keys depending on event.
-          //
-          // We preserve the raw values and expose the best
-          // available human-readable fields.
+          // Best effort.
+          // Ако не бъде намерено правилно,
+          // raw остава наличен за следващата корекция.
           // ==================================================
 
           const league =
-            getFirstValue(
-              r,
-              [
-                "ZA",
-                "ZB",
-                "ZC",
-                "ZD",
-                "ZE",
-                "ZG",
-                "ZH"
-              ]
-            );
-
-          const country =
-            getFirstValue(
-              r,
-              [
-                "ZJ",
-                "ZK",
-                "ZL"
-              ]
-            );
+            getLeague(r);
 
 
           // ==================================================
           // STATISTICS
           // ==================================================
 
-          let statistics = {
-            status:
-              "NOT_REQUESTED",
-
-            length:
-              0,
-
-            xg: {
-              home: null as number | null,
-              away: null as number | null
-            },
-
-            xgot: {
-              home: null as number | null,
-              away: null as number | null
-            },
-
-            xa: {
-              home: null as number | null,
-              away: null as number | null
-            },
-
-            stats:
-              {} as Record<string, any>,
-
-            occurrences:
-              0
-          };
-
-
-          // --------------------------------------------------
-          // Request Flashscore statistics.
-          //
-          // This is collection only.
-          // No scoring logic is executed.
-          // --------------------------------------------------
-
-          const statResponse =
-            await fetch(
-              STAT_URL + match.id,
-              {
-                headers:
-                  flashscoreHeaders,
-
-                cache:
-                  "no-store"
-              }
+          const statistics =
+            await getStatistics(
+              match.id
             );
 
 
-          const statText =
-            await statResponse.text();
-
-
-          if (statResponse.ok) {
-
-            const parsedStats =
-              parseStatistics(
-                statText
-              );
-
-            statistics = {
-              status:
-                "OK",
-
-              length:
-                statText.length,
-
-              xg:
-                parsedStats.xg,
-
-              xgot:
-                parsedStats.xgot,
-
-              xa:
-                parsedStats.xa,
-
-              stats:
-                parsedStats.stats,
-
-              occurrences:
-                parsedStats.occurrences
-            };
-
-          } else {
-
-            statistics.status =
-              `HTTP_${statResponse.status}`;
-
-            statistics.length =
-              statText.length;
-
-          }
-
-
           // ==================================================
-          // FINAL CLEAN MATCH OBJECT
+          // FINAL V27-STYLE OBJECT
           // ==================================================
 
           matches.push({
@@ -393,16 +258,14 @@ export default {
             id:
               match.id,
 
-            league: {
-              name:
-                league,
-
-              country:
-                country
-            },
-
             match:
               matchName,
+
+            league:
+              league.name,
+
+            country:
+              league.country,
 
             home,
             away,
@@ -413,24 +276,20 @@ export default {
             status_code:
               r.AB,
 
-            time: {
+            minute:
+              time.minute,
 
-              minute:
-                timeInfo.minute,
+            minute_display:
+              time.minute_display,
 
-              minute_display:
-                timeInfo.display,
+            period:
+              time.period,
 
-              period:
-                timeInfo.period,
+            minute_source:
+              time.minute_source,
 
-              source:
-                timeInfo.source,
-
-              debug:
-                timeInfo.debug
-
-            },
+            time_debug:
+              time.time_debug,
 
             score: {
 
@@ -449,23 +308,35 @@ export default {
 
             },
 
-            statistics,
+            xg:
+              statistics.xg,
 
-            // ------------------------------------------------
-            // RAW DATA
-            //
-            // Kept for Worker 2 so we don't lose any
-            // Flashscore information that may be needed later.
-            // ------------------------------------------------
+            xg_share:
+              statistics.xg_share,
+
+            xgot:
+              statistics.xgot,
+
+            xa:
+              statistics.xa,
+
+            key_stats:
+              statistics.key_stats,
+
+            data_quality:
+              statistics.data_quality,
 
             raw:
               r
 
           });
 
+
         } catch (error) {
 
-          // One bad match must NOT kill the whole collector.
+          // --------------------------------------------------
+          // Един счупен мач НЕ спира Collector-а.
+          // --------------------------------------------------
 
           matches.push({
 
@@ -491,11 +362,21 @@ export default {
       // 5. SUMMARY
       // ======================================================
 
-      const statisticsOk =
+      const matchesWithXg =
         matches.filter(
           m =>
-            m.statistics?.status ===
-            "OK"
+            m.xg &&
+            (
+              m.xg.home !== null ||
+              m.xg.away !== null
+            )
+        ).length;
+
+
+      const zeroZero =
+        matches.filter(
+          m =>
+            m.score?.zero_zero === true
         ).length;
 
 
@@ -515,30 +396,26 @@ export default {
 
         feed: {
 
-          url:
-            MAIN_URL,
-
           status:
             feedResponse.status,
 
-          length:
-            feedText.length
-
-        },
-
-        totals: {
-
-          parsed_matches:
-            parsedMatches.length,
+          total_matches:
+            parsed.length,
 
           live_matches:
-            liveMatches.length,
+            live.length,
 
-          returned_matches:
+          matches_returned:
             matches.length,
 
-          statistics_ok:
-            statisticsOk
+          matches_with_xg:
+            matchesWithXg,
+
+          zero_zero_matches:
+            zeroZero,
+
+          signals_found:
+            0
 
         },
 
@@ -546,12 +423,12 @@ export default {
 
       });
 
+
     } catch (error) {
 
       return json(
         {
-          success:
-            false,
+          success: false,
 
           collector:
             "COLLECTOR V1",
@@ -577,14 +454,6 @@ export default {
 // ============================================================
 // MAIN FEED PARSER
 // ============================================================
-//
-// Flashscore feed:
-//   ¬ = field separator
-//   ÷ = key/value separator
-//   AA = event/match ID
-//
-// This is the same parser model used by V27.
-// ============================================================
 
 function parseMainFeed(
   text: string
@@ -604,20 +473,16 @@ function parseMainFeed(
     | null = null;
 
 
-  const fields =
-    text.split("\xAC");
-
-
   for (
-    const rawField of fields
+    const fieldRaw of text.split("\xAC")
   ) {
 
-    if (!rawField)
+    if (!fieldRaw)
       continue;
 
 
     const field =
-      rawField.replace(
+      fieldRaw.replace(
         /^~/,
         ""
       );
@@ -695,7 +560,7 @@ function parseMainFeed(
 
 
   // ----------------------------------------------------------
-  // Remove duplicate match IDs
+  // REMOVE DUPLICATES
   // ----------------------------------------------------------
 
   const seen =
@@ -703,22 +568,20 @@ function parseMainFeed(
 
 
   return result.filter(
-    match => {
+    item => {
 
-      if (
-        !match.id
-      )
+      if (!item.id)
         return false;
 
 
       if (
-        seen.has(match.id)
+        seen.has(item.id)
       )
         return false;
 
 
       seen.add(
-        match.id
+        item.id
       );
 
 
@@ -731,44 +594,216 @@ function parseMainFeed(
 
 
 // ============================================================
-// STATISTICS PARSER
+// STATISTICS
 // ============================================================
-//
-// Same Flashscore statistics structure as V27.
-//
-// SE = section
-// SG = statistic name
-// SH = home value
-// SI = away value
+
+async function getStatistics(
+  matchId: string
+) {
+
+  const empty =
+    createEmptyStatistics();
+
+
+  try {
+
+    const response =
+      await fetch(
+        STAT_URL + matchId,
+        {
+          headers:
+            flashscoreHeaders,
+
+          cache:
+            "no-store"
+        }
+      );
+
+
+    const text =
+      await response.text();
+
+
+    if (!response.ok) {
+
+      empty.data_quality.statistics_status =
+        response.status;
+
+      empty.data_quality.statistics_length =
+        text.length;
+
+      return empty;
+
+    }
+
+
+    const parsed =
+      parseStatistics(
+        text
+      );
+
+
+    parsed.data_quality.statistics_status =
+      response.status;
+
+    parsed.data_quality.statistics_length =
+      text.length;
+
+
+    return parsed;
+
+
+  } catch {
+
+    return empty;
+
+  }
+
+}
+
+
+// ============================================================
+// EMPTY STATISTICS
+// ============================================================
+
+function createEmptyStatistics() {
+
+  return {
+
+    xg: {
+      home: null,
+      away: null,
+      total: null
+    },
+
+    xg_share: {
+      found: false,
+      home: null,
+      away: null
+    },
+
+    xgot: {
+      home: null,
+      away: null,
+      total: null
+    },
+
+    xa: {
+      home: null,
+      away: null,
+      total: null
+    },
+
+    key_stats: {
+
+      possession:
+        emptyStat(),
+
+      shots:
+        emptyStat(),
+
+      shots_on_target:
+        emptyStat(),
+
+      shots_off_target:
+        emptyStat(),
+
+      blocked_shots:
+        emptyStat(),
+
+      shots_inside_box:
+        emptyStat(),
+
+      shots_outside_box:
+        emptyStat(),
+
+      big_chances:
+        emptyStat(),
+
+      corners:
+        emptyStat(),
+
+      touches_in_opposition_box:
+        emptyStat(),
+
+      hit_the_woodwork:
+        emptyStat(),
+
+      goalkeeper_saves:
+        emptyStat(),
+
+      xgot_faced:
+        emptyStat(),
+
+      goals_prevented:
+        emptyStat()
+
+    },
+
+    data_quality: {
+
+      statistics_status:
+        0,
+
+      statistics_length:
+        0,
+
+      xg_found:
+        false,
+
+      xgot_found:
+        false,
+
+      xa_found:
+        false,
+
+      xg_required:
+        false,
+
+      signal_can_work_without_xg:
+        true,
+
+      occurrences:
+        0
+
+    }
+
+  };
+
+}
+
+
+function emptyStat() {
+
+  return {
+
+    found:
+      false,
+
+    home:
+      null,
+
+    away:
+      null,
+
+    total:
+      0
+
+  };
+
+}
+
+
+// ============================================================
+// STATISTICS PARSER
 // ============================================================
 
 function parseStatistics(
   text: string
 ) {
 
-  const result = {
-
-    xg: {
-      home: null as number | null,
-      away: null as number | null
-    },
-
-    xgot: {
-      home: null as number | null,
-      away: null as number | null
-    },
-
-    xa: {
-      home: null as number | null,
-      away: null as number | null
-    },
-
-    stats:
-      {} as Record<string, any>,
-
-    occurrences:
-      0
-  };
+  const result =
+    createEmptyStatistics();
 
 
   const fields =
@@ -779,15 +814,11 @@ function parseStatistics(
     "match";
 
 
-  let currentStat:
+  let statName:
     string | null = null;
 
 
   let home:
-    number | null = null;
-
-
-  let away:
     number | null = null;
 
 
@@ -844,14 +875,16 @@ function parseStatistics(
 
 
       if (
-        v.includes("1st")
+        v.includes("1st") ||
+        v.includes("first")
       ) {
 
         section =
           "first_half";
 
       } else if (
-        v.includes("2nd")
+        v.includes("2nd") ||
+        v.includes("second")
       ) {
 
         section =
@@ -878,15 +911,12 @@ function parseStatistics(
       key === "SG"
     ) {
 
-      currentStat =
+      statName =
         normalizeStat(
           value
         );
 
       home =
-        null;
-
-      away =
         null;
 
       continue;
@@ -920,74 +950,154 @@ function parseStatistics(
       key === "SI"
     ) {
 
-      away =
+      const away =
         parseStatValue(
           value
         );
 
 
       if (
-        currentStat &&
+        statName &&
         home !== null &&
         away !== null
       ) {
 
-        result.occurrences++;
+        result.data_quality.occurrences++;
+
+
+        const total =
+          home + away;
 
 
         // ----------------------------------------------------
-        // IMPORTANT:
-        // We store raw normalized statistics.
-        // We DO NOT calculate a score.
+        // XG
         // ----------------------------------------------------
 
         if (
-          currentStat === "xg"
+          statName === "xg"
         ) {
 
           result.xg = {
+
             home,
-            away
+
+            away,
+
+            total
+
           };
 
-        } else if (
-          currentStat === "xgot"
+          result.data_quality.xg_found =
+            true;
+
+        }
+
+
+        // ----------------------------------------------------
+        // XGOT
+        // ----------------------------------------------------
+
+        else if (
+          statName === "xgot"
         ) {
 
           result.xgot = {
+
             home,
-            away
+
+            away,
+
+            total
+
           };
 
-        } else if (
-          currentStat === "xa"
+          result.data_quality.xgot_found =
+            true;
+
+        }
+
+
+        // ----------------------------------------------------
+        // XA
+        // ----------------------------------------------------
+
+        else if (
+          statName === "xa"
         ) {
 
           result.xa = {
+
             home,
-            away
+
+            away,
+
+            total
+
           };
 
-        } else {
+          result.data_quality.xa_found =
+            true;
 
-          result.stats[
-            `${section}.${currentStat}`
-          ] = {
+        }
+
+
+        // ----------------------------------------------------
+        // XG SHARE
+        // ----------------------------------------------------
+
+        else if (
+          statName === "xg_share"
+        ) {
+
+          result.xg_share = {
 
             found:
               true,
 
             home,
+
             away
 
           };
 
         }
 
+
+        // ----------------------------------------------------
+        // KEY STATISTICS
+        // ----------------------------------------------------
+
+        else {
+
+          const key =
+            keyStatName(
+              statName
+            );
+
+
+          if (
+            key &&
+            key in result.key_stats
+          ) {
+
+            result.key_stats[key] = {
+
+              found:
+                true,
+
+              home,
+
+              away,
+
+              total
+
+            };
+
+          }
+
+        }
+
       }
-
-
-      continue;
 
     }
 
@@ -1000,7 +1110,7 @@ function parseStatistics(
 
 
 // ============================================================
-// STAT NAME NORMALIZATION
+// STAT NAME NORMALIZER
 // ============================================================
 
 function normalizeStat(
@@ -1014,186 +1124,32 @@ function normalizeStat(
 
 
   if (
-    v.includes(
-      "expected goals"
-    ) ||
-    v === "xg"
-  ) {
-
+    v === "xg" ||
+    v.includes("expected goals")
+  )
     return "xg";
 
-  }
-
 
   if (
-    v.includes(
-      "xg on target"
-    ) ||
-    v.includes(
-      "xgot"
-    )
-  ) {
-
+    v === "xgot" ||
+    v.includes("xg on target") ||
+    v.includes("expected goals on target")
+  )
     return "xgot";
 
-  }
-
 
   if (
-    v.includes(
-      "expected assists"
-    ) ||
-    v === "xa"
-  ) {
-
+    v === "xa" ||
+    v.includes("expected assists")
+  )
     return "xa";
 
-  }
-
 
   if (
-    v ===
-    "ball possession"
-  ) {
-
-    return "possession";
-
-  }
-
-
-  if (
-    v ===
-    "total shots"
-  ) {
-
-    return "shots";
-
-  }
-
-
-  if (
-    v ===
-    "shots on target"
-  ) {
-
-    return "shots_on_target";
-
-  }
-
-
-  if (
-    v ===
-    "shots off target"
-  ) {
-
-    return "shots_off_target";
-
-  }
-
-
-  if (
-    v ===
-    "blocked shots"
-  ) {
-
-    return "blocked_shots";
-
-  }
-
-
-  if (
-    v.includes(
-      "inside the box"
-    )
-  ) {
-
-    return "shots_inside_box";
-
-  }
-
-
-  if (
-    v.includes(
-      "outside the box"
-    )
-  ) {
-
-    return "shots_outside_box";
-
-  }
-
-
-  if (
-    v ===
-    "big chances"
-  ) {
-
-    return "big_chances";
-
-  }
-
-
-  if (
-    v ===
-    "corner kicks"
-  ) {
-
-    return "corners";
-
-  }
-
-
-  if (
-    v.includes(
-      "touches in opposition box"
-    )
-  ) {
-
-    return "touches_in_opposition_box";
-
-  }
-
-
-  if (
-    v ===
-    "hit the woodwork"
-  ) {
-
-    return "hit_the_woodwork";
-
-  }
-
-
-  if (
-    v ===
-    "goalkeeper saves"
-  ) {
-
-    return "goalkeeper_saves";
-
-  }
-
-
-  if (
-    v.includes(
-      "xgot faced"
-    )
-  ) {
-
-    return "xgot_faced";
-
-  }
-
-
-  if (
-    v.includes(
-      "goals prevented"
-    )
-  ) {
-
-    return "goals_prevented";
-
-  }
+    v.includes("xg share") ||
+    v.includes("expected goals share")
+  )
+    return "xg_share";
 
 
   return v
@@ -1202,9 +1158,112 @@ function normalizeStat(
       "_"
     )
     .replace(
-      /[()]/g,
+      /[()%]/g,
       ""
     );
+
+}
+
+
+// ============================================================
+// KEY STAT NORMALIZER
+// ============================================================
+
+function keyStatName(
+  name: string
+) {
+
+  const v =
+    name.toLowerCase();
+
+
+  if (
+    v.includes("possession")
+  )
+    return "possession";
+
+
+  if (
+    v === "shots" ||
+    v.includes("total shots")
+  )
+    return "shots";
+
+
+  if (
+    v.includes("shots on target")
+  )
+    return "shots_on_target";
+
+
+  if (
+    v.includes("shots off target")
+  )
+    return "shots_off_target";
+
+
+  if (
+    v.includes("blocked shots")
+  )
+    return "blocked_shots";
+
+
+  if (
+    v.includes("inside the box")
+  )
+    return "shots_inside_box";
+
+
+  if (
+    v.includes("outside the box")
+  )
+    return "shots_outside_box";
+
+
+  if (
+    v.includes("big chances")
+  )
+    return "big_chances";
+
+
+  if (
+    v.includes("corner")
+  )
+    return "corners";
+
+
+  if (
+    v.includes("touches in opposition box")
+  )
+    return "touches_in_opposition_box";
+
+
+  if (
+    v.includes("woodwork")
+  )
+    return "hit_the_woodwork";
+
+
+  if (
+    v.includes("goalkeeper saves") ||
+    v.includes("goalkeeper save")
+  )
+    return "goalkeeper_saves";
+
+
+  if (
+    v.includes("xgot faced")
+  )
+    return "xgot_faced";
+
+
+  if (
+    v.includes("goals prevented")
+  )
+    return "goals_prevented";
+
+
+  return null;
 
 }
 
@@ -1218,52 +1277,38 @@ function parseStatValue(
 ) {
 
   if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-
+    !value
+  )
     return null;
 
-  }
 
-
-  if (
-    value.includes("%")
-  ) {
-
-    const n =
-      parseFloat(
-        value.replace(
-          "%",
-          ""
-        )
+  const clean =
+    value
+      .replace(
+        "%",
+        ""
+      )
+      .replace(
+        ",",
+        "."
       );
-
-
-    return isNaN(n)
-      ? null
-      : n;
-
-  }
 
 
   const n =
     parseFloat(
-      value
+      clean
     );
 
 
-  return isNaN(n)
-    ? null
-    : n;
+  return Number.isFinite(n)
+    ? n
+    : null;
 
 }
 
 
 // ============================================================
 // TIME ENGINE
-// Same logic used by V27.
 // ============================================================
 
 function getMinuteInfo(
@@ -1281,39 +1326,104 @@ function getMinuteInfo(
 
 
   const AD =
-    toNumberOrNull(
+    numberOrNull(
       r.AD
     );
 
 
   const AO =
-    toNumberOrNull(
+    numberOrNull(
       r.AO
     );
 
 
   const BC =
-    toNumberOrNull(
+    numberOrNull(
       r.BC
     );
 
 
   const BD =
-    toNumberOrNull(
+    numberOrNull(
       r.BD
     );
 
 
-  // ========================================================
+  // ----------------------------------------------------------
+  // 1ST HALF
+  // ----------------------------------------------------------
+
+  if (
+    AC === "12" &&
+    AO !== null
+  ) {
+
+    const elapsed =
+      Math.max(
+        0,
+        now - AO
+      );
+
+
+    const minute =
+      Math.floor(
+        elapsed / 60
+      );
+
+
+    const seconds =
+      elapsed % 60;
+
+
+    return {
+
+      minute,
+
+      minute_display:
+        `${minute}:${String(
+          seconds
+        ).padStart(
+          2,
+          "0"
+        )}`,
+
+      period:
+        "1H",
+
+      minute_source:
+        "AO_1H",
+
+      time_debug: {
+
+        AC,
+        AD,
+        AO,
+        BC,
+        BD,
+
+        now_unix:
+          now,
+
+        now_minus_AO:
+          elapsed
+
+      }
+
+    };
+
+  }
+
+
+  // ----------------------------------------------------------
   // 2ND HALF
-  // ========================================================
+  // ----------------------------------------------------------
 
   if (
     AC === "13" &&
     AO !== null
   ) {
 
-    const seconds =
+    const elapsed =
       Math.max(
         0,
         now - AO
@@ -1323,44 +1433,51 @@ function getMinuteInfo(
     const minute =
       45 +
       Math.floor(
-        seconds / 60
+        elapsed / 60
       );
 
 
-    const sec =
-      seconds % 60;
+    const seconds =
+      elapsed % 60;
 
 
     return {
 
       minute,
 
-      display:
+      minute_display:
         minute >= 90
           ? `90+${Math.max(
               0,
               minute - 90
             )}`
           : `${minute}:${String(
-              sec
-            ).padStart(2, "0")}`,
+              seconds
+            ).padStart(
+              2,
+              "0"
+            )}`,
 
       period:
         "2H",
 
-      source:
+      minute_source:
         "AO_2H",
 
-      debug: {
+      time_debug: {
+
         AC,
         AD,
         AO,
         BC,
         BD,
+
         now_unix:
           now,
+
         now_minus_AO:
-          now - AO
+          elapsed
+
       }
 
     };
@@ -1368,67 +1485,9 @@ function getMinuteInfo(
   }
 
 
-  // ========================================================
-  // 1ST HALF
-  // ========================================================
-
-  if (
-    AC === "12" &&
-    AO !== null
-  ) {
-
-    const seconds =
-      Math.max(
-        0,
-        now - AO
-      );
-
-
-    const minute =
-      Math.floor(
-        seconds / 60
-      );
-
-
-    const sec =
-      seconds % 60;
-
-
-    return {
-
-      minute,
-
-      display:
-        `${minute}:${String(
-          sec
-        ).padStart(2, "0")}`,
-
-      period:
-        "1H",
-
-      source:
-        "AO_1H",
-
-      debug: {
-        AC,
-        AD,
-        AO,
-        BC,
-        BD,
-        now_unix:
-          now,
-        now_minus_AO:
-          now - AO
-      }
-
-    };
-
-  }
-
-
-  // ========================================================
+  // ----------------------------------------------------------
   // FALLBACK
-  // ========================================================
+  // ----------------------------------------------------------
 
   if (
     BC !== null
@@ -1439,23 +1498,28 @@ function getMinuteInfo(
       minute:
         BC,
 
-      display:
-        String(BC),
+      minute_display:
+        String(
+          BC
+        ),
 
       period:
         "2H",
 
-      source:
+      minute_source:
         "BC_FALLBACK",
 
-      debug: {
+      time_debug: {
+
         AC,
         AD,
         AO,
         BC,
         BD,
+
         now_unix:
           now
+
       }
 
     };
@@ -1468,24 +1532,81 @@ function getMinuteInfo(
     minute:
       0,
 
-    display:
+    minute_display:
       "0",
 
     period:
       "UNKNOWN",
 
-    source:
+    minute_source:
       "NONE",
 
-    debug: {
+    time_debug: {
+
       AC,
       AD,
       AO,
       BC,
       BD,
+
       now_unix:
         now
+
     }
+
+  };
+
+}
+
+
+// ============================================================
+// LEAGUE
+// ============================================================
+//
+// Best effort for now.
+// Ако Flashscore feed използва друг key,
+// raw данните остават и го коригираме после.
+// ============================================================
+
+function getLeague(
+  r: Record<string, string>
+) {
+
+  const name =
+    firstValue(
+      r,
+      [
+        "ZA",
+        "ZB",
+        "ZC",
+        "ZD",
+        "ZE",
+        "ZG",
+        "ZH",
+        "ZI"
+      ]
+    );
+
+
+  const country =
+    firstValue(
+      r,
+      [
+        "ZJ",
+        "ZK",
+        "ZL",
+        "ZM"
+      ]
+    );
+
+
+  return {
+
+    name:
+      name || null,
+
+    country:
+      country || null
 
   };
 
@@ -1496,13 +1617,42 @@ function getMinuteInfo(
 // HELPERS
 // ============================================================
 
-function toNumberOrNull(
+function firstValue(
+  r: Record<string, string>,
+  keys: string[]
+) {
+
+  for (
+    const key of keys
+  ) {
+
+    if (
+      r[key] !== undefined &&
+      r[key] !== null &&
+      r[key] !== ""
+    ) {
+
+      return cleanText(
+        r[key]
+      );
+
+    }
+
+  }
+
+
+  return null;
+
+}
+
+
+function numberOrNull(
   value: unknown
 ) {
 
   if (
-    value === null ||
     value === undefined ||
+    value === null ||
     value === ""
   ) {
 
@@ -1512,7 +1662,9 @@ function toNumberOrNull(
 
 
   const n =
-    Number(value);
+    Number(
+      value
+    );
 
 
   return Number.isFinite(n)
@@ -1527,8 +1679,8 @@ function cleanText(
 ) {
 
   if (
-    value === null ||
-    value === undefined
+    value === undefined ||
+    value === null
   ) {
 
     return "";
@@ -1536,47 +1688,15 @@ function cleanText(
   }
 
 
-  return String(value)
-    .trim();
-
-}
-
-
-function getFirstValue(
-  raw: Record<string, string>,
-  keys: string[]
-) {
-
-  for (
-    const key of keys
-  ) {
-
-    const value =
-      raw[key];
-
-
-    if (
-      value !== undefined &&
-      value !== null &&
-      value !== ""
-    ) {
-
-      return cleanText(
-        value
-      );
-
-    }
-
-  }
-
-
-  return null;
+  return String(
+    value
+  ).trim();
 
 }
 
 
 // ============================================================
-// JSON RESPONSE
+// JSON
 // ============================================================
 
 function json(
@@ -1591,9 +1711,11 @@ function json(
       2
     ),
     {
+
       status,
 
       headers: {
+
         ...corsHeaders,
 
         "Content-Type":
@@ -1607,8 +1729,10 @@ function json(
 
         "Expires":
           "0"
+
       }
+
     }
   );
 
-        }
+            }
