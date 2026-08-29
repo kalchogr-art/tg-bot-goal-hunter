@@ -1,33 +1,33 @@
 // ============================================================
 // GOAL WATCH — COLLECTOR V1
+// FLASHScore ONLY
 // ============================================================
-// FLASHscore ONLY
 //
-// COLLECTOR = DATA ONLY
+// DATA COLLECTION ONLY
 //
 // ВРЪЩА:
-// - всички LIVE мачове
-// - league / country (best effort)
-// - home / away
-// - minute / seconds / period
-// - score
-// - xG
-// - xG share
-// - xGOT
-// - xA
-// - key statistics
-// - data quality
-// - raw Flashscore data
+//   - всички LIVE мачове
+//   - teams
+//   - league / country (best effort)
+//   - live time
+//   - score
+//   - xG
+//   - xG share
+//   - xGOT
+//   - xA
+//   - key_stats
+//   - ALL Flashscore statistics
+//   - data_quality
+//   - raw feed
 //
 // НЕ ВРЪЩА:
-// - Hunter Score
-// - Attack Score
-// - Danger Index
-// - Goal Pressure
-// - Goal Signal
-// - ENTRY
-// - Tracker
-// - Telegram
+//   - Hunter Score
+//   - Attack Score
+//   - Danger Index
+//   - Goal Pressure
+//   - Goal Signal
+//   - ENTRY
+//   - Telegram
 // ============================================================
 
 const MAIN_URL =
@@ -45,12 +45,23 @@ const corsHeaders = {
 const flashscoreHeaders = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36",
+
   "Accept": "*/*",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Referer": "https://www.flashscore.com/",
-  "Origin": "https://www.flashscore.com",
-  "x-fsign": "SW9D1eZo",
-  "Cache-Control": "no-cache"
+
+  "Accept-Language":
+    "en-US,en;q=0.9",
+
+  "Referer":
+    "https://www.flashscore.com/",
+
+  "Origin":
+    "https://www.flashscore.com",
+
+  "x-fsign":
+    "SW9D1eZo",
+
+  "Cache-Control":
+    "no-cache"
 };
 
 
@@ -77,7 +88,7 @@ export default {
 
 
     // --------------------------------------------------------
-    // METHOD
+    // METHODS
     // --------------------------------------------------------
 
     if (
@@ -102,13 +113,17 @@ export default {
       // 1. MAIN FLASHSCORE FEED
       // ======================================================
 
-      const feedResponse = await fetch(
-        MAIN_URL + "?_=" + Date.now(),
-        {
-          headers: flashscoreHeaders,
-          cache: "no-store"
-        }
-      );
+      const feedResponse =
+        await fetch(
+          MAIN_URL + "?_=" + Date.now(),
+          {
+            headers:
+              flashscoreHeaders,
+
+            cache:
+              "no-store"
+          }
+        );
 
 
       const feedText =
@@ -120,12 +135,23 @@ export default {
         return json(
           {
             success: false,
-            collector: "COLLECTOR V1",
-            source: "FLASHSCORE ONLY",
+
+            collector:
+              "COLLECTOR V1",
+
+            source:
+              "FLASHSCORE ONLY",
+
             feed: {
-              status: feedResponse.status,
-              length: feedText.length
+
+              status:
+                feedResponse.status,
+
+              length:
+                feedText.length
+
             },
+
             error:
               "Flashscore feed request failed"
           },
@@ -140,27 +166,24 @@ export default {
       // ======================================================
 
       const parsed =
-        parseMainFeed(feedText);
-
-
-      // ======================================================
-      // 3. LIVE EVENTS
-      // AB = 2
-      //
-      // НЯМАМЕ:
-      // - minute filter
-      // - 0:0 filter
-      // - Hunter filter
-      // ======================================================
-
-      const live =
-        parsed.filter(
-          m => m.raw.AB === "2"
+        parseMainFeed(
+          feedText
         );
 
 
       // ======================================================
-      // 4. BUILD ALL LIVE MATCHES
+      // 3. ALL LIVE MATCHES
+      // ======================================================
+
+      const live =
+        parsed.filter(
+          item =>
+            item.raw.AB === "2"
+        );
+
+
+      // ======================================================
+      // 4. BUILD MATCHES
       // ======================================================
 
       const matches = [];
@@ -224,19 +247,19 @@ export default {
           // ==================================================
 
           const time =
-            getMinuteInfo(r);
+            getMinuteInfo(
+              r
+            );
 
 
           // ==================================================
           // LEAGUE
-          //
-          // Best effort.
-          // Ако не бъде намерено правилно,
-          // raw остава наличен за следващата корекция.
           // ==================================================
 
           const league =
-            getLeague(r);
+            getLeague(
+              r
+            );
 
 
           // ==================================================
@@ -250,7 +273,7 @@ export default {
 
 
           // ==================================================
-          // FINAL V27-STYLE OBJECT
+          // V27-STYLE MATCH OBJECT
           // ==================================================
 
           matches.push({
@@ -323,8 +346,19 @@ export default {
             key_stats:
               statistics.key_stats,
 
+            // ------------------------------------------------
+            // ВСИЧКИ СТАТИСТИКИ
+            // ------------------------------------------------
+
+            all_stats:
+              statistics.all_stats,
+
             data_quality:
               statistics.data_quality,
+
+            // ------------------------------------------------
+            // RAW MAIN FEED
+            // ------------------------------------------------
 
             raw:
               r
@@ -333,10 +367,6 @@ export default {
 
 
         } catch (error) {
-
-          // --------------------------------------------------
-          // Един счупен мач НЕ спира Collector-а.
-          // --------------------------------------------------
 
           matches.push({
 
@@ -511,6 +541,10 @@ function parseMainFeed(
       );
 
 
+    // --------------------------------------------------------
+    // NEW MATCH
+    // --------------------------------------------------------
+
     if (
       key === "AA"
     ) {
@@ -560,7 +594,7 @@ function parseMainFeed(
 
 
   // ----------------------------------------------------------
-  // REMOVE DUPLICATES
+  // UNIQUE MATCHES
   // ----------------------------------------------------------
 
   const seen =
@@ -575,7 +609,9 @@ function parseMainFeed(
 
 
       if (
-        seen.has(item.id)
+        seen.has(
+          item.id
+        )
       )
         return false;
 
@@ -594,7 +630,7 @@ function parseMainFeed(
 
 
 // ============================================================
-// STATISTICS
+// STATISTICS REQUEST
 // ============================================================
 
 async function getStatistics(
@@ -624,36 +660,43 @@ async function getStatistics(
       await response.text();
 
 
+    empty.data_quality.statistics_status =
+      response.status;
+
+    empty.data_quality.statistics_length =
+      text.length;
+
+
     if (!response.ok) {
-
-      empty.data_quality.statistics_status =
-        response.status;
-
-      empty.data_quality.statistics_length =
-        text.length;
 
       return empty;
 
     }
 
 
-    const parsed =
+    const result =
       parseStatistics(
         text
       );
 
 
-    parsed.data_quality.statistics_status =
+    result.data_quality.statistics_status =
       response.status;
 
-    parsed.data_quality.statistics_length =
+    result.data_quality.statistics_length =
       text.length;
 
 
-    return parsed;
+    return result;
 
 
-  } catch {
+  } catch (error) {
+
+    empty.data_quality.error =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
 
     return empty;
 
@@ -671,27 +714,55 @@ function createEmptyStatistics() {
   return {
 
     xg: {
-      home: null,
-      away: null,
-      total: null
+
+      home:
+        null as number | null,
+
+      away:
+        null as number | null,
+
+      total:
+        null as number | null
+
     },
 
     xg_share: {
-      found: false,
-      home: null,
-      away: null
+
+      found:
+        false,
+
+      home:
+        null as number | null,
+
+      away:
+        null as number | null
+
     },
 
     xgot: {
-      home: null,
-      away: null,
-      total: null
+
+      home:
+        null as number | null,
+
+      away:
+        null as number | null,
+
+      total:
+        null as number | null
+
     },
 
     xa: {
-      home: null,
-      away: null,
-      total: null
+
+      home:
+        null as number | null,
+
+      away:
+        null as number | null,
+
+      total:
+        null as number | null
+
     },
 
     key_stats: {
@@ -740,6 +811,13 @@ function createEmptyStatistics() {
 
     },
 
+    // --------------------------------------------------------
+    // ALL STATS
+    // --------------------------------------------------------
+
+    all_stats:
+      {} as Record<string, any>,
+
     data_quality: {
 
       statistics_status:
@@ -764,7 +842,10 @@ function createEmptyStatistics() {
         true,
 
       occurrences:
-        0
+        0,
+
+      error:
+        undefined as string | undefined
 
     }
 
@@ -795,7 +876,7 @@ function emptyStat() {
 
 
 // ============================================================
-// STATISTICS PARSER
+// FULL STATISTICS PARSER
 // ============================================================
 
 function parseStatistics(
@@ -815,6 +896,10 @@ function parseStatistics(
 
 
   let statName:
+    string | null = null;
+
+
+  let statLabel:
     string | null = null;
 
 
@@ -904,12 +989,15 @@ function parseStatistics(
 
 
     // --------------------------------------------------------
-    // STAT NAME
+    // STAT LABEL
     // --------------------------------------------------------
 
     if (
       key === "SG"
     ) {
+
+      statLabel =
+        value;
 
       statName =
         normalizeStat(
@@ -969,9 +1057,42 @@ function parseStatistics(
           home + away;
 
 
-        // ----------------------------------------------------
+        // ====================================================
+        // STORE EVERY STAT
+        //
+        // НИЩО НЕ ИЗХВЪРЛЯМЕ.
+        // ====================================================
+
+        const allSection =
+          result.all_stats[
+            section
+          ] ||
+          (
+            result.all_stats[
+              section
+            ] = {}
+          );
+
+
+        allSection[
+          statName
+        ] = {
+
+          label:
+            statLabel,
+
+          home,
+
+          away,
+
+          total
+
+        };
+
+
+        // ====================================================
         // XG
-        // ----------------------------------------------------
+        // ====================================================
 
         if (
           statName === "xg"
@@ -987,63 +1108,16 @@ function parseStatistics(
 
           };
 
+
           result.data_quality.xg_found =
             true;
 
         }
 
 
-        // ----------------------------------------------------
-        // XGOT
-        // ----------------------------------------------------
-
-        else if (
-          statName === "xgot"
-        ) {
-
-          result.xgot = {
-
-            home,
-
-            away,
-
-            total
-
-          };
-
-          result.data_quality.xgot_found =
-            true;
-
-        }
-
-
-        // ----------------------------------------------------
-        // XA
-        // ----------------------------------------------------
-
-        else if (
-          statName === "xa"
-        ) {
-
-          result.xa = {
-
-            home,
-
-            away,
-
-            total
-
-          };
-
-          result.data_quality.xa_found =
-            true;
-
-        }
-
-
-        // ----------------------------------------------------
+        // ====================================================
         // XG SHARE
-        // ----------------------------------------------------
+        // ====================================================
 
         else if (
           statName === "xg_share"
@@ -1063,37 +1137,85 @@ function parseStatistics(
         }
 
 
-        // ----------------------------------------------------
-        // KEY STATISTICS
-        // ----------------------------------------------------
+        // ====================================================
+        // XGOT
+        // ====================================================
 
-        else {
+        else if (
+          statName === "xgot"
+        ) {
 
-          const key =
-            keyStatName(
-              statName
-            );
+          result.xgot = {
+
+            home,
+
+            away,
+
+            total
+
+          };
 
 
-          if (
-            key &&
-            key in result.key_stats
-          ) {
+          result.data_quality.xgot_found =
+            true;
 
-            result.key_stats[key] = {
+        }
 
-              found:
-                true,
 
-              home,
+        // ====================================================
+        // XA
+        // ====================================================
 
-              away,
+        else if (
+          statName === "xa"
+        ) {
 
-              total
+          result.xa = {
 
-            };
+            home,
 
-          }
+            away,
+
+            total
+
+          };
+
+
+          result.data_quality.xa_found =
+            true;
+
+        }
+
+
+        // ====================================================
+        // KEY STATS
+        // ====================================================
+
+        const key =
+          keyStatName(
+            statName
+          );
+
+
+        if (
+          key &&
+          key in result.key_stats
+        ) {
+
+          result.key_stats[
+            key
+          ] = {
+
+            found:
+              true,
+
+            home,
+
+            away,
+
+            total
+
+          };
 
         }
 
@@ -1110,7 +1232,7 @@ function parseStatistics(
 
 
 // ============================================================
-// STAT NAME NORMALIZER
+// STAT NORMALIZATION
 // ============================================================
 
 function normalizeStat(
@@ -1166,7 +1288,7 @@ function normalizeStat(
 
 
 // ============================================================
-// KEY STAT NORMALIZER
+// KEY STAT NAMES
 // ============================================================
 
 function keyStatName(
@@ -1350,7 +1472,7 @@ function getMinuteInfo(
 
 
   // ----------------------------------------------------------
-  // 1ST HALF
+  // 1H
   // ----------------------------------------------------------
 
   if (
@@ -1415,7 +1537,7 @@ function getMinuteInfo(
 
 
   // ----------------------------------------------------------
-  // 2ND HALF
+  // 2H
   // ----------------------------------------------------------
 
   if (
@@ -1563,9 +1685,9 @@ function getMinuteInfo(
 // LEAGUE
 // ============================================================
 //
-// Best effort for now.
-// Ако Flashscore feed използва друг key,
-// raw данните остават и го коригираме после.
+// Засега best effort.
+// Ако е null, raw feed остава.
+// Ще го оправим отделно.
 // ============================================================
 
 function getLeague(
@@ -1626,14 +1748,18 @@ function firstValue(
     const key of keys
   ) {
 
+    const value =
+      r[key];
+
+
     if (
-      r[key] !== undefined &&
-      r[key] !== null &&
-      r[key] !== ""
+      value !== undefined &&
+      value !== null &&
+      value !== ""
     ) {
 
       return cleanText(
-        r[key]
+        value
       );
 
     }
@@ -1696,7 +1822,7 @@ function cleanText(
 
 
 // ============================================================
-// JSON
+// JSON RESPONSE
 // ============================================================
 
 function json(
@@ -1735,4 +1861,4 @@ function json(
     }
   );
 
-            }
+        }
