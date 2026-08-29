@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// FINAL — CRON + TELEGRAM STATS + GOAL MINUTE FALLBACK
+// FINAL — CRON + TELEGRAM STATS + GOAL FALLBACK
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -17,10 +17,6 @@ const FINAL_BUFFER_MINUTES = 20;
 // ============================================================
 
 export default {
-
-  // ----------------------------------------------------------
-  // HTTP
-  // ----------------------------------------------------------
 
   async fetch(request, env) {
 
@@ -45,10 +41,8 @@ export default {
         const update =
           await request.json();
 
-
         const message =
           update?.message;
-
 
         const text =
           String(
@@ -70,7 +64,6 @@ export default {
             await buildTodayStats(env)
           );
 
-
           return json({
             success: true,
             action: "STATS"
@@ -84,14 +77,12 @@ export default {
           action: "IGNORED"
         });
 
-
       } catch (error) {
 
         console.error(
           "TELEGRAM WEBHOOK ERROR",
           error
         );
-
 
         return json({
           success: false,
@@ -105,13 +96,12 @@ export default {
     }
 
 
-    // ----------------------------------------------------------
+    // ========================================================
     // HTTP STATUS
-    // ----------------------------------------------------------
+    // ========================================================
 
     const local =
       getSofiaTime(new Date());
-
 
     return json({
 
@@ -137,9 +127,9 @@ export default {
   },
 
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // CRON
-  // ----------------------------------------------------------
+  // ==========================================================
 
   async scheduled(event, env, ctx) {
 
@@ -169,7 +159,6 @@ async function processTracker(env) {
   const now =
     new Date();
 
-
   const local =
     getSofiaTime(now);
 
@@ -186,7 +175,6 @@ async function processTracker(env) {
 
   }
 
-
   if (!env.DB) {
 
     throw new Error(
@@ -195,7 +183,6 @@ async function processTracker(env) {
 
   }
 
-
   if (!env.TELEGRAM_BOT_TOKEN) {
 
     throw new Error(
@@ -203,7 +190,6 @@ async function processTracker(env) {
     );
 
   }
-
 
   if (!env.TELEGRAM_CHAT_ID) {
 
@@ -228,7 +214,6 @@ async function processTracker(env) {
       local
     );
 
-
     return {
 
       success: true,
@@ -246,7 +231,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // TRACKING WINDOW
-  // 12:00 - 23:59
   // ==========================================================
 
   if (
@@ -315,7 +299,6 @@ async function processTracker(env) {
 
   let data;
 
-
   try {
 
     data =
@@ -356,7 +339,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD TRACKING SIGNALS ONCE
+  // LOAD TRACKING SIGNALS
   // ==========================================================
 
   const trackingResult =
@@ -376,7 +359,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // MAP TRACKING SIGNALS
+  // TRACKING MAP
   // ==========================================================
 
   const trackingMap =
@@ -449,12 +432,11 @@ async function processTracker(env) {
   let missingChecked = 0;
   let missingFinalized = 0;
 
-
   const errorDetails = [];
 
 
   // ==========================================================
-  // PROCESS LIVE MATCHES
+  // PROCESS MATCHES
   // ==========================================================
 
   for (
@@ -522,7 +504,7 @@ async function processTracker(env) {
       matchErrors++;
 
 
-      const detail = {
+      errorDetails.push({
 
         id:
           match?.id ||
@@ -536,12 +518,7 @@ async function processTracker(env) {
           error?.message ||
           String(error)
 
-      };
-
-
-      errorDetails.push(
-        detail
-      );
+      });
 
 
       console.error(
@@ -611,7 +588,7 @@ async function processTracker(env) {
       matchErrors++;
 
 
-      const detail = {
+      errorDetails.push({
 
         id:
           matchId,
@@ -624,12 +601,7 @@ async function processTracker(env) {
           error?.message ||
           String(error)
 
-      };
-
-
-      errorDetails.push(
-        detail
-      );
+      });
 
 
       console.error(
@@ -642,10 +614,6 @@ async function processTracker(env) {
 
   }
 
-
-  // ==========================================================
-  // RESULT
-  // ==========================================================
 
   return {
 
@@ -764,13 +732,15 @@ async function processMatch(
 
 
     // ========================================================
-    // GOAL DETECTED
+    // GOAL DETECTION
     // ========================================================
 
-    if (
+    const goalDetected =
       home > entryHome ||
-      away > entryAway
-    ) {
+      away > entryAway;
+
+
+    if (goalDetected) {
 
       const goalMinute =
         getGoalMinute(
@@ -1093,7 +1063,7 @@ async function processMatch(
 
 
   // ==========================================================
-  // GET REAL DATABASE ROW
+  // LOAD REAL DB ROW
   // ==========================================================
 
   const savedSignal =
@@ -1150,10 +1120,6 @@ async function processMatch(
   );
 
 
-  // ==========================================================
-  // TELEGRAM ENTRY
-  // ==========================================================
-
   await sendTelegram(
     env,
     formatEntryMessage(
@@ -1170,7 +1136,7 @@ async function processMatch(
 
 
 // ============================================================
-// GOAL MINUTE
+// GOAL MINUTE FALLBACK
 // ============================================================
 
 function getGoalMinute(
@@ -1180,7 +1146,7 @@ function getGoalMinute(
 ) {
 
   // ----------------------------------------------------------
-  // 1. REAL NUMERIC MINUTE
+  // 1. DIRECT MINUTE
   // ----------------------------------------------------------
 
   const directMinute =
@@ -1203,7 +1169,7 @@ function getGoalMinute(
 
 
   // ----------------------------------------------------------
-  // 2. minute_display
+  // 2. MINUTE DISPLAY
   // ----------------------------------------------------------
 
   const display =
@@ -1249,9 +1215,6 @@ function getGoalMinute(
 
   // ----------------------------------------------------------
   // 3. FALLBACK FROM ENTRY TIME
-  //
-  // Това е само за липсваща минута.
-  // Не променя GOAL detection.
   // ----------------------------------------------------------
 
   const entryMinute =
@@ -1289,12 +1252,6 @@ function getGoalMinute(
         );
 
 
-      // ------------------------------------------------------
-      // Approximate fallback.
-      //
-      // Ограничаваме до разумен диапазон за 1H.
-      // ------------------------------------------------------
-
       const estimated =
         entryMinute +
         Math.max(
@@ -1323,7 +1280,7 @@ function getGoalMinute(
 
 
 // ============================================================
-// MATCH MINUTE FOR ENTRY
+// MATCH MINUTE
 // ============================================================
 
 function getMatchMinute(m) {
@@ -2401,4 +2358,4 @@ function json(
 
   );
 
-}
+        }
