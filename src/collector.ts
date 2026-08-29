@@ -47,7 +47,7 @@ const headers = {
 };
 
 // ------------------------------------------------------------
-// FLASHscore PARSER
+// FLASHSCORE PARSER
 // SAME FORMAT AS WORKING V3
 // ------------------------------------------------------------
 
@@ -114,7 +114,10 @@ function parse(text: string) {
     }
   }
 
-  // Last event
+  // ----------------------------------------------------------
+  // LAST EVENT
+  // ----------------------------------------------------------
+
   if (current) {
     result.push(current);
   }
@@ -270,7 +273,7 @@ export default {
     try {
 
       // ------------------------------------------------------
-      // EXACT WORKING FLASHscore REQUEST METHOD
+      // EXACT WORKING FLASHSCORE REQUEST METHOD
       // ------------------------------------------------------
 
       const mainRes =
@@ -291,7 +294,7 @@ export default {
         await mainRes.text();
 
       // ------------------------------------------------------
-      // FLASHscore ERROR
+      // FLASHSCORE ERROR
       // ------------------------------------------------------
 
       if (!mainRes.ok) {
@@ -394,4 +397,63 @@ export default {
           "FLASHSCORE ONLY",
 
         timestamp:
-          new Date().
+          new Date().toISOString(),
+
+        feed_status:
+          mainRes.status,
+
+        feed_length:
+          mainText.length,
+
+        total_matches:
+          matches.length,
+
+        live_matches:
+          liveMatches.length,
+
+        zero_zero_matches:
+          zeroZeroMatches.length,
+
+        ab_counts:
+          abCounts,
+
+        matches:
+          liveMatches.map(
+            (m) => ({
+              id:
+                m.id,
+
+              raw:
+                m.raw
+            })
+          )
+      });
+
+    } catch (error) {
+
+      return json(
+        {
+          success: false,
+
+          worker:
+            "goal-watch-collector",
+
+          version:
+            "V1",
+
+          source:
+            "FLASHSCORE ONLY",
+
+          error:
+            "Collector failed",
+
+          message:
+            error instanceof Error
+              ? error.message
+              : String(error)
+        },
+        500
+      );
+    }
+  }
+};
