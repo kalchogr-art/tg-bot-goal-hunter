@@ -2,7 +2,7 @@
 // GOAL WATCH — FLASHSCORE COLLECTOR V1
 // ============================================================
 // Flashscore -> Collector -> JSON
-//
+// Re update 
 // V1 НЕ използва:
 // - Hunter
 // - Tracker
