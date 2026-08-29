@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// LOW CPU / TELEGRAM STATS / IMMEDIATE HT 0:0
+// LOW CPU / TELEGRAM STATS / ALL-TIME DB STATS / IMMEDIATE HT 0:0
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -48,6 +48,10 @@ export default {
           ).trim();
 
 
+        // ======================================================
+        // /stats
+        // ======================================================
+
         if (
           text === "/stats" ||
           text.startsWith("/stats@")
@@ -55,7 +59,7 @@ export default {
 
           await sendTelegram(
             env,
-            await buildTodayStats(env)
+            await buildStats(env)
           );
 
           return json({
@@ -185,6 +189,9 @@ async function processTracker(env) {
 
   // ==========================================================
   // DAILY REPORT
+  //
+  // ОСТАВА САМО ДНЕВНИЯТ REPORT.
+  // /stats НЕ използва този механизъм.
   // ==========================================================
 
   if (
@@ -378,8 +385,7 @@ async function processTracker(env) {
   // ==========================================================
   // MISSING TRACKING
   //
-  // SAFETY FALLBACK ONLY.
-  // Normal 0:0 finalization happens at HT.
+  // SAFETY FALLBACK ONLY
   // ==========================================================
 
   for (
@@ -461,8 +467,6 @@ async function processMatch(
 
   // ==========================================================
   // MINUTE
-  //
-  // НЕ ПРОМЕНЯМЕ ЛОГИКАТА ЗА МИНУТИТЕ
   // ==========================================================
 
   const minute =
@@ -583,11 +587,7 @@ async function processMatch(
 
 
     // ========================================================
-    // IMMEDIATE 0:0 — END OF FIRST HALF
-    //
-    // Вече НЕ чакаме +15 / +20 минути.
-    // Ако V27 потвърди край на 1H и резултатът е 0:0,
-    // веднага приключваме сигнала.
+    // IMMEDIATE HT 0:0
     // ========================================================
 
     if (
@@ -862,7 +862,9 @@ function isFirstHalfFinished(m) {
     m?.status_type,
     m?.match_status,
     m?.state,
-    m?.phase
+    m?.phase,
+    m?.period,
+    m?.minute_display
 
   ];
 
@@ -890,7 +892,9 @@ function isFirstHalfFinished(m) {
       text === "HALF-TIME" ||
       text === "1H FINISHED" ||
       text === "FIRST HALF FINISHED" ||
-      text === "END OF FIRST HALF"
+      text === "END OF FIRST HALF" ||
+      text === "END OF 1H" ||
+      text === "1H END"
     ) {
 
       return true;
@@ -900,9 +904,9 @@ function isFirstHalfFinished(m) {
   }
 
 
-  // ----------------------------------------------------------
-  // Nested status objects
-  // ----------------------------------------------------------
+  // ==========================================================
+  // NESTED STATUS
+  // ==========================================================
 
   const nestedValues = [
 
@@ -910,10 +914,16 @@ function isFirstHalfFinished(m) {
     m?.status?.name,
     m?.status?.short,
     m?.status?.long,
+
     m?.match_status?.type,
     m?.match_status?.name,
+    m?.match_status?.short,
+    m?.match_status?.long,
+
     m?.state?.type,
-    m?.state?.name
+    m?.state?.name,
+    m?.state?.short,
+    m?.state?.long
 
   ];
 
@@ -937,7 +947,9 @@ function isFirstHalfFinished(m) {
       text === "HALF-TIME" ||
       text === "1H FINISHED" ||
       text === "FIRST HALF FINISHED" ||
-      text === "END OF FIRST HALF"
+      text === "END OF FIRST HALF" ||
+      text === "END OF 1H" ||
+      text === "1H END"
     ) {
 
       return true;
@@ -1022,9 +1034,6 @@ function isMatchFinished(m) {
 
 // ============================================================
 // MISSING TRACKING
-//
-// Safety fallback only.
-// This is NOT used for normal HT 0:0 finalization.
 // ============================================================
 
 async function finalizeMissingTracking(
@@ -1048,11 +1057,6 @@ async function finalizeMissingTracking(
       )
     );
 
-
-  // ----------------------------------------------------------
-  // Conservative fallback if V27 completely removes match.
-  // Normal 0:0 signals are finalized at HT before this.
-  // ----------------------------------------------------------
 
   const requiredMinutes =
     Math.max(
@@ -1263,36 +1267,21 @@ function getHunterScore(m) {
 
 
 // ============================================================
-// TODAY / WEEKLY STATS
+// ALL-TIME STATS
+//
+// /stats гледа ВСИЧКИ записани записи.
+// Няма date filter.
+// Няма weekly.
+// Няма натоварване върху Cron.
 // ============================================================
 
-async function buildTodayStats(env) {
-
-  const local =
-    getSofiaTime(
-      new Date()
-    );
-
+async function buildStats(env) {
 
   // ==========================================================
-  // DATE RANGE
+  // MAIN
   // ==========================================================
 
-  const today =
-    local.date;
-
-
-  const weekStart =
-    getWeekStartDate(
-      today
-    );
-
-
-  // ==========================================================
-  // MAIN TODAY STATS
-  // ==========================================================
-
-  const todayStats =
+  const main =
     await env.DB
       .prepare(`
         SELECT
@@ -1324,80 +1313,15 @@ async function buildTodayStats(env) {
           ) AS avg_goal_after
 
         FROM hunter_signals
-
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
       `)
-      .bind(
-        today
-      )
       .first();
 
 
   // ==========================================================
-  // WEEKLY STATS
+  // SCORE
   // ==========================================================
 
-  const weeklyStats =
-    await env.DB
-      .prepare(`
-        SELECT
-
-          COUNT(*) AS total,
-
-          SUM(
-            CASE
-              WHEN result = 'GOAL HIT'
-              THEN 1
-              ELSE 0
-            END
-          ) AS goals,
-
-          SUM(
-            CASE
-              WHEN result = 'NO GOAL'
-              THEN 1
-              ELSE 0
-            END
-          ) AS no_goals,
-
-          AVG(
-            CASE
-              WHEN result = 'GOAL HIT'
-              AND goal_after_minutes IS NOT NULL
-              THEN goal_after_minutes
-            END
-          ) AS avg_goal_after
-
-        FROM hunter_signals
-
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) >= ?
-
-        AND substr(
-          created_at,
-          1,
-          10
-        ) <= ?
-      `)
-      .bind(
-        weekStart,
-        today
-      )
-      .first();
-
-
-  // ==========================================================
-  // SCORE GROUPS
-  // ==========================================================
-
-  const scoreStats =
+  const scoreResult =
     await env.DB
       .prepare(`
         SELECT
@@ -1415,8 +1339,6 @@ async function buildTodayStats(env) {
 
             WHEN hunter_score BETWEEN 90 AND 100
               THEN '90–100'
-
-            ELSE 'OTHER'
 
           END AS score_group,
 
@@ -1448,13 +1370,7 @@ async function buildTodayStats(env) {
 
         FROM hunter_signals
 
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
-
-        AND hunter_score BETWEEN 60 AND 100
+        WHERE hunter_score BETWEEN 60 AND 100
 
         GROUP BY score_group
 
@@ -1464,20 +1380,16 @@ async function buildTodayStats(env) {
             WHEN '70–79' THEN 2
             WHEN '80–89' THEN 3
             WHEN '90–100' THEN 4
-            ELSE 5
           END
       `)
-      .bind(
-        today
-      )
       .all();
 
 
   // ==========================================================
-  // ENTRY MINUTE GROUPS
+  // ENTRY MINUTE
   // ==========================================================
 
-  const minuteStats =
+  const minuteResult =
     await env.DB
       .prepare(`
         SELECT
@@ -1492,8 +1404,6 @@ async function buildTodayStats(env) {
 
             WHEN entry_minute BETWEEN 30 AND 42
               THEN '30–42′'
-
-            ELSE 'OTHER'
 
           END AS minute_group,
 
@@ -1525,13 +1435,7 @@ async function buildTodayStats(env) {
 
         FROM hunter_signals
 
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
-
-        AND entry_minute BETWEEN 10 AND 42
+        WHERE entry_minute BETWEEN 10 AND 42
 
         GROUP BY minute_group
 
@@ -1540,20 +1444,16 @@ async function buildTodayStats(env) {
             WHEN '10–19′' THEN 1
             WHEN '20–29′' THEN 2
             WHEN '30–42′' THEN 3
-            ELSE 4
           END
       `)
-      .bind(
-        today
-      )
       .all();
 
 
   // ==========================================================
-  // LEAGUE STATS
+  // LEAGUE
   // ==========================================================
 
-  const leagueStats =
+  const leagueResult =
     await env.DB
       .prepare(`
         SELECT
@@ -1591,27 +1491,12 @@ async function buildTodayStats(env) {
 
         FROM hunter_signals
 
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
-
         GROUP BY league
 
         ORDER BY
-          (
-            CAST(
-              SUM(
-                CASE
-                  WHEN result = 'GOAL HIT'
-                  THEN 1
-                  ELSE 0
-                END
-              ) AS REAL
-            )
-            /
-            NULLIF(
+
+          CASE
+            WHEN
               SUM(
                 CASE
                   WHEN result IN (
@@ -1621,129 +1506,103 @@ async function buildTodayStats(env) {
                   THEN 1
                   ELSE 0
                 END
-              ),
-              0
-            )
-          ) DESC,
+              ) > 0
+
+            THEN
+
+              CAST(
+                SUM(
+                  CASE
+                    WHEN result = 'GOAL HIT'
+                    THEN 1
+                    ELSE 0
+                  END
+                ) AS REAL
+              )
+              /
+              SUM(
+                CASE
+                  WHEN result IN (
+                    'GOAL HIT',
+                    'NO GOAL'
+                  )
+                  THEN 1
+                  ELSE 0
+                END
+              )
+
+            ELSE 0
+          END DESC,
 
           total DESC
       `)
-      .bind(
-        today
-      )
       .all();
 
 
   // ==========================================================
-  // FORMAT MAIN STATS
+  // MAIN VALUES
   // ==========================================================
 
-  const todayTotal =
+  const total =
     Number(
-      todayStats?.total || 0
+      main?.total || 0
     );
 
 
-  const todayGoals =
+  const goals =
     Number(
-      todayStats?.goals || 0
+      main?.goals || 0
     );
 
 
-  const todayNoGoals =
+  const noGoals =
     Number(
-      todayStats?.no_goals || 0
+      main?.no_goals || 0
     );
 
 
-  const todayResolved =
-    todayGoals +
-    todayNoGoals;
+  const resolved =
+    goals +
+    noGoals;
 
 
-  const todayRate =
-    todayResolved > 0
-      ? (
-          todayGoals /
-          todayResolved *
-          100
-        )
+  const rate =
+    resolved > 0
+      ? goals /
+        resolved *
+        100
       : 0;
 
 
-  const todayAvg =
-    todayStats?.avg_goal_after !== null &&
-    todayStats?.avg_goal_after !== undefined
+  const avg =
+    main?.avg_goal_after !== null &&
+    main?.avg_goal_after !== undefined
       ? Number(
-          todayStats.avg_goal_after
-        )
-      : null;
-
-
-  const weekTotal =
-    Number(
-      weeklyStats?.total || 0
-    );
-
-
-  const weekGoals =
-    Number(
-      weeklyStats?.goals || 0
-    );
-
-
-  const weekNoGoals =
-    Number(
-      weeklyStats?.no_goals || 0
-    );
-
-
-  const weekResolved =
-    weekGoals +
-    weekNoGoals;
-
-
-  const weekRate =
-    weekResolved > 0
-      ? (
-          weekGoals /
-          weekResolved *
-          100
-        )
-      : 0;
-
-
-  const weekAvg =
-    weeklyStats?.avg_goal_after !== null &&
-    weeklyStats?.avg_goal_after !== undefined
-      ? Number(
-          weeklyStats.avg_goal_after
+          main.avg_goal_after
         )
       : null;
 
 
   // ==========================================================
-  // BUILD MESSAGE
+  // MESSAGE
   // ==========================================================
 
   let message =
-`📊 HUNTER STATISTICS — ДНЕС
+`📊 HUNTER STATISTICS — ALL TIME
 
-📅 ${today}
+🎯 ENTRY: ${total}
 
-🎯 ENTRY: ${todayTotal}
+🟢 GOAL HIT: ${goals}
 
-🟢 GOAL HIT: ${todayGoals}
-
-🔴 NO GOAL: ${todayNoGoals}
+🔴 NO GOAL: ${noGoals}
 
 📈 Успеваемост:
-${todayRate.toFixed(1)}%
+${rate.toFixed(1)}%
 
 ⏱ Средно до гол:
 ${
-    todayAvg !== null
-      ? todayAvg.toFixed(1) + " мин."
+    avg !== null
+      ? avg.toFixed(1) + " мин."
       : "—"
   }
 
@@ -1758,7 +1617,7 @@ ${
   // ==========================================================
 
   const scoreRows =
-    scoreStats?.results || [];
+    scoreResult?.results || [];
 
 
   const scoreMap =
@@ -1778,10 +1637,12 @@ ${
 
 
   const scoreGroups = [
+
     "60–69",
     "70–79",
     "80–89",
     "90–100"
+
   ];
 
 
@@ -1803,48 +1664,49 @@ ${
     }
 
 
-    const total =
+    const rowTotal =
       Number(
         row.total || 0
       );
 
 
-    const goals =
+    const rowGoals =
       Number(
         row.goals || 0
       );
 
 
-    const noGoals =
+    const rowNoGoals =
       Number(
         row.no_goals || 0
       );
 
 
-    const resolved =
-      goals +
-      noGoals;
+    const rowResolved =
+      rowGoals +
+      rowNoGoals;
 
 
-    const rate =
-      resolved > 0
-        ? goals /
-          resolved *
+    const rowRate =
+      rowResolved > 0
+        ? rowGoals /
+          rowResolved *
           100
         : 0;
 
 
     message +=
-      `${group}: ${total} ENTRY | ` +
-      `${goals} GOAL | ` +
-      `${noGoals} NO GOAL | ` +
-      `${rate.toFixed(1)}%\n`;
+      `${group}: ` +
+      `${rowTotal} ENTRY | ` +
+      `${rowGoals} GOAL | ` +
+      `${rowNoGoals} NO GOAL | ` +
+      `${rowRate.toFixed(1)}%\n`;
 
   }
 
 
   // ==========================================================
-  // AVERAGE BY SCORE
+  // AVG GOAL BY SCORE
   // ==========================================================
 
   message +=
@@ -1863,7 +1725,7 @@ ${
       scoreMap.get(group);
 
 
-    const avg =
+    const rowAvg =
       row?.avg_goal_after !== null &&
       row?.avg_goal_after !== undefined
         ? Number(
@@ -1875,8 +1737,8 @@ ${
     message +=
       `${group}: ` +
       (
-        avg !== null
-          ? avg.toFixed(1) + " мин."
+        rowAvg !== null
+          ? rowAvg.toFixed(1) + " мин."
           : "—"
       ) +
       `\n`;
@@ -1897,7 +1759,7 @@ ${
 
 
   const minuteRows =
-    minuteStats?.results || [];
+    minuteResult?.results || [];
 
 
   const minuteMap =
@@ -1917,9 +1779,11 @@ ${
 
 
   const minuteGroups = [
+
     "10–19′",
     "20–29′",
     "30–42′"
+
   ];
 
 
@@ -1941,42 +1805,43 @@ ${
     }
 
 
-    const total =
+    const rowTotal =
       Number(
         row.total || 0
       );
 
 
-    const goals =
+    const rowGoals =
       Number(
         row.goals || 0
       );
 
 
-    const noGoals =
+    const rowNoGoals =
       Number(
         row.no_goals || 0
       );
 
 
-    const resolved =
-      goals +
-      noGoals;
+    const rowResolved =
+      rowGoals +
+      rowNoGoals;
 
 
-    const rate =
-      resolved > 0
-        ? goals /
-          resolved *
+    const rowRate =
+      rowResolved > 0
+        ? rowGoals /
+          rowResolved *
           100
         : 0;
 
 
     message +=
-      `${group}: ${total} ENTRY | ` +
-      `${goals} GOAL | ` +
-      `${noGoals} NO GOAL | ` +
-      `${rate.toFixed(1)}%\n`;
+      `${group}: ` +
+      `${rowTotal} ENTRY | ` +
+      `${rowGoals} GOAL | ` +
+      `${rowNoGoals} NO GOAL | ` +
+      `${rowRate.toFixed(1)}%\n`;
 
   }
 
@@ -1994,7 +1859,7 @@ ${
 
 
   const leagueRows =
-    leagueStats?.results || [];
+    leagueResult?.results || [];
 
 
   if (
@@ -2017,43 +1882,62 @@ ${
         );
 
 
-      const total =
+      const leagueTotal =
         Number(
           row?.total || 0
         );
 
 
-      const goals =
+      const leagueGoals =
         Number(
           row?.goals || 0
         );
 
 
-      const noGoals =
+      const leagueNoGoals =
         Number(
           row?.no_goals || 0
         );
 
 
-      const resolved =
-        goals +
-        noGoals;
+      const leagueResolved =
+        leagueGoals +
+        leagueNoGoals;
 
 
-      const rate =
-        resolved > 0
-          ? goals /
-            resolved *
+      const leagueRate =
+        leagueResolved > 0
+          ? leagueGoals /
+            leagueResolved *
             100
           : 0;
 
 
+      const leagueAvg =
+        row?.avg_goal_after !== null &&
+        row?.avg_goal_after !== undefined
+          ? Number(
+              row.avg_goal_after
+            )
+          : null;
+
+
       message +=
         `${league}\n` +
-        `ENTRY: ${total} | ` +
-        `GOAL: ${goals} | ` +
-        `NO GOAL: ${noGoals} | ` +
-        `${rate.toFixed(1)}%\n\n`;
+
+        `ENTRY: ${leagueTotal} | ` +
+        `GOAL: ${leagueGoals} | ` +
+        `NO GOAL: ${leagueNoGoals} | ` +
+        `${leagueRate.toFixed(1)}%\n` +
+
+        `⏱ Avg: ` +
+        (
+          leagueAvg !== null
+            ? leagueAvg.toFixed(1) + " мин."
+            : "—"
+        ) +
+
+        `\n\n`;
 
     }
 
@@ -2061,33 +1945,14 @@ ${
 
 
   // ==========================================================
-  // WEEKLY
+  // FOOTER
   // ==========================================================
 
   message +=
-`
-━━━━━━━━━━━━━━━━
-📈 СЕДМИЦА
-━━━━━━━━━━━━━━━━
-
-📅 ${weekStart} → ${today}
-
-🎯 ENTRY: ${weekTotal}
-
-🟢 GOAL HIT: ${weekGoals}
-
-🔴 NO GOAL: ${weekNoGoals}
-
-📈 Успеваемост:
-${weekRate.toFixed(1)}%
-
-⏱ Средно до гол:
-${
-    weekAvg !== null
-      ? weekAvg.toFixed(1) + " мин."
-      : "—"
-  }
-
+`━━━━━━━━━━━━━━━━
+💾 Данните са от hunter_signals
+📊 Статистиката се изчислява при /stats
+⚡ Cron не изчислява статистики
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
@@ -2099,67 +1964,10 @@ NEXT GOAL HUNTER
 
 
 // ============================================================
-// WEEK START — MONDAY
-// ============================================================
-
-function getWeekStartDate(
-  dateString
-) {
-
-  const parts =
-    dateString
-      .split("-")
-      .map(Number);
-
-
-  const d =
-    new Date(
-      Date.UTC(
-        parts[0],
-        parts[1] - 1,
-        parts[2]
-      )
-    );
-
-
-  const day =
-    d.getUTCDay();
-
-
-  const diff =
-    day === 0
-      ? 6
-      : day - 1;
-
-
-  d.setUTCDate(
-    d.getUTCDate() -
-    diff
-  );
-
-
-  return (
-
-    d.getUTCFullYear() +
-    "-" +
-
-    String(
-      d.getUTCMonth() + 1
-    ).padStart(2, "0") +
-
-    "-" +
-
-    String(
-      d.getUTCDate()
-    ).padStart(2, "0")
-
-  );
-
-}
-
-
-// ============================================================
 // DAILY REPORT
+//
+// НЕ ГО ПИПАМЕ.
+// Той остава отделен дневен отчет.
 // ============================================================
 
 async function sendDailyReport(
@@ -2759,4 +2567,4 @@ function json(
 
   );
 
-  }
+        }
