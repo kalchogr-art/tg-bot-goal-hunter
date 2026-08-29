@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// FINAL — CRON + TELEGRAM STATS + GOAL FALLBACK
+// FINAL — CRON ONLY + TELEGRAM STATS + GOAL FALLBACK
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -21,38 +21,26 @@ export default {
   async fetch(request, env) {
 
     if (request.method === "OPTIONS") {
-
       return new Response(null, {
         status: 204,
         headers: corsHeaders()
       });
-
     }
 
-
     // ========================================================
-    // TELEGRAM WEBHOOK
+    // TELEGRAM WEBHOOK — /stats
     // ========================================================
 
     if (request.method === "POST") {
 
       try {
 
-        const update =
-          await request.json();
+        const update = await request.json();
 
-        const message =
-          update?.message;
+        const message = update?.message;
 
         const text =
-          String(
-            message?.text || ""
-          ).trim();
-
-
-        // ----------------------------------------------------
-        // /stats
-        // ----------------------------------------------------
+          String(message?.text || "").trim();
 
         if (
           text === "/stats" ||
@@ -70,7 +58,6 @@ export default {
           });
 
         }
-
 
         return json({
           success: true,
@@ -95,9 +82,8 @@ export default {
 
     }
 
-
     // ========================================================
-    // HTTP STATUS
+    // HTTP STATUS ONLY
     // ========================================================
 
     const local =
@@ -164,40 +150,20 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // CONFIGURATION
+  // CONFIG
   // ==========================================================
 
-  if (!env.V27) {
+  if (!env.V27)
+    throw new Error("V27 Service Binding missing");
 
-    throw new Error(
-      "V27 Service Binding missing"
-    );
+  if (!env.DB)
+    throw new Error("DB binding missing");
 
-  }
+  if (!env.TELEGRAM_BOT_TOKEN)
+    throw new Error("TELEGRAM_BOT_TOKEN missing");
 
-  if (!env.DB) {
-
-    throw new Error(
-      "DB binding missing"
-    );
-
-  }
-
-  if (!env.TELEGRAM_BOT_TOKEN) {
-
-    throw new Error(
-      "TELEGRAM_BOT_TOKEN missing"
-    );
-
-  }
-
-  if (!env.TELEGRAM_CHAT_ID) {
-
-    throw new Error(
-      "TELEGRAM_CHAT_ID missing"
-    );
-
-  }
+  if (!env.TELEGRAM_CHAT_ID)
+    throw new Error("TELEGRAM_CHAT_ID missing");
 
 
   // ==========================================================
@@ -214,17 +180,7 @@ async function processTracker(env) {
       local
     );
 
-    return {
-
-      success: true,
-
-      action:
-        "DAILY_REPORT",
-
-      local_time:
-        local.text
-
-    };
+    return;
 
   }
 
@@ -238,17 +194,7 @@ async function processTracker(env) {
     local.hour >= 24
   ) {
 
-    return {
-
-      success: true,
-
-      action:
-        "OUTSIDE_WINDOW",
-
-      local_time:
-        local.text
-
-    };
+    return;
 
   }
 
@@ -262,12 +208,10 @@ async function processTracker(env) {
       "https://v27.internal/",
       {
         method: "GET",
-
         headers: {
           "Accept":
             "application/json"
         }
-
       }
     );
 
@@ -288,10 +232,7 @@ async function processTracker(env) {
       "V27 SERVICE HTTP " +
       response.status +
       " | " +
-      responseText.substring(
-        0,
-        500
-      )
+      responseText.substring(0, 500)
     );
 
   }
@@ -302,18 +243,13 @@ async function processTracker(env) {
   try {
 
     data =
-      JSON.parse(
-        responseText
-      );
+      JSON.parse(responseText);
 
-  } catch (error) {
+  } catch {
 
     throw new Error(
       "V27 JSON ERROR | " +
-      responseText.substring(
-        0,
-        500
-      )
+      responseText.substring(0, 500)
     );
 
   }
@@ -331,15 +267,13 @@ async function processTracker(env) {
 
 
   const matches =
-    Array.isArray(
-      data.matches
-    )
+    Array.isArray(data.matches)
       ? data.matches
       : [];
 
 
   // ==========================================================
-  // LOAD TRACKING SIGNALS
+  // LOAD ALL ACTIVE TRACKING SIGNALS ONCE
   // ==========================================================
 
   const trackingResult =
@@ -359,10 +293,18 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // TRACKING MAP
+  // TRACKING MAP BY ID
   // ==========================================================
 
   const trackingMap =
+    new Map();
+
+
+  // ==========================================================
+  // TRACKING MAP BY NORMALIZED MATCH NAME
+  // ==========================================================
+
+  const trackingNameMap =
     new Map();
 
 
@@ -370,20 +312,36 @@ async function processTracker(env) {
     const signal of trackingSignals
   ) {
 
-    const matchId =
+    const id =
       String(
         signal?.match_id || ""
+      ).trim();
+
+
+    if (id) {
+
+      trackingMap.set(
+        id,
+        signal
+      );
+
+    }
+
+
+    const name =
+      normalizeMatchName(
+        signal?.match_name
       );
 
 
-    if (!matchId)
-      continue;
+    if (name) {
 
+      trackingNameMap.set(
+        name,
+        signal
+      );
 
-    trackingMap.set(
-      matchId,
-      signal
-    );
+    }
 
   }
 
@@ -403,14 +361,12 @@ async function processTracker(env) {
     const id =
       String(
         match?.id || ""
-      );
+      ).trim();
 
 
     if (id) {
 
-      currentMatchIds.add(
-        id
-      );
+      currentMatchIds.add(id);
 
     }
 
@@ -451,75 +407,43 @@ async function processTracker(env) {
           match,
           now,
           local,
-          trackingMap
+          trackingMap,
+          trackingNameMap
         );
 
 
-      if (
-        result === "ENTRY"
-      ) {
-
+      if (result === "ENTRY")
         entries++;
 
-      }
-
-
-      if (
-        result === "GOAL"
-      ) {
-
+      if (result === "GOAL")
         goals++;
 
-      }
-
-
-      if (
-        result === "NO_GOAL"
-      ) {
-
+      if (result === "NO_GOAL")
         noGoals++;
 
-      }
-
-
-      if (
-        result === "CANDIDATE"
-      ) {
-
+      if (result === "CANDIDATE")
         candidates++;
 
-      }
-
-
-      if (
-        result === "DUPLICATE"
-      ) {
-
+      if (result === "DUPLICATE")
         duplicates++;
-
-      }
 
     } catch (error) {
 
       matchErrors++;
 
-
       errorDetails.push({
 
         id:
-          match?.id ||
-          null,
+          match?.id || null,
 
         match:
-          match?.match ||
-          null,
+          match?.match || null,
 
         error:
           error?.message ||
           String(error)
 
       });
-
 
       console.error(
         "MATCH ERROR",
@@ -534,7 +458,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // FINALIZE MISSING TRACKING
+  // FINALIZE MATCHES MISSING FROM V27
   // ==========================================================
 
   for (
@@ -544,7 +468,7 @@ async function processTracker(env) {
     const matchId =
       String(
         signal?.match_id || ""
-      );
+      ).trim();
 
 
     if (!matchId)
@@ -587,22 +511,19 @@ async function processTracker(env) {
 
       matchErrors++;
 
-
       errorDetails.push({
 
         id:
           matchId,
 
         match:
-          signal?.match_name ||
-          null,
+          signal?.match_name || null,
 
         error:
           error?.message ||
           String(error)
 
       });
-
 
       console.error(
         "MISSING TRACKING ERROR",
@@ -615,55 +536,58 @@ async function processTracker(env) {
   }
 
 
-  return {
+  // ==========================================================
+  // CRON LOG
+  // ==========================================================
 
-    success: true,
+  console.log(
+    JSON.stringify({
 
-    action:
-      "TRACKING",
+      success: true,
 
-    local_time:
-      local.text,
+      action:
+        "TRACKING",
 
-    source:
-      "V27 SERVICE BINDING",
+      local_time:
+        local.text,
 
-    source_status:
-      response.status,
+      source:
+        "V27 SERVICE BINDING",
 
-    source_matches:
-      matches.length,
+      source_status:
+        response.status,
 
-    active_tracking:
-      trackingMap.size,
+      source_matches:
+        matches.length,
 
-    candidates,
+      active_tracking:
+        trackingMap.size,
 
-    duplicates,
+      entries,
 
-    entries,
+      goals,
 
-    goals,
+      no_goals:
+        noGoals,
 
-    no_goals:
-      noGoals,
+      candidates,
 
-    missing_tracking_checked:
-      missingChecked,
+      duplicates,
 
-    missing_finalized:
-      missingFinalized,
+      missing_tracking_checked:
+        missingChecked,
 
-    match_errors:
-      matchErrors,
+      missing_finalized:
+        missingFinalized,
 
-    error_details:
-      errorDetails.slice(
-        0,
-        10
-      )
+      match_errors:
+        matchErrors,
 
-  };
+      error_details:
+        errorDetails.slice(0, 10)
+
+    })
+  );
 
 }
 
@@ -677,20 +601,18 @@ async function processMatch(
   m,
   now,
   local,
-  trackingMap
+  trackingMap,
+  trackingNameMap
 ) {
 
   const id =
     String(
       m?.id || ""
-    );
+    ).trim();
 
 
-  if (!id) {
-
+  if (!id)
     return null;
-
-  }
 
 
   const home =
@@ -710,12 +632,37 @@ async function processMatch(
 
 
   // ==========================================================
-  // EXISTING TRACKING
+  // FIND EXISTING TRACKING
+  //
+  // 1. FIRST BY ID
+  // 2. FALLBACK BY MATCH NAME
   // ==========================================================
 
-  const existing =
+  let existing =
     trackingMap.get(id);
 
+
+  if (!existing) {
+
+    const name =
+      normalizeMatchName(
+        m?.match
+      );
+
+
+    if (name) {
+
+      existing =
+        trackingNameMap.get(name);
+
+    }
+
+  }
+
+
+  // ==========================================================
+  // EXISTING TRACKING
+  // ==========================================================
 
   if (existing) {
 
@@ -732,7 +679,7 @@ async function processMatch(
 
 
     // ========================================================
-    // GOAL DETECTION
+    // GOAL DETECTED
     // ========================================================
 
     const goalDetected =
@@ -767,9 +714,9 @@ async function processMatch(
           : null;
 
 
-      // ------------------------------------------------------
+      // ======================================================
       // ATOMIC FINALIZATION
-      // ------------------------------------------------------
+      // ======================================================
 
       const update =
         await env.DB
@@ -807,12 +754,24 @@ async function processMatch(
 
         trackingMap.delete(id);
 
+        trackingNameMap.delete(
+          normalizeMatchName(
+            existing.match_name
+          )
+        );
+
         return "DUPLICATE";
 
       }
 
 
       trackingMap.delete(id);
+
+      trackingNameMap.delete(
+        normalizeMatchName(
+          existing.match_name
+        )
+      );
 
 
       await sendTelegram(
@@ -871,12 +830,24 @@ async function processMatch(
 
         trackingMap.delete(id);
 
+        trackingNameMap.delete(
+          normalizeMatchName(
+            existing.match_name
+          )
+        );
+
         return "DUPLICATE";
 
       }
 
 
       trackingMap.delete(id);
+
+      trackingNameMap.delete(
+        normalizeMatchName(
+          existing.match_name
+        )
+      );
 
 
       await sendTelegram(
@@ -956,6 +927,9 @@ async function processMatch(
   // SAVE ENTRY
   // ==========================================================
 
+  let savedSignal = null;
+
+
   try {
 
     await env.DB
@@ -1027,6 +1001,26 @@ async function processMatch(
       )
       .run();
 
+
+    // --------------------------------------------------------
+    // LOAD REAL DB ROW
+    // --------------------------------------------------------
+
+    savedSignal =
+      await env.DB
+        .prepare(
+          `
+          SELECT *
+          FROM hunter_signals
+          WHERE match_id = ?
+            AND status = 'TRACKING'
+          ORDER BY id DESC
+          LIMIT 1
+          `
+        )
+        .bind(id)
+        .first();
+
   } catch (error) {
 
     const existingAfterError =
@@ -1052,6 +1046,13 @@ async function processMatch(
         existingAfterError
       );
 
+      trackingNameMap.set(
+        normalizeMatchName(
+          existingAfterError.match_name
+        ),
+        existingAfterError
+      );
+
       return "DUPLICATE";
 
     }
@@ -1062,31 +1063,10 @@ async function processMatch(
   }
 
 
-  // ==========================================================
-  // LOAD REAL DB ROW
-  // ==========================================================
-
-  const savedSignal =
-    await env.DB
-      .prepare(
-        `
-        SELECT *
-        FROM hunter_signals
-        WHERE match_id = ?
-          AND status = 'TRACKING'
-        ORDER BY id DESC
-        LIMIT 1
-        `
-      )
-      .bind(id)
-      .first();
-
-
   const newSignal =
     savedSignal || {
 
-      id:
-        null,
+      id: null,
 
       match_id:
         id,
@@ -1120,6 +1100,18 @@ async function processMatch(
   );
 
 
+  trackingNameMap.set(
+    normalizeMatchName(
+      matchName
+    ),
+    newSignal
+  );
+
+
+  // ==========================================================
+  // TELEGRAM ENTRY
+  // ==========================================================
+
   await sendTelegram(
     env,
     formatEntryMessage(
@@ -1131,6 +1123,36 @@ async function processMatch(
 
 
   return "ENTRY";
+
+}
+
+
+// ============================================================
+// NORMALIZE MATCH NAME
+// ============================================================
+
+function normalizeMatchName(
+  name
+) {
+
+  return String(
+    name || ""
+  )
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .replace(
+      /[^a-z0-9]+/g,
+      " "
+    )
+    .trim()
+    .replace(
+      /\s+/g,
+      " "
+    );
 
 }
 
@@ -1203,10 +1225,7 @@ function getGoalMinute(
       base <= 130
     ) {
 
-      return (
-        base +
-        added
-      );
+      return base + added;
 
     }
 
@@ -1335,10 +1354,7 @@ function getMatchMinute(m) {
       base <= 130
     ) {
 
-      return (
-        base +
-        added
-      );
+      return base + added;
 
     }
 
@@ -1491,12 +1507,6 @@ function isHunterCandidate(
   m,
   score
 ) {
-
-  // ----------------------------------------------------------
-  // ВАЖНО:
-  // Използваме същия fallback за минутата,
-  // който използва processMatch().
-  // ----------------------------------------------------------
 
   const minute =
     getMatchMinute(m);
@@ -1765,15 +1775,14 @@ async function sendDailyReport(
         LIMIT 1
         `
       )
-      .bind(reportDate)
+      .bind(
+        reportDate
+      )
       .first();
 
 
-  if (already) {
-
+  if (already)
     return;
-
-  }
 
 
   const stats =
@@ -1810,7 +1819,9 @@ async function sendDailyReport(
 
         `
       )
-      .bind(reportDate)
+      .bind(
+        reportDate
+      )
       .first();
 
 
@@ -2019,7 +2030,7 @@ function formatEntryMessage(
     m?.minute_display ||
     (
       Number(
-        getMatchMinute(m)
+        m?.minute || 0
       ) +
       "'"
     );
@@ -2362,4 +2373,4 @@ function json(
 
   );
 
-    }
+        }
