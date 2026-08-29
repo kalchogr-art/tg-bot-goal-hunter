@@ -1,7 +1,7 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER
-// LOW CPU / TELEGRAM STATS / DAILY + ALL-TIME DB STATS
-// IMMEDIATE HT 0:0
+// GOAL WATCH — HUNTER TRACKER V2
+// LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
+// V27 SERVICE BINDING
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -19,6 +19,10 @@ export default {
 
   async fetch(request, env) {
 
+    // ========================================================
+    // OPTIONS
+    // ========================================================
+
     if (request.method === "OPTIONS") {
 
       return new Response(null, {
@@ -30,7 +34,7 @@ export default {
 
 
     // ========================================================
-    // TELEGRAM WEBHOOK
+    // TELEGRAM
     // ========================================================
 
     if (request.method === "POST") {
@@ -49,9 +53,9 @@ export default {
           ).trim();
 
 
-        // ======================================================
+        // ====================================================
         // /stats
-        // ======================================================
+        // ====================================================
 
         if (
           text === "/stats" ||
@@ -105,16 +109,13 @@ export default {
       success: true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER",
+        "GOAL WATCH — HUNTER TRACKER V2",
 
       status:
         "ONLINE",
 
       mode:
-        "CRON ONLY + TELEGRAM",
-
-      message:
-        "Tracker runs from Cron. Telegram commands enabled.",
+        "CRON + TELEGRAM",
 
       time:
         getSofiaTime(new Date()).text
@@ -164,7 +165,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // CONFIG
+  // CONFIG CHECK
   // ==========================================================
 
   if (!env.V27)
@@ -222,7 +223,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // GET V27
+  // V27 SERVICE BINDING
   // ==========================================================
 
   const response =
@@ -232,12 +233,10 @@ async function processTracker(env) {
         "https://v27.internal/",
         {
           method: "GET",
-
           headers: {
             "Accept":
               "application/json"
           }
-
         }
       )
 
@@ -253,10 +252,7 @@ async function processTracker(env) {
       "V27 HTTP " +
       response.status +
       " | " +
-      text.substring(
-        0,
-        300
-      )
+      text.substring(0, 300)
     );
 
   }
@@ -286,13 +282,29 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD ACTIVE TRACKING ONCE
+  // LOAD ONLY ACTIVE SIGNAL DATA
+  // ==========================================================
+  //
+  // ВМЕСТО:
+  // SELECT *
+  //
+  // Зареждаме само необходимите колони.
+  //
   // ==========================================================
 
   const result =
     await env.DB
       .prepare(`
-        SELECT *
+        SELECT
+          id,
+          match_id,
+          match_name,
+          league,
+          entry_time,
+          entry_minute,
+          hunter_score,
+          entry_home_score,
+          entry_away_score
         FROM hunter_signals
         WHERE status = 'TRACKING'
       `)
@@ -302,6 +314,10 @@ async function processTracker(env) {
   const signals =
     result?.results || [];
 
+
+  // ==========================================================
+  // TRACKING MAP
+  // ==========================================================
 
   const trackingMap =
     new Map();
@@ -316,11 +332,15 @@ async function processTracker(env) {
         signal?.match_id || ""
       );
 
-    if (id)
+
+    if (id) {
+
       trackingMap.set(
         id,
         signal
       );
+
+    }
 
   }
 
@@ -342,35 +362,111 @@ async function processTracker(env) {
         match?.id || ""
       );
 
-    if (id)
+
+    if (id) {
+
       currentIds.add(id);
+
+    }
 
   }
 
 
   // ==========================================================
-  // PROCESS MATCHES
+  // PROCESS ONLY RELEVANT MATCHES
+  // ==========================================================
+  //
+  // Няма DB query за всеки мач.
+  //
   // ==========================================================
 
   for (
     const match of matches
   ) {
 
+    const id =
+      String(
+        match?.id || ""
+      );
+
+
+    if (!id)
+      continue;
+
+
+    // --------------------------------------------------------
+    // Ако вече се следи → processMatch
+    // --------------------------------------------------------
+
+    if (
+      trackingMap.has(id)
+    ) {
+
+      try {
+
+        await processTrackingMatch(
+          env,
+          match,
+          now,
+          local,
+          trackingMap
+        );
+
+      } catch (error) {
+
+        console.error(
+          "TRACKING MATCH ERROR",
+          id,
+          error?.message ||
+          String(error)
+        );
+
+      }
+
+      continue;
+
+    }
+
+
+    // --------------------------------------------------------
+    // Нов Hunter кандидат
+    //
+    // Първо евтиният филтър.
+    // Само ако мине → insert.
+    // --------------------------------------------------------
+
+    const score =
+      getHunterScore(match);
+
+
+    if (
+      !isHunterCandidate(
+        match,
+        score
+      )
+    ) {
+
+      continue;
+
+    }
+
+
     try {
 
-      await processMatch(
+      await createHunterEntry(
         env,
         match,
         now,
         local,
-        trackingMap
+        trackingMap,
+        score
       );
 
     } catch (error) {
 
       console.error(
-        "MATCH ERROR",
-        match?.id,
+        "ENTRY ERROR",
+        id,
         error?.message ||
         String(error)
       );
@@ -392,6 +488,7 @@ async function processTracker(env) {
       String(
         signal?.match_id || ""
       );
+
 
     if (!id)
       continue;
@@ -428,10 +525,10 @@ async function processTracker(env) {
 
 
 // ============================================================
-// PROCESS MATCH
+// EXISTING TRACKING
 // ============================================================
 
-async function processMatch(
+async function processTrackingMatch(
   env,
   m,
   now,
@@ -449,6 +546,14 @@ async function processMatch(
     return;
 
 
+  const existing =
+    trackingMap.get(id);
+
+
+  if (!existing)
+    return;
+
+
   const home =
     Number(
       m?.score?.home ?? 0
@@ -461,187 +566,104 @@ async function processMatch(
     );
 
 
-  // ==========================================================
-  // MINUTE
-  // ==========================================================
-
   const minute =
     Number(
       m?.minute ?? 0
     );
 
 
+  const entryHome =
+    Number(
+      existing.entry_home_score || 0
+    );
+
+
+  const entryAway =
+    Number(
+      existing.entry_away_score || 0
+    );
+
+
   // ==========================================================
-  // EXISTING TRACKING
+  // GOAL
   // ==========================================================
 
-  const existing =
-    trackingMap.get(id);
+  if (
+    home > entryHome ||
+    away > entryAway
+  ) {
+
+    const goalMinute =
+      minute > 0
+        ? minute
+        : null;
 
 
-  if (existing) {
-
-    const entryHome =
+    const entryMinute =
       Number(
-        existing.entry_home_score || 0
+        existing.entry_minute || 0
       );
 
 
-    const entryAway =
-      Number(
-        existing.entry_away_score || 0
-      );
-
-
-    // ========================================================
-    // GOAL DETECTION
-    // ========================================================
-
-    if (
-      home > entryHome ||
-      away > entryAway
-    ) {
-
-      const goalMinute =
-        minute > 0
-          ? minute
-          : null;
-
-
-      const entryMinute =
-        Number(
-          existing.entry_minute || 0
-        );
-
-
-      const afterMinutes =
-        goalMinute !== null
-          ? Math.max(
-              0,
-              goalMinute -
-              entryMinute
-            )
-          : null;
-
-
-      const update =
-        await env.DB
-          .prepare(`
-            UPDATE hunter_signals
-
-            SET
-              status = 'GOAL',
-              goal_minute = ?,
-              goal_after_minutes = ?,
-              result = 'GOAL HIT',
-              updated_at = ?
-
-            WHERE id = ?
-              AND status = 'TRACKING'
-          `)
-          .bind(
-            goalMinute,
-            afterMinutes,
-            now.toISOString(),
-            existing.id
+    const afterMinutes =
+      goalMinute !== null
+        ? Math.max(
+            0,
+            goalMinute -
+            entryMinute
           )
-          .run();
+        : null;
 
 
-      const changes =
-        Number(
-          update?.meta?.changes || 0
-        );
-
-
-      if (
-        changes < 1
-      ) {
-
-        return;
-
-      }
-
-
-      trackingMap.delete(id);
-
-
-      await sendTelegram(
-        env,
-        formatGoalMessage(
-          existing,
-          m,
+    const update =
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            status = 'GOAL',
+            goal_minute = ?,
+            goal_after_minutes = ?,
+            result = 'GOAL HIT',
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
           goalMinute,
-          afterMinutes
+          afterMinutes,
+          now.toISOString(),
+          existing.id
         )
+        .run();
+
+
+    const changes =
+      Number(
+        update?.meta?.changes || 0
       );
 
-
-      return;
-
-    }
-
-
-    // ========================================================
-    // IMMEDIATE HT 0:0
-    // ========================================================
 
     if (
-      home === 0 &&
-      away === 0 &&
-      isFirstHalfFinished(m)
+      changes < 1
     ) {
-
-      const update =
-        await env.DB
-          .prepare(`
-            UPDATE hunter_signals
-
-            SET
-              status = 'NO_GOAL',
-              result = 'NO GOAL',
-              updated_at = ?
-
-            WHERE id = ?
-              AND status = 'TRACKING'
-          `)
-          .bind(
-            now.toISOString(),
-            existing.id
-          )
-          .run();
-
-
-      const changes =
-        Number(
-          update?.meta?.changes || 0
-        );
-
-
-      if (
-        changes < 1
-      ) {
-
-        return;
-
-      }
-
-
-      trackingMap.delete(id);
-
-
-      await sendTelegram(
-        env,
-        formatNoGoalMessage(
-          existing,
-          m
-        )
-      );
-
 
       return;
 
     }
+
+
+    trackingMap.delete(id);
+
+
+    await sendTelegram(
+      env,
+      formatGoalMessage(
+        existing,
+        m,
+        goalMinute,
+        afterMinutes
+      )
+    );
 
 
     return;
@@ -650,18 +672,93 @@ async function processMatch(
 
 
   // ==========================================================
-  // NEW HUNTER ENTRY
+  // HALF TIME 0:0
   // ==========================================================
 
-  const hunterScore =
-    getHunterScore(m);
+  if (
+    home === 0 &&
+    away === 0 &&
+    isFirstHalfFinished(m)
+  ) {
 
+    const update =
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            status = 'NO_GOAL',
+            result = 'NO GOAL',
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          now.toISOString(),
+          existing.id
+        )
+        .run();
+
+
+    const changes =
+      Number(
+        update?.meta?.changes || 0
+      );
+
+
+    if (
+      changes < 1
+    ) {
+
+      return;
+
+    }
+
+
+    trackingMap.delete(id);
+
+
+    await sendTelegram(
+      env,
+      formatNoGoalMessage(
+        existing,
+        m
+      )
+    );
+
+  }
+
+}
+
+
+// ============================================================
+// CREATE HUNTER ENTRY
+// ============================================================
+
+async function createHunterEntry(
+  env,
+  m,
+  now,
+  local,
+  trackingMap,
+  hunterScore
+) {
+
+  const id =
+    String(
+      m?.id || ""
+    );
+
+
+  if (!id)
+    return;
+
+
+  // ==========================================================
+  // SECOND SAFETY CHECK
+  // ==========================================================
 
   if (
-    !isHunterCandidate(
-      m,
-      hunterScore
-    )
+    trackingMap.has(id)
   ) {
 
     return;
@@ -669,9 +766,23 @@ async function processMatch(
   }
 
 
-  // ==========================================================
-  // DATA
-  // ==========================================================
+  const home =
+    Number(
+      m?.score?.home ?? 0
+    );
+
+
+  const away =
+    Number(
+      m?.score?.away ?? 0
+    );
+
+
+  const minute =
+    Number(
+      m?.minute ?? 0
+    );
+
 
   const matchName =
     m?.match ||
@@ -877,10 +988,6 @@ function isFirstHalfFinished(m) {
       .trim();
 
 
-    if (!text)
-      continue;
-
-
     if (
       text === "HT" ||
       text === "HALFTIME" ||
@@ -899,10 +1006,6 @@ function isFirstHalfFinished(m) {
 
   }
 
-
-  // ==========================================================
-  // NESTED STATUS
-  // ==========================================================
 
   const nestedValues = [
 
@@ -951,74 +1054,6 @@ function isFirstHalfFinished(m) {
       return true;
 
     }
-
-  }
-
-
-  return false;
-
-}
-
-
-// ============================================================
-// FULL MATCH FINISHED
-// ============================================================
-
-function isMatchFinished(m) {
-
-  const values = [
-
-    m?.status,
-    m?.status_type,
-    m?.match_status,
-    m?.state,
-    m?.phase
-
-  ];
-
-
-  for (
-    const value of values
-  ) {
-
-    const text =
-      String(
-        value || ""
-      )
-      .toUpperCase()
-      .trim();
-
-
-    if (!text)
-      continue;
-
-
-    if (
-      text === "FT" ||
-      text === "FINISHED" ||
-      text === "FINISH" ||
-      text === "ENDED" ||
-      text === "END" ||
-      text === "FULL TIME" ||
-      text === "AFTER FULL TIME" ||
-      text === "AET" ||
-      text === "PEN"
-    ) {
-
-      return true;
-
-    }
-
-  }
-
-
-  if (
-    m?.is_finished === true ||
-    m?.finished === true ||
-    m?.ended === true
-  ) {
-
-    return true;
 
   }
 
@@ -1104,12 +1139,10 @@ async function finalizeMissingTracking(
     await env.DB
       .prepare(`
         UPDATE hunter_signals
-
         SET
           status = 'NO_GOAL',
           result = 'NO GOAL',
           updated_at = ?
-
         WHERE id = ?
           AND status = 'TRACKING'
       `)
@@ -1141,15 +1174,12 @@ async function finalizeMissingTracking(
       signal,
       {
         score: {
-
           home:
             signal?.entry_home_score ??
             0,
-
           away:
             signal?.entry_away_score ??
             0
-
         }
       }
     )
@@ -1263,19 +1293,13 @@ function getHunterScore(m) {
 
 
 // ============================================================
-// ALL-TIME + DAILY STATS
-//
-// /stats показва:
-// 1. DAILY — най-отгоре
-// 2. ALL TIME — след него
-//
-// Cron НЕ изчислява статистики.
+// STATS
 // ============================================================
 
 async function buildStats(env) {
 
   // ==========================================================
-  // DAILY — PREVIOUS COMPLETED DAY
+  // DAILY FIRST
   // ==========================================================
 
   const now =
@@ -1284,10 +1308,8 @@ async function buildStats(env) {
   const local =
     getSofiaTime(now);
 
-  const dailyDate =
-    getPreviousSofiaDate(
-      local.date
-    );
+  const today =
+    local.date;
 
 
   const daily =
@@ -1330,7 +1352,7 @@ async function buildStats(env) {
         ) = ?
       `)
       .bind(
-        dailyDate
+        today
       )
       .first();
 
@@ -1376,7 +1398,7 @@ async function buildStats(env) {
 
 
   // ==========================================================
-  // ALL-TIME MAIN
+  // ALL TIME MAIN
   // ==========================================================
 
   const main =
@@ -1521,15 +1543,7 @@ async function buildStats(env) {
               THEN 1
               ELSE 0
             END
-          ) AS no_goals,
-
-          AVG(
-            CASE
-              WHEN result = 'GOAL HIT'
-              AND goal_after_minutes IS NOT NULL
-              THEN goal_after_minutes
-            END
-          ) AS avg_goal_after
+          ) AS no_goals
 
         FROM hunter_signals
 
@@ -1591,54 +1605,13 @@ async function buildStats(env) {
 
         GROUP BY league
 
-        ORDER BY
-
-          CASE
-            WHEN
-              SUM(
-                CASE
-                  WHEN result IN (
-                    'GOAL HIT',
-                    'NO GOAL'
-                  )
-                  THEN 1
-                  ELSE 0
-                END
-              ) > 0
-
-            THEN
-
-              CAST(
-                SUM(
-                  CASE
-                    WHEN result = 'GOAL HIT'
-                    THEN 1
-                    ELSE 0
-                  END
-                ) AS REAL
-              )
-              /
-              SUM(
-                CASE
-                  WHEN result IN (
-                    'GOAL HIT',
-                    'NO GOAL'
-                  )
-                  THEN 1
-                  ELSE 0
-                END
-              )
-
-            ELSE 0
-          END DESC,
-
-          total DESC
+        ORDER BY total DESC
       `)
       .all();
 
 
   // ==========================================================
-  // ALL-TIME VALUES
+  // ALL TIME VALUES
   // ==========================================================
 
   const total =
@@ -1682,13 +1655,13 @@ async function buildStats(env) {
 
 
   // ==========================================================
-  // MESSAGE — DAILY FIRST
+  // MESSAGE
   // ==========================================================
 
   let message =
-`📊 DAILY HUNTER REPORT
+`📊 HUNTER STATISTICS — TODAY
 
-📅 ${dailyDate}
+📅 ${today}
 
 🎯 ENTRY: ${dailyTotal}
 
@@ -1708,7 +1681,6 @@ ${
 
 ━━━━━━━━━━━━━━━━
 📊 HUNTER STATISTICS — ALL TIME
-━━━━━━━━━━━━━━━━
 
 🎯 ENTRY: ${total}
 
@@ -1757,12 +1729,10 @@ ${
 
 
   const scoreGroups = [
-
     "60–69",
     "70–79",
     "80–89",
     "90–100"
-
   ];
 
 
@@ -1826,7 +1796,7 @@ ${
 
 
   // ==========================================================
-  // AVG GOAL BY SCORE
+  // AVG SCORE
   // ==========================================================
 
   message +=
@@ -1899,11 +1869,9 @@ ${
 
 
   const minuteGroups = [
-
     "10–19′",
     "20–29′",
     "30–42′"
-
   ];
 
 
@@ -1967,7 +1935,7 @@ ${
 
 
   // ==========================================================
-  // LEAGUES
+  // LEAGUE
   // ==========================================================
 
   message +=
@@ -1987,7 +1955,7 @@ ${
   ) {
 
     message +=
-      `Няма данни.\n`;
+      "Няма данни.\n";
 
   } else {
 
@@ -2064,15 +2032,10 @@ ${
   }
 
 
-  // ==========================================================
-  // FOOTER
-  // ==========================================================
-
   message +=
 `━━━━━━━━━━━━━━━━
 💾 Данните са от hunter_signals
-📅 Daily: предишен завършен ден
-📊 All-Time: всички записи
+📊 Статистиката се изчислява при /stats
 ⚡ Cron не изчислява статистики
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
@@ -2179,11 +2142,9 @@ async function sendDailyReport(
 
   const rate =
     resolved > 0
-      ? (
-          goals /
-          resolved *
-          100
-        )
+      ? goals /
+        resolved *
+        100
       : 0;
 
 
@@ -2321,7 +2282,7 @@ async function sendTelegram(
 
 
 // ============================================================
-// ENTRY MESSAGE
+// ENTRY
 // ============================================================
 
 function formatEntryMessage(
@@ -2377,7 +2338,7 @@ STATUS: TRACKING`;
 
 
 // ============================================================
-// GOAL MESSAGE
+// GOAL
 // ============================================================
 
 function formatGoalMessage(
@@ -2422,7 +2383,7 @@ RESULT: GOAL HIT`;
 
 
 // ============================================================
-// NO GOAL MESSAGE
+// NO GOAL
 // ============================================================
 
 function formatNoGoalMessage(
@@ -2685,4 +2646,4 @@ function json(
 
   );
 
-    }
+        }
