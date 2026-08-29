@@ -1,67 +1,80 @@
 // ============================================================
 // GOAL WATCH — COLLECTOR V1
-// FLASHScore ONLY
+// FLASHscore ONLY
+//
+// V3 DATA ENGINE
+// DATA ONLY
+//
+// REMOVED:
+// ❌ Hunter Score
+// ❌ Goal Signal
+// ❌ Attack Score
+// ❌ Danger Index
+// ❌ Goal Pressure
+// ❌ Derived
+// ❌ Telegram
+// ❌ bookmaker / TV / sponsor data
+// ❌ raw commercial feed
+//
+// KEPT:
+// ✅ ALL LIVE MATCHES
+// ✅ teams
+// ✅ league / country when available
+// ✅ live time
+// ✅ score
+// ✅ xG
+// ✅ xG Share
+// ✅ xGOT
+// ✅ xA
+// ✅ ALL statistics
+// ✅ occurrences
 // ============================================================
-//
-// DATA COLLECTION ONLY
-//
-// ВРЪЩА:
-//   - всички LIVE мачове
-//   - teams
-//   - league / country (best effort)
-//   - live time
-//   - score
-//   - xG
-//   - xG share
-//   - xGOT
-//   - xA
-//   - key_stats
-//   - ALL Flashscore statistics
-//   - data_quality
-//   - raw feed
-//
-// НЕ ВРЪЩА:
-//   - Hunter Score
-//   - Attack Score
-//   - Danger Index
-//   - Goal Pressure
-//   - Goal Signal
-//   - ENTRY
-//   - Telegram
-// ============================================================
+
 
 const MAIN_URL =
-  "https://www.flashscore.com/x/feed/f_1_0_3_en_1";
+    "https://www.flashscore.com/x/feed/f_1_0_3_en_1";
 
 const STAT_URL =
-  "https://www.flashscore.com/x/feed/df_st_1_";
+    "https://www.flashscore.com/x/feed/df_st_1_";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization"
+
+const headers = {
+
+    "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36",
+
+    "Accept":
+        "*/*",
+
+    "Accept-Language":
+        "en-US,en;q=0.9",
+
+    "Referer":
+        "https://www.flashscore.com/",
+
+    "Origin":
+        "https://www.flashscore.com",
+
+    "x-fsign":
+        "SW9D1eZo",
+
+    "Cache-Control":
+        "no-cache"
+
 };
 
-const flashscoreHeaders = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36",
 
-  "Accept": "*/*",
+const corsHeaders = {
 
-  "Accept-Language":
-    "en-US,en;q=0.9",
+    "Access-Control-Allow-Origin":
+        "*",
 
-  "Referer":
-    "https://www.flashscore.com/",
+    "Access-Control-Allow-Methods":
+        "GET, HEAD, OPTIONS",
 
-  "Origin":
-    "https://www.flashscore.com",
+    "Access-Control-Allow-Headers":
+        "Content-Type, Authorization"
 
-  "x-fsign":
-    "SW9D1eZo",
-
-  "Cache-Control":
-    "no-cache"
 };
 
 
@@ -71,412 +84,650 @@ const flashscoreHeaders = {
 
 export default {
 
-  async fetch(request: Request) {
+    async fetch(request: Request) {
 
-    // --------------------------------------------------------
-    // OPTIONS
-    // --------------------------------------------------------
+        if (
+            request.method === "OPTIONS"
+        ) {
 
-    if (request.method === "OPTIONS") {
-
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders
-      });
-
-    }
-
-
-    // --------------------------------------------------------
-    // METHODS
-    // --------------------------------------------------------
-
-    if (
-      request.method !== "GET" &&
-      request.method !== "HEAD"
-    ) {
-
-      return json(
-        {
-          success: false,
-          error: "Method not allowed"
-        },
-        405
-      );
-
-    }
-
-
-    try {
-
-      // ======================================================
-      // 1. MAIN FLASHSCORE FEED
-      // ======================================================
-
-      const feedResponse =
-        await fetch(
-          MAIN_URL + "?_=" + Date.now(),
-          {
-            headers:
-              flashscoreHeaders,
-
-            cache:
-              "no-store"
-          }
-        );
-
-
-      const feedText =
-        await feedResponse.text();
-
-
-      if (!feedResponse.ok) {
-
-        return json(
-          {
-            success: false,
-
-            collector:
-              "COLLECTOR V1",
-
-            source:
-              "FLASHSCORE ONLY",
-
-            feed: {
-
-              status:
-                feedResponse.status,
-
-              length:
-                feedText.length
-
-            },
-
-            error:
-              "Flashscore feed request failed"
-          },
-          503
-        );
-
-      }
-
-
-      // ======================================================
-      // 2. PARSE ALL EVENTS
-      // ======================================================
-
-      const parsed =
-        parseMainFeed(
-          feedText
-        );
-
-
-      // ======================================================
-      // 3. ALL LIVE MATCHES
-      // ======================================================
-
-      const live =
-        parsed.filter(
-          item =>
-            item.raw.AB === "2"
-        );
-
-
-      // ======================================================
-      // 4. BUILD MATCHES
-      // ======================================================
-
-      const matches = [];
-
-
-      for (
-        const match of live
-      ) {
-
-        try {
-
-          const r =
-            match.raw;
-
-
-          // ==================================================
-          // TEAMS
-          // ==================================================
-
-          const home =
-            cleanText(
-              r.AE
+            return new Response(
+                null,
+                {
+                    status: 204,
+                    headers: corsHeaders
+                }
             );
-
-
-          const away =
-            cleanText(
-              r.AF
-            );
-
-
-          const matchName =
-            `${home} - ${away}`;
-
-
-          // ==================================================
-          // SCORE
-          // ==================================================
-
-          const scoreHome =
-            numberOrNull(
-              r.AG
-            );
-
-
-          const scoreAway =
-            numberOrNull(
-              r.AH
-            );
-
-
-          const totalGoals =
-            scoreHome !== null &&
-            scoreAway !== null
-              ? scoreHome + scoreAway
-              : null;
-
-
-          // ==================================================
-          // TIME
-          // ==================================================
-
-          const time =
-            getMinuteInfo(
-              r
-            );
-
-
-          // ==================================================
-          // LEAGUE
-          // ==================================================
-
-          const league =
-            getLeague(
-              r
-            );
-
-
-          // ==================================================
-          // STATISTICS
-          // ==================================================
-
-          const statistics =
-            await getStatistics(
-              match.id
-            );
-
-
-          // ==================================================
-          // V27-STYLE MATCH OBJECT
-          // ==================================================
-
-          matches.push({
-
-            id:
-              match.id,
-
-            match:
-              matchName,
-
-            league:
-              league.name,
-
-            country:
-              league.country,
-
-            home,
-            away,
-
-            status:
-              "LIVE",
-
-            status_code:
-              r.AB,
-
-            minute:
-              time.minute,
-
-            minute_display:
-              time.minute_display,
-
-            period:
-              time.period,
-
-            minute_source:
-              time.minute_source,
-
-            time_debug:
-              time.time_debug,
-
-            score: {
-
-              home:
-                scoreHome,
-
-              away:
-                scoreAway,
-
-              total_goals:
-                totalGoals,
-
-              zero_zero:
-                scoreHome === 0 &&
-                scoreAway === 0
-
-            },
-
-            xg:
-              statistics.xg,
-
-            xg_share:
-              statistics.xg_share,
-
-            xgot:
-              statistics.xgot,
-
-            xa:
-              statistics.xa,
-
-            key_stats:
-              statistics.key_stats,
-
-            // ------------------------------------------------
-            // ВСИЧКИ СТАТИСТИКИ
-            // ------------------------------------------------
-
-            all_stats:
-              statistics.all_stats,
-
-            data_quality:
-              statistics.data_quality,
-
-            // ------------------------------------------------
-            // RAW MAIN FEED
-            // ------------------------------------------------
-
-            raw:
-              r
-
-          });
-
-
-        } catch (error) {
-
-          matches.push({
-
-            id:
-              match.id,
-
-            error:
-              error instanceof Error
-                ? error.message
-                : String(error),
-
-            raw:
-              match.raw
-
-          });
 
         }
 
-      }
+
+        if (
+            request.method !== "GET" &&
+            request.method !== "HEAD"
+        ) {
+
+            return json(
+                {
+                    success: false,
+                    error: "Method not allowed"
+                },
+                405
+            );
+
+        }
 
 
-      // ======================================================
-      // 5. SUMMARY
-      // ======================================================
+        try {
 
-      const matchesWithXg =
-        matches.filter(
-          m =>
-            m.xg &&
-            (
-              m.xg.home !== null ||
-              m.xg.away !== null
-            )
-        ).length;
+            // =================================================
+            // FLASHscore LIVE FEED
+            // =================================================
 
-
-      const zeroZero =
-        matches.filter(
-          m =>
-            m.score?.zero_zero === true
-        ).length;
+            const mainRes =
+                await fetch(
+                    MAIN_URL +
+                    "?_=" +
+                    Date.now(),
+                    {
+                        headers,
+                        cache: "no-store"
+                    }
+                );
 
 
-      return json({
-
-        success:
-          true,
-
-        collector:
-          "COLLECTOR V1",
-
-        source:
-          "FLASHSCORE ONLY",
-
-        timestamp:
-          new Date().toISOString(),
-
-        feed: {
-
-          status:
-            feedResponse.status,
-
-          total_matches:
-            parsed.length,
-
-          live_matches:
-            live.length,
-
-          matches_returned:
-            matches.length,
-
-          matches_with_xg:
-            matchesWithXg,
-
-          zero_zero_matches:
-            zeroZero,
-
-          signals_found:
-            0
-
-        },
-
-        matches
-
-      });
+            const mainText =
+                await mainRes.text();
 
 
-    } catch (error) {
+            if (
+                !mainRes.ok
+            ) {
 
-      return json(
-        {
-          success: false,
+                return json(
+                    {
+                        success: false,
+                        collector: "COLLECTOR V1",
+                        source: "FLASHSCORE ONLY",
+                        feed: {
+                            status:
+                                mainRes.status,
+                            length:
+                                mainText.length
+                        },
+                        error:
+                            "Flashscore live feed failed"
+                    },
+                    503
+                );
 
-          collector:
-            "COLLECTOR V1",
+            }
 
-          source:
-            "FLASHSCORE ONLY",
 
-          error:
-            error instanceof Error
-              ? error.message
-              : String(error)
-        },
-        500
-      );
+            // =================================================
+            // PARSE V3 MAIN FEED
+            // =================================================
+
+            const parsed =
+                parse(
+                    mainText
+                );
+
+
+            // =================================================
+            // ALL LIVE MATCHES
+            // AB = 2
+            // =================================================
+
+            const liveMatches =
+                parsed.filter(
+                    m =>
+                        m?.raw?.AB === "2"
+                );
+
+
+            const output: any[] = [];
+
+
+            // =================================================
+            // PROCESS EVERY LIVE MATCH
+            // =================================================
+
+            for (
+                const match of liveMatches
+            ) {
+
+                try {
+
+                    const r =
+                        match.raw;
+
+
+                    // =========================================
+                    // TIME
+                    // =========================================
+
+                    const timeInfo =
+                        getMinuteInfo(
+                            r
+                        );
+
+
+                    const minute =
+                        timeInfo.minute;
+
+
+                    const minuteDisplay =
+                        timeInfo.display;
+
+
+                    const period =
+                        timeInfo.period;
+
+
+                    // =========================================
+                    // SCORE
+                    // =========================================
+
+                    const scoreHome =
+                        toNumber(
+                            r.AG
+                        );
+
+
+                    const scoreAway =
+                        toNumber(
+                            r.AH
+                        );
+
+
+                    const totalGoals =
+                        valid(scoreHome) &&
+                        valid(scoreAway)
+                            ? scoreHome + scoreAway
+                            : 0;
+
+
+                    const zeroZero =
+                        scoreHome === 0 &&
+                        scoreAway === 0;
+
+
+                    // =========================================
+                    // STATISTICS
+                    //
+                    // Collector V1 reads the same Flashscore
+                    // statistics endpoint used by V3.
+                    //
+                    // NO SCORE / SIGNAL calculation.
+                    // =========================================
+
+                    const statistics =
+                        await fetchEndpoint(
+                            STAT_URL +
+                            match.id,
+                            headers
+                        );
+
+
+                    const parsedStats =
+                        statistics.status === 200
+                            ? parseStatistics(
+                                statistics.text
+                              )
+                            : emptyStatistics();
+
+
+                    // =========================================
+                    // XG
+                    // =========================================
+
+                    const xgHome =
+                        parsedStats.xg.home;
+
+
+                    const xgAway =
+                        parsedStats.xg.away;
+
+
+                    const xgTotal =
+                        valid(xgHome) &&
+                        valid(xgAway)
+                            ? round(
+                                xgHome +
+                                xgAway
+                              )
+                            : null;
+
+
+                    // =========================================
+                    // XG SHARE
+                    // =========================================
+
+                    let xgShare = {
+
+                        found:
+                            false,
+
+                        home:
+                            null as number | null,
+
+                        away:
+                            null as number | null
+
+                    };
+
+
+                    if (
+                        valid(xgHome) &&
+                        valid(xgAway) &&
+                        valid(xgTotal) &&
+                        xgTotal > 0
+                    ) {
+
+                        xgShare = {
+
+                            found:
+                                true,
+
+                            home:
+                                round(
+                                    (
+                                        xgHome /
+                                        xgTotal
+                                    ) * 100,
+                                    1
+                                ),
+
+                            away:
+                                round(
+                                    (
+                                        xgAway /
+                                        xgTotal
+                                    ) * 100,
+                                    1
+                                )
+
+                        };
+
+                    }
+
+
+                    // =========================================
+                    // XGOT
+                    // =========================================
+
+                    const xgotHome =
+                        parsedStats.xgot.home;
+
+
+                    const xgotAway =
+                        parsedStats.xgot.away;
+
+
+                    const xgotTotal =
+                        valid(xgotHome) &&
+                        valid(xgotAway)
+                            ? round(
+                                xgotHome +
+                                xgotAway
+                              )
+                            : null;
+
+
+                    // =========================================
+                    // XA
+                    // =========================================
+
+                    const xaHome =
+                        parsedStats.xa.home;
+
+
+                    const xaAway =
+                        parsedStats.xa.away;
+
+
+                    const xaTotal =
+                        valid(xaHome) &&
+                        valid(xaAway)
+                            ? round(
+                                xaHome +
+                                xaAway
+                              )
+                            : null;
+
+
+                    // =========================================
+                    // KEY STATS
+                    // =========================================
+
+                    const keyStats =
+                        buildKeyStats(
+                            parsedStats.stats
+                        );
+
+
+                    // =========================================
+                    // LEAGUE
+                    //
+                    // V3 feed does not expose a reliable
+                    // league field in the match raw object.
+                    // Keep null instead of inventing it.
+                    // =========================================
+
+                    const league =
+                        getLeague(
+                            r
+                        );
+
+
+                    // =========================================
+                    // CLEAN MATCH OBJECT
+                    //
+                    // NO RAW FIELD.
+                    // NO COMMERCIAL DATA.
+                    // =========================================
+
+                    output.push({
+
+                        id:
+                            match.id,
+
+                        match:
+                            `${r.AE || ""} - ${r.AF || ""}`,
+
+                        league:
+                            league.name,
+
+                        country:
+                            league.country,
+
+                        home:
+                            r.AE || "",
+
+                        away:
+                            r.AF || "",
+
+                        status:
+                            "LIVE",
+
+                        status_code:
+                            r.AB || null,
+
+
+                        // -------------------------------
+                        // TIME
+                        // -------------------------------
+
+                        minute,
+
+                        minute_display:
+                            minuteDisplay,
+
+                        period,
+
+                        minute_source:
+                            timeInfo.source,
+
+                        time_debug:
+                            timeInfo.debug,
+
+
+                        // -------------------------------
+                        // SCORE
+                        // -------------------------------
+
+                        score: {
+
+                            home:
+                                scoreHome,
+
+                            away:
+                                scoreAway,
+
+                            total_goals:
+                                totalGoals,
+
+                            zero_zero:
+                                zeroZero
+
+                        },
+
+
+                        // -------------------------------
+                        // XG
+                        // -------------------------------
+
+                        xg: {
+
+                            home:
+                                xgHome,
+
+                            away:
+                                xgAway,
+
+                            total:
+                                xgTotal
+
+                        },
+
+
+                        xg_share:
+                            xgShare,
+
+
+                        // -------------------------------
+                        // XGOT
+                        // -------------------------------
+
+                        xgot: {
+
+                            home:
+                                xgotHome,
+
+                            away:
+                                xgotAway,
+
+                            total:
+                                xgotTotal
+
+                        },
+
+
+                        // -------------------------------
+                        // XA
+                        // -------------------------------
+
+                        xa: {
+
+                            home:
+                                xaHome,
+
+                            away:
+                                xaAway,
+
+                            total:
+                                xaTotal
+
+                        },
+
+
+                        // -------------------------------
+                        // V3 KEY STATS
+                        // -------------------------------
+
+                        key_stats:
+                            keyStats,
+
+
+                        // -------------------------------
+                        // ALL STATS
+                        //
+                        // Нищо не се губи.
+                        // -------------------------------
+
+                        stats:
+                            parsedStats.stats,
+
+
+                        // -------------------------------
+                        // OCCURRENCES
+                        // -------------------------------
+
+                        occurrences:
+                            parsedStats.occurrences,
+
+
+                        // -------------------------------
+                        // DATA QUALITY
+                        // -------------------------------
+
+                        data_quality: {
+
+                            statistics_status:
+                                statistics.status,
+
+                            statistics_length:
+                                statistics.text.length,
+
+                            xg_found:
+                                valid(xgTotal),
+
+                            xgot_found:
+                                valid(xgotTotal),
+
+                            xa_found:
+                                valid(xaTotal),
+
+                            occurrences:
+                                parsedStats.occurrences
+
+                        }
+
+                    });
+
+
+                } catch (
+                    error
+                ) {
+
+                    // Do not kill the complete collector
+                    // because of one match.
+
+                    output.push({
+
+                        id:
+                            match.id,
+
+                        match:
+                            `${match.raw?.AE || ""} - ${match.raw?.AF || ""}`,
+
+                        error:
+                            error instanceof Error
+                                ? error.message
+                                : String(error)
+
+                    });
+
+                }
+
+            }
+
+
+            // =================================================
+            // SUMMARY
+            // =================================================
+
+            const xgMatches =
+                output.filter(
+                    m =>
+                        m?.data_quality?.xg_found
+                ).length;
+
+
+            const zeroZeroMatches =
+                output.filter(
+                    m =>
+                        m?.score?.zero_zero === true
+                ).length;
+
+
+            // =================================================
+            // FINAL RESPONSE
+            // =================================================
+
+            return json({
+
+                success:
+                    true,
+
+                collector:
+                    "COLLECTOR V1",
+
+                source:
+                    "FLASHSCORE ONLY",
+
+                timestamp:
+                    new Date().toISOString(),
+
+                feed: {
+
+                    status:
+                        mainRes.status,
+
+                    total_matches:
+                        parsed.length,
+
+                    live_matches:
+                        liveMatches.length,
+
+                    matches_returned:
+                        output.length,
+
+                    matches_with_xg:
+                        xgMatches,
+
+                    zero_zero_matches:
+                        zeroZeroMatches,
+
+                    signals_found:
+                        0
+
+                },
+
+                matches:
+                    output
+
+            });
+
+
+        } catch (
+            error
+        ) {
+
+            return json(
+                {
+
+                    success:
+                        false,
+
+                    collector:
+                        "COLLECTOR V1",
+
+                    source:
+                        "FLASHSCORE ONLY",
+
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error)
+
+                },
+                500
+            );
+
+        }
 
     }
-
-  }
 
 };
 
@@ -485,222 +736,457 @@ export default {
 // MAIN FEED PARSER
 // ============================================================
 
-function parseMainFeed(
-  text: string
+function parse(
+    text: string
 ) {
 
-  const result: Array<{
-    id: string;
-    raw: Record<string, string>;
-  }> = [];
+    const result: any[] = [];
+
+    let current:
+        any = null;
 
 
-  let current:
-    {
-      id: string;
-      raw: Record<string, string>;
-    }
-    | null = null;
+    // Flashscore:
+    //
+    // field separator = U+00AC
+    // key/value separator = U+00F7
+    // AA = new event
 
-
-  for (
-    const fieldRaw of text.split("\xAC")
-  ) {
-
-    if (!fieldRaw)
-      continue;
-
-
-    const field =
-      fieldRaw.replace(
-        /^~/,
-        ""
-      );
-
-
-    const separator =
-      field.indexOf("\xF7");
-
-
-    if (
-      separator === -1
-    )
-      continue;
-
-
-    const key =
-      field.slice(
-        0,
-        separator
-      );
-
-
-    const value =
-      field.slice(
-        separator + 1
-      );
-
-
-    // --------------------------------------------------------
-    // NEW MATCH
-    // --------------------------------------------------------
-
-    if (
-      key === "AA"
+    for (
+        const field of
+        text.split("\xAC")
     ) {
 
-      if (current) {
+        if (!field)
+            continue;
+
+
+        const separator =
+            field.indexOf("\xF7");
+
+
+        if (
+            separator === -1
+        )
+            continue;
+
+
+        const key =
+            field
+                .slice(
+                    0,
+                    separator
+                )
+                .replace(
+                    /^~/,
+                    ""
+                );
+
+
+        const value =
+            field.slice(
+                separator + 1
+            );
+
+
+        if (!key)
+            continue;
+
+
+        if (
+            key === "AA"
+        ) {
+
+            if (
+                current
+            ) {
+
+                result.push(
+                    current
+                );
+
+            }
+
+
+            current = {
+
+                id:
+                    value,
+
+                raw:
+                    {}
+
+            };
+
+
+            continue;
+
+        }
+
+
+        if (
+            current
+        ) {
+
+            current.raw[key] =
+                value;
+
+        }
+
+    }
+
+
+    if (
+        current
+    ) {
 
         result.push(
-          current
+            current
         );
 
-      }
-
-
-      current = {
-
-        id:
-          value,
-
-        raw:
-          {}
-
-      };
-
-
-      continue;
-
     }
 
 
-    if (current) {
-
-      current.raw[key] =
-        value;
-
-    }
-
-  }
+    const seen =
+        new Set<string>();
 
 
-  if (current) {
+    return result.filter(
+        m => {
 
-    result.push(
-      current
+            if (
+                !m?.id
+            )
+                return false;
+
+
+            if (
+                seen.has(
+                    m.id
+                )
+            )
+                return false;
+
+
+            seen.add(
+                m.id
+            );
+
+
+            return true;
+
+        }
     );
-
-  }
-
-
-  // ----------------------------------------------------------
-  // UNIQUE MATCHES
-  // ----------------------------------------------------------
-
-  const seen =
-    new Set<string>();
-
-
-  return result.filter(
-    item => {
-
-      if (!item.id)
-        return false;
-
-
-      if (
-        seen.has(
-          item.id
-        )
-      )
-        return false;
-
-
-      seen.add(
-        item.id
-      );
-
-
-      return true;
-
-    }
-  );
 
 }
 
 
 // ============================================================
-// STATISTICS REQUEST
+// STATISTICS
 // ============================================================
 
-async function getStatistics(
-  matchId: string
+function parseStatistics(
+    text: string
 ) {
 
-  const empty =
-    createEmptyStatistics();
+    const result =
+        emptyStatistics();
 
 
-  try {
+    let section =
+        "match";
 
-    const response =
-      await fetch(
-        STAT_URL + matchId,
-        {
-          headers:
-            flashscoreHeaders,
 
-          cache:
-            "no-store"
+    let currentStat:
+        string | null =
+            null;
+
+
+    let home:
+        number | null =
+            null;
+
+
+    const fields =
+        text.split("\xAC");
+
+
+    for (
+        const rawField of fields
+    ) {
+
+        if (!rawField)
+            continue;
+
+
+        const field =
+            rawField.replace(
+                /^~/,
+                ""
+            );
+
+
+        // V3 statistics feed uses
+        // ? as key/value separator.
+
+        const i =
+            field.indexOf("?");
+
+
+        if (
+            i === -1
+        )
+            continue;
+
+
+        const key =
+            field.slice(
+                0,
+                i
+            );
+
+
+        const value =
+            field.slice(
+                i + 1
+            );
+
+
+        // ---------------------------------------------
+        // SECTION
+        // ---------------------------------------------
+
+        if (
+            key === "SE"
+        ) {
+
+            const v =
+                value.toLowerCase();
+
+
+            if (
+                v.includes("1st")
+            ) {
+
+                section =
+                    "first_half";
+
+            } else if (
+                v.includes("2nd")
+            ) {
+
+                section =
+                    "second_half";
+
+            } else {
+
+                section =
+                    "match";
+
+            }
+
+
+            continue;
+
         }
-      );
 
 
-    const text =
-      await response.text();
+        // ---------------------------------------------
+        // STAT NAME
+        // ---------------------------------------------
+
+        if (
+            key === "SG"
+        ) {
+
+            currentStat =
+                normalizeStat(
+                    value
+                );
 
 
-    empty.data_quality.statistics_status =
-      response.status;
-
-    empty.data_quality.statistics_length =
-      text.length;
+            home =
+                null;
 
 
-    if (!response.ok) {
+            continue;
 
-      return empty;
+        }
+
+
+        // ---------------------------------------------
+        // HOME
+        // ---------------------------------------------
+
+        if (
+            key === "SH"
+        ) {
+
+            home =
+                parseStatValue(
+                    value
+                );
+
+
+            continue;
+
+        }
+
+
+        // ---------------------------------------------
+        // AWAY
+        // ---------------------------------------------
+
+        if (
+            key === "SI"
+        ) {
+
+            const away =
+                parseStatValue(
+                    value
+                );
+
+
+            if (
+                currentStat &&
+                home !== null &&
+                away !== null
+            ) {
+
+                result.occurrences++;
+
+
+                // =====================================
+                // KEEP EVERY STAT
+                // =====================================
+
+                if (
+                    !result.stats[
+                        currentStat
+                    ]
+                ) {
+
+                    result.stats[
+                        currentStat
+                    ] = {
+
+                        found:
+                            true,
+
+                        home,
+
+                        away
+
+                    };
+
+                } else {
+
+                    // If the same stat appears in
+                    // another section, preserve it
+                    // instead of overwriting it.
+
+                    const existing =
+                        result.stats[
+                            currentStat
+                        ];
+
+
+                    if (
+                        !existing.sections
+                    ) {
+
+                        existing.sections =
+                            {};
+
+                    }
+
+
+                    existing.sections[
+                        section
+                    ] = {
+
+                        home,
+
+                        away,
+
+                        total:
+                            round(
+                                home +
+                                away
+                            )
+
+                    };
+
+                }
+
+
+                // =====================================
+                // XG
+                // =====================================
+
+                if (
+                    currentStat ===
+                    "xg"
+                ) {
+
+                    result.xg = {
+
+                        home,
+
+                        away
+
+                    };
+
+                }
+
+
+                // =====================================
+                // XGOT
+                // =====================================
+
+                else if (
+                    currentStat ===
+                    "xgot"
+                ) {
+
+                    result.xgot = {
+
+                        home,
+
+                        away
+
+                    };
+
+                }
+
+
+                // =====================================
+                // XA
+                // =====================================
+
+                else if (
+                    currentStat ===
+                    "xa"
+                ) {
+
+                    result.xa = {
+
+                        home,
+
+                        away
+
+                    };
+
+                }
+
+            }
+
+        }
 
     }
 
 
-    const result =
-      parseStatistics(
-        text
-      );
-
-
-    result.data_quality.statistics_status =
-      response.status;
-
-    result.data_quality.statistics_length =
-      text.length;
-
-
     return result;
-
-
-  } catch (error) {
-
-    empty.data_quality.error =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
-
-    return empty;
-
-  }
 
 }
 
@@ -709,974 +1195,559 @@ async function getStatistics(
 // EMPTY STATISTICS
 // ============================================================
 
-function createEmptyStatistics() {
+function emptyStatistics() {
 
-  return {
+    return {
 
-    xg: {
+        xg: {
 
-      home:
-        null as number | null,
+            home:
+                null,
 
-      away:
-        null as number | null,
+            away:
+                null
 
-      total:
-        null as number | null
+        },
 
-    },
+        xgot: {
 
-    xg_share: {
+            home:
+                null,
 
-      found:
-        false,
+            away:
+                null
 
-      home:
-        null as number | null,
+        },
 
-      away:
-        null as number | null
+        xa: {
 
-    },
+            home:
+                null,
 
-    xgot: {
+            away:
+                null
 
-      home:
-        null as number | null,
+        },
 
-      away:
-        null as number | null,
+        stats:
+            {} as Record<string, any>,
 
-      total:
-        null as number | null
+        occurrences:
+            0
 
-    },
-
-    xa: {
-
-      home:
-        null as number | null,
-
-      away:
-        null as number | null,
-
-      total:
-        null as number | null
-
-    },
-
-    key_stats: {
-
-      possession:
-        emptyStat(),
-
-      shots:
-        emptyStat(),
-
-      shots_on_target:
-        emptyStat(),
-
-      shots_off_target:
-        emptyStat(),
-
-      blocked_shots:
-        emptyStat(),
-
-      shots_inside_box:
-        emptyStat(),
-
-      shots_outside_box:
-        emptyStat(),
-
-      big_chances:
-        emptyStat(),
-
-      corners:
-        emptyStat(),
-
-      touches_in_opposition_box:
-        emptyStat(),
-
-      hit_the_woodwork:
-        emptyStat(),
-
-      goalkeeper_saves:
-        emptyStat(),
-
-      xgot_faced:
-        emptyStat(),
-
-      goals_prevented:
-        emptyStat()
-
-    },
-
-    // --------------------------------------------------------
-    // ALL STATS
-    // --------------------------------------------------------
-
-    all_stats:
-      {} as Record<string, any>,
-
-    data_quality: {
-
-      statistics_status:
-        0,
-
-      statistics_length:
-        0,
-
-      xg_found:
-        false,
-
-      xgot_found:
-        false,
-
-      xa_found:
-        false,
-
-      xg_required:
-        false,
-
-      signal_can_work_without_xg:
-        true,
-
-      occurrences:
-        0,
-
-      error:
-        undefined as string | undefined
-
-    }
-
-  };
-
-}
-
-
-function emptyStat() {
-
-  return {
-
-    found:
-      false,
-
-    home:
-      null,
-
-    away:
-      null,
-
-    total:
-      0
-
-  };
+    };
 
 }
 
 
 // ============================================================
-// FULL STATISTICS PARSER
-// ============================================================
-
-function parseStatistics(
-  text: string
-) {
-
-  const result =
-    createEmptyStatistics();
-
-
-  const fields =
-    text.split("\xAC");
-
-
-  let section =
-    "match";
-
-
-  let statName:
-    string | null = null;
-
-
-  let statLabel:
-    string | null = null;
-
-
-  let home:
-    number | null = null;
-
-
-  for (
-    const rawField of fields
-  ) {
-
-    if (!rawField)
-      continue;
-
-
-    const field =
-      rawField.replace(
-        /^~/,
-        ""
-      );
-
-
-    const separator =
-      field.indexOf("\xF7");
-
-
-    if (
-      separator === -1
-    )
-      continue;
-
-
-    const key =
-      field.slice(
-        0,
-        separator
-      );
-
-
-    const value =
-      field.slice(
-        separator + 1
-      );
-
-
-    // --------------------------------------------------------
-    // SECTION
-    // --------------------------------------------------------
-
-    if (
-      key === "SE"
-    ) {
-
-      const v =
-        value
-          .toLowerCase()
-          .trim();
-
-
-      if (
-        v.includes("1st") ||
-        v.includes("first")
-      ) {
-
-        section =
-          "first_half";
-
-      } else if (
-        v.includes("2nd") ||
-        v.includes("second")
-      ) {
-
-        section =
-          "second_half";
-
-      } else {
-
-        section =
-          "match";
-
-      }
-
-
-      continue;
-
-    }
-
-
-    // --------------------------------------------------------
-    // STAT LABEL
-    // --------------------------------------------------------
-
-    if (
-      key === "SG"
-    ) {
-
-      statLabel =
-        value;
-
-      statName =
-        normalizeStat(
-          value
-        );
-
-      home =
-        null;
-
-      continue;
-
-    }
-
-
-    // --------------------------------------------------------
-    // HOME
-    // --------------------------------------------------------
-
-    if (
-      key === "SH"
-    ) {
-
-      home =
-        parseStatValue(
-          value
-        );
-
-      continue;
-
-    }
-
-
-    // --------------------------------------------------------
-    // AWAY
-    // --------------------------------------------------------
-
-    if (
-      key === "SI"
-    ) {
-
-      const away =
-        parseStatValue(
-          value
-        );
-
-
-      if (
-        statName &&
-        home !== null &&
-        away !== null
-      ) {
-
-        result.data_quality.occurrences++;
-
-
-        const total =
-          home + away;
-
-
-        // ====================================================
-        // STORE EVERY STAT
-        //
-        // НИЩО НЕ ИЗХВЪРЛЯМЕ.
-        // ====================================================
-
-        const allSection =
-          result.all_stats[
-            section
-          ] ||
-          (
-            result.all_stats[
-              section
-            ] = {}
-          );
-
-
-        allSection[
-          statName
-        ] = {
-
-          label:
-            statLabel,
-
-          home,
-
-          away,
-
-          total
-
-        };
-
-
-        // ====================================================
-        // XG
-        // ====================================================
-
-        if (
-          statName === "xg"
-        ) {
-
-          result.xg = {
-
-            home,
-
-            away,
-
-            total
-
-          };
-
-
-          result.data_quality.xg_found =
-            true;
-
-        }
-
-
-        // ====================================================
-        // XG SHARE
-        // ====================================================
-
-        else if (
-          statName === "xg_share"
-        ) {
-
-          result.xg_share = {
-
-            found:
-              true,
-
-            home,
-
-            away
-
-          };
-
-        }
-
-
-        // ====================================================
-        // XGOT
-        // ====================================================
-
-        else if (
-          statName === "xgot"
-        ) {
-
-          result.xgot = {
-
-            home,
-
-            away,
-
-            total
-
-          };
-
-
-          result.data_quality.xgot_found =
-            true;
-
-        }
-
-
-        // ====================================================
-        // XA
-        // ====================================================
-
-        else if (
-          statName === "xa"
-        ) {
-
-          result.xa = {
-
-            home,
-
-            away,
-
-            total
-
-          };
-
-
-          result.data_quality.xa_found =
-            true;
-
-        }
-
-
-        // ====================================================
-        // KEY STATS
-        // ====================================================
-
-        const key =
-          keyStatName(
-            statName
-          );
-
-
-        if (
-          key &&
-          key in result.key_stats
-        ) {
-
-          result.key_stats[
-            key
-          ] = {
-
-            found:
-              true,
-
-            home,
-
-            away,
-
-            total
-
-          };
-
-        }
-
-      }
-
-    }
-
-  }
-
-
-  return result;
-
-}
-
-
-// ============================================================
-// STAT NORMALIZATION
+// NORMALIZE STAT
 // ============================================================
 
 function normalizeStat(
-  value: string
+    value: string
 ) {
 
-  const v =
-    value
-      .toLowerCase()
-      .trim();
+    const v =
+        value
+            .toLowerCase()
+            .trim();
 
 
-  if (
-    v === "xg" ||
-    v.includes("expected goals")
-  )
-    return "xg";
-
-
-  if (
-    v === "xgot" ||
-    v.includes("xg on target") ||
-    v.includes("expected goals on target")
-  )
-    return "xgot";
-
-
-  if (
-    v === "xa" ||
-    v.includes("expected assists")
-  )
-    return "xa";
-
-
-  if (
-    v.includes("xg share") ||
-    v.includes("expected goals share")
-  )
-    return "xg_share";
-
-
-  return v
-    .replace(
-      /\s+/g,
-      "_"
+    if (
+        v === "xg" ||
+        v.includes(
+            "expected goals"
+        )
     )
-    .replace(
-      /[()%]/g,
-      ""
-    );
+        return "xg";
+
+
+    if (
+        v === "xgot" ||
+        v.includes(
+            "xg on target"
+        ) ||
+        v.includes(
+            "expected goals on target"
+        )
+    )
+        return "xgot";
+
+
+    if (
+        v === "xa" ||
+        v.includes(
+            "expected assists"
+        )
+    )
+        return "xa";
+
+
+    if (
+        v === "ball possession"
+    )
+        return "possession";
+
+
+    if (
+        v === "total shots"
+    )
+        return "shots";
+
+
+    if (
+        v === "shots on target"
+    )
+        return "shots_on_target";
+
+
+    if (
+        v === "shots off target"
+    )
+        return "shots_off_target";
+
+
+    if (
+        v === "blocked shots"
+    )
+        return "blocked_shots";
+
+
+    if (
+        v.includes(
+            "inside the box"
+        )
+    )
+        return "shots_inside_box";
+
+
+    if (
+        v.includes(
+            "outside the box"
+        )
+    )
+        return "shots_outside_box";
+
+
+    if (
+        v === "big chances"
+    )
+        return "big_chances";
+
+
+    if (
+        v === "corner kicks"
+    )
+        return "corners";
+
+
+    if (
+        v.includes(
+            "touches in opposition box"
+        )
+    )
+        return "touches_in_opposition_box";
+
+
+    if (
+        v === "hit the woodwork"
+    )
+        return "hit_the_woodwork";
+
+
+    if (
+        v === "goalkeeper saves"
+    )
+        return "goalkeeper_saves";
+
+
+    if (
+        v.includes(
+            "xgot faced"
+        )
+    )
+        return "xgot_faced";
+
+
+    if (
+        v.includes(
+            "goals prevented"
+        )
+    )
+        return "goals_prevented";
+
+
+    return v
+        .replace(
+            /\s+/g,
+            "_"
+        )
+        .replace(
+            /[()%]/g,
+            ""
+        );
 
 }
 
 
 // ============================================================
-// KEY STAT NAMES
+// KEY STATS
 // ============================================================
 
-function keyStatName(
-  name: string
+function buildKeyStats(
+    stats: Record<string, any>
 ) {
 
-  const v =
-    name.toLowerCase();
+    const names = [
 
+        "possession",
 
-  if (
-    v.includes("possession")
-  )
-    return "possession";
+        "shots",
 
+        "shots_on_target",
 
-  if (
-    v === "shots" ||
-    v.includes("total shots")
-  )
-    return "shots";
+        "shots_off_target",
 
+        "blocked_shots",
 
-  if (
-    v.includes("shots on target")
-  )
-    return "shots_on_target";
+        "shots_inside_box",
 
+        "shots_outside_box",
 
-  if (
-    v.includes("shots off target")
-  )
-    return "shots_off_target";
+        "big_chances",
 
+        "corners",
 
-  if (
-    v.includes("blocked shots")
-  )
-    return "blocked_shots";
+        "touches_in_opposition_box",
 
+        "hit_the_woodwork",
 
-  if (
-    v.includes("inside the box")
-  )
-    return "shots_inside_box";
+        "goalkeeper_saves",
 
+        "xgot_faced",
 
-  if (
-    v.includes("outside the box")
-  )
-    return "shots_outside_box";
+        "goals_prevented"
 
+    ];
 
-  if (
-    v.includes("big chances")
-  )
-    return "big_chances";
 
+    const output: Record<
+        string,
+        any
+    > = {};
 
-  if (
-    v.includes("corner")
-  )
-    return "corners";
 
+    for (
+        const name of names
+    ) {
 
-  if (
-    v.includes("touches in opposition box")
-  )
-    return "touches_in_opposition_box";
+        const stat =
+            stats[name];
 
 
-  if (
-    v.includes("woodwork")
-  )
-    return "hit_the_woodwork";
+        if (!stat) {
 
+            output[name] = {
 
-  if (
-    v.includes("goalkeeper saves") ||
-    v.includes("goalkeeper save")
-  )
-    return "goalkeeper_saves";
+                found:
+                    false,
 
+                home:
+                    null,
 
-  if (
-    v.includes("xgot faced")
-  )
-    return "xgot_faced";
+                away:
+                    null,
 
+                total:
+                    0
 
-  if (
-    v.includes("goals prevented")
-  )
-    return "goals_prevented";
+            };
 
 
-  return null;
+            continue;
 
-}
+        }
 
 
-// ============================================================
-// STAT VALUE
-// ============================================================
+        output[name] = {
 
-function parseStatValue(
-  value: string
-) {
+            found:
+                stat.found === true,
 
-  if (
-    !value
-  )
-    return null;
+            home:
+                stat.home,
 
+            away:
+                stat.away,
 
-  const clean =
-    value
-      .replace(
-        "%",
-        ""
-      )
-      .replace(
-        ",",
-        "."
-      );
+            total:
+                valid(stat.home) &&
+                valid(stat.away)
+                    ? round(
+                        stat.home +
+                        stat.away
+                      )
+                    : 0
 
-
-  const n =
-    parseFloat(
-      clean
-    );
-
-
-  return Number.isFinite(n)
-    ? n
-    : null;
-
-}
-
-
-// ============================================================
-// TIME ENGINE
-// ============================================================
-
-function getMinuteInfo(
-  r: Record<string, string>
-) {
-
-  const now =
-    Math.floor(
-      Date.now() / 1000
-    );
-
-
-  const AC =
-    r.AC;
-
-
-  const AD =
-    numberOrNull(
-      r.AD
-    );
-
-
-  const AO =
-    numberOrNull(
-      r.AO
-    );
-
-
-  const BC =
-    numberOrNull(
-      r.BC
-    );
-
-
-  const BD =
-    numberOrNull(
-      r.BD
-    );
-
-
-  // ----------------------------------------------------------
-  // 1H
-  // ----------------------------------------------------------
-
-  if (
-    AC === "12" &&
-    AO !== null
-  ) {
-
-    const elapsed =
-      Math.max(
-        0,
-        now - AO
-      );
-
-
-    const minute =
-      Math.floor(
-        elapsed / 60
-      );
-
-
-    const seconds =
-      elapsed % 60;
-
-
-    return {
-
-      minute,
-
-      minute_display:
-        `${minute}:${String(
-          seconds
-        ).padStart(
-          2,
-          "0"
-        )}`,
-
-      period:
-        "1H",
-
-      minute_source:
-        "AO_1H",
-
-      time_debug: {
-
-        AC,
-        AD,
-        AO,
-        BC,
-        BD,
-
-        now_unix:
-          now,
-
-        now_minus_AO:
-          elapsed
-
-      }
-
-    };
-
-  }
-
-
-  // ----------------------------------------------------------
-  // 2H
-  // ----------------------------------------------------------
-
-  if (
-    AC === "13" &&
-    AO !== null
-  ) {
-
-    const elapsed =
-      Math.max(
-        0,
-        now - AO
-      );
-
-
-    const minute =
-      45 +
-      Math.floor(
-        elapsed / 60
-      );
-
-
-    const seconds =
-      elapsed % 60;
-
-
-    return {
-
-      minute,
-
-      minute_display:
-        minute >= 90
-          ? `90+${Math.max(
-              0,
-              minute - 90
-            )}`
-          : `${minute}:${String(
-              seconds
-            ).padStart(
-              2,
-              "0"
-            )}`,
-
-      period:
-        "2H",
-
-      minute_source:
-        "AO_2H",
-
-      time_debug: {
-
-        AC,
-        AD,
-        AO,
-        BC,
-        BD,
-
-        now_unix:
-          now,
-
-        now_minus_AO:
-          elapsed
-
-      }
-
-    };
-
-  }
-
-
-  // ----------------------------------------------------------
-  // FALLBACK
-  // ----------------------------------------------------------
-
-  if (
-    BC !== null
-  ) {
-
-    return {
-
-      minute:
-        BC,
-
-      minute_display:
-        String(
-          BC
-        ),
-
-      period:
-        "2H",
-
-      minute_source:
-        "BC_FALLBACK",
-
-      time_debug: {
-
-        AC,
-        AD,
-        AO,
-        BC,
-        BD,
-
-        now_unix:
-          now
-
-      }
-
-    };
-
-  }
-
-
-  return {
-
-    minute:
-      0,
-
-    minute_display:
-      "0",
-
-    period:
-      "UNKNOWN",
-
-    minute_source:
-      "NONE",
-
-    time_debug: {
-
-      AC,
-      AD,
-      AO,
-      BC,
-      BD,
-
-      now_unix:
-        now
+        };
 
     }
 
-  };
+
+    return output;
+
+}
+
+
+// ============================================================
+// TIME ENGINE — V3
+// ============================================================
+
+function getMinuteInfo(
+    r: Record<string, string>
+) {
+
+    const now =
+        Math.floor(
+            Date.now() / 1000
+        );
+
+
+    const AC =
+        r.AC;
+
+
+    const AD =
+        toNumber(
+            r.AD
+        );
+
+
+    const AO =
+        toNumber(
+            r.AO
+        );
+
+
+    const BC =
+        toNumber(
+            r.BC
+        );
+
+
+    const BD =
+        toNumber(
+            r.BD
+        );
+
+
+    // ========================================================
+    // 2H
+    // ========================================================
+
+    if (
+        AC === "13" &&
+        valid(AO)
+    ) {
+
+        const seconds =
+            Math.max(
+                0,
+                now - AO!
+            );
+
+
+        const minute =
+            45 +
+            Math.floor(
+                seconds / 60
+            );
+
+
+        const sec =
+            seconds % 60;
+
+
+        return {
+
+            minute,
+
+            display:
+                minute >= 90
+                    ? `90+${Math.max(
+                        0,
+                        minute - 90
+                    )}`
+                    : `${minute}:${String(
+                        sec
+                    ).padStart(
+                        2,
+                        "0"
+                    )}`,
+
+            period:
+                "2H",
+
+            source:
+                "AO_2H",
+
+            debug: {
+
+                AC,
+                AD,
+                AO,
+                BC,
+                BD,
+
+                now_unix:
+                    now,
+
+                now_minus_AO:
+                    now - AO!
+
+            }
+
+        };
+
+    }
+
+
+    // ========================================================
+    // 1H
+    // ========================================================
+
+    if (
+        AC === "12" &&
+        valid(AO)
+    ) {
+
+        const seconds =
+            Math.max(
+                0,
+                now - AO!
+            );
+
+
+        const minute =
+            Math.floor(
+                seconds / 60
+            );
+
+
+        const sec =
+            seconds % 60;
+
+
+        return {
+
+            minute,
+
+            display:
+                `${minute}:${String(
+                    sec
+                ).padStart(
+                    2,
+                    "0"
+                )}`,
+
+            period:
+                "1H",
+
+            source:
+                "AO_1H",
+
+            debug: {
+
+                AC,
+                AD,
+                AO,
+                BC,
+                BD,
+
+                now_unix:
+                    now,
+
+                now_minus_AO:
+                    now - AO!
+
+            }
+
+        };
+
+    }
+
+
+    // ========================================================
+    // FALLBACK
+    // ========================================================
+
+    if (
+        valid(BC)
+    ) {
+
+        return {
+
+            minute:
+                BC!,
+
+            display:
+                String(
+                    BC
+                ),
+
+            period:
+                "2H",
+
+            source:
+                "BC_FALLBACK",
+
+            debug: {
+
+                AC,
+                AD,
+                AO,
+                BC,
+                BD,
+
+                now_unix:
+                    now
+
+            }
+
+        };
+
+    }
+
+
+    return {
+
+        minute:
+            0,
+
+        display:
+            "0",
+
+        period:
+            "UNKNOWN",
+
+        source:
+            "NONE",
+
+        debug: {
+
+            AC,
+            AD,
+            AO,
+            BC,
+            BD,
+
+            now_unix:
+                now
+
+        }
+
+    };
 
 }
 
@@ -1685,52 +1756,85 @@ function getMinuteInfo(
 // LEAGUE
 // ============================================================
 //
-// Засега best effort.
-// Ако е null, raw feed остава.
-// Ще го оправим отделно.
+// V3 няма надеждно league поле в основния event raw.
+// Не измисляме стойност.
+// Следващата стъпка е да вземем league от V27
+// по същия начин, по който V27 го показва.
 // ============================================================
 
 function getLeague(
-  r: Record<string, string>
+    r: Record<string, string>
 ) {
 
-  const name =
-    firstValue(
-      r,
-      [
-        "ZA",
-        "ZB",
-        "ZC",
-        "ZD",
-        "ZE",
-        "ZG",
-        "ZH",
-        "ZI"
-      ]
-    );
+    return {
+
+        name:
+            r.ZA ||
+            r.ZB ||
+            r.ZC ||
+            null,
+
+        country:
+            r.ZJ ||
+            r.ZK ||
+            null
+
+    };
+
+}
 
 
-  const country =
-    firstValue(
-      r,
-      [
-        "ZJ",
-        "ZK",
-        "ZL",
-        "ZM"
-      ]
-    );
+// ============================================================
+// FETCH ENDPOINT
+// ============================================================
+
+async function fetchEndpoint(
+    url: string,
+    requestHeaders: Record<string, string>
+) {
+
+    try {
+
+        const res =
+            await fetch(
+                url +
+                "?_=" +
+                Date.now(),
+                {
+                    headers:
+                        requestHeaders,
+                    cache:
+                        "no-store"
+                }
+            );
 
 
-  return {
+        const text =
+            await res.text();
 
-    name:
-      name || null,
 
-    country:
-      country || null
+        return {
 
-  };
+            status:
+                res.status,
+
+            text
+
+        };
+
+    } catch {
+
+        return {
+
+            status:
+                0,
+
+            text:
+                ""
+
+        };
+
+    }
 
 }
 
@@ -1739,126 +1843,135 @@ function getLeague(
 // HELPERS
 // ============================================================
 
-function firstValue(
-  r: Record<string, string>,
-  keys: string[]
+function parseStatValue(
+    value: string
 ) {
-
-  for (
-    const key of keys
-  ) {
-
-    const value =
-      r[key];
-
 
     if (
-      value !== undefined &&
-      value !== null &&
-      value !== ""
-    ) {
+        !value
+    )
+        return null;
 
-      return cleanText(
+
+    const clean =
         value
-      );
+            .replace(
+                "%",
+                ""
+            )
+            .replace(
+                ",",
+                "."
+            );
 
-    }
 
-  }
+    const n =
+        parseFloat(
+            clean
+        );
 
 
-  return null;
+    return Number.isFinite(n)
+        ? n
+        : null;
 
 }
 
 
-function numberOrNull(
-  value: unknown
+function toNumber(
+    value: unknown
 ) {
 
-  if (
-    value === undefined ||
-    value === null ||
-    value === ""
-  ) {
-
-    return null;
-
-  }
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    )
+        return null;
 
 
-  const n =
-    Number(
-      value
+    const n =
+        Number(
+            value
+        );
+
+
+    return Number.isFinite(n)
+        ? n
+        : null;
+
+}
+
+
+function valid(
+    value: unknown
+): value is number {
+
+    return (
+        typeof value === "number" &&
+        Number.isFinite(value)
     );
 
-
-  return Number.isFinite(n)
-    ? n
-    : null;
-
 }
 
 
-function cleanText(
-  value: unknown
+function round(
+    value: number,
+    decimals = 2
 ) {
 
-  if (
-    value === undefined ||
-    value === null
-  ) {
-
-    return "";
-
-  }
+    const factor =
+        Math.pow(
+            10,
+            decimals
+        );
 
 
-  return String(
-    value
-  ).trim();
+    return Math.round(
+        value * factor
+    ) / factor;
 
 }
 
 
 // ============================================================
-// JSON RESPONSE
+// JSON
 // ============================================================
 
 function json(
-  data: unknown,
-  status = 200
+    data: unknown,
+    status = 200
 ) {
 
-  return new Response(
-    JSON.stringify(
-      data,
-      null,
-      2
-    ),
-    {
+    return new Response(
 
-      status,
+        JSON.stringify(
+            data,
+            null,
+            2
+        ),
 
-      headers: {
+        {
 
-        ...corsHeaders,
+            status,
 
-        "Content-Type":
-          "application/json; charset=utf-8",
+            headers: {
 
-        "Cache-Control":
-          "no-store, no-cache, must-revalidate",
+                ...corsHeaders,
 
-        "Pragma":
-          "no-cache",
+                "Content-Type":
+                    "application/json; charset=utf-8",
 
-        "Expires":
-          "0"
+                "Cache-Control":
+                    "no-store, no-cache, must-revalidate",
 
-      }
+                "Pragma":
+                    "no-cache"
 
-    }
-  );
+            }
 
         }
+
+    );
+
+              }
