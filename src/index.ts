@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// FINAL — CRON ONLY + TELEGRAM STATS + GOAL FALLBACK
+// LOW CPU / ANTI DUPLICATE VERSION
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -18,116 +18,50 @@ const FINAL_BUFFER_MINUTES = 20;
 
 export default {
 
+  // ----------------------------------------------------------
+  // BROWSER / MANUAL STATUS
+  //
+  // IMPORTANT:
+  // fetch() НЕ стартира tracker-а.
+  // Това предотвратява двойни изпълнения при refresh.
+  // ----------------------------------------------------------
+
   async fetch(request, env) {
 
     if (request.method === "OPTIONS") {
+
       return new Response(null, {
         status: 204,
         headers: corsHeaders()
       });
-    }
-
-    // ========================================================
-    // TELEGRAM WEBHOOK — /stats
-    // ========================================================
-
-    if (request.method === "POST") {
-
-      try {
-
-        const update = await request.json();
-
-        const message = update?.message;
-
-        const text =
-          String(message?.text || "").trim();
-
-        if (
-          text === "/stats" ||
-          text.startsWith("/stats@")
-        ) {
-
-          await sendTelegram(
-            env,
-            await buildTodayStats(env)
-          );
-
-          return json({
-            success: true,
-            action: "STATS"
-          });
-
-        }
-
-        return json({
-          success: true,
-          action: "IGNORED"
-        });
-
-      } catch (error) {
-
-        console.error(
-          "TELEGRAM WEBHOOK ERROR",
-          error
-        );
-
-        return json({
-          success: false,
-          error:
-            error?.message ||
-            String(error)
-        }, 500);
-
-      }
 
     }
-
-    // ========================================================
-    // HTTP STATUS ONLY
-    // ========================================================
-
-    const local =
-      getSofiaTime(new Date());
 
     return json({
-
       success: true,
-
-      worker:
-        "GOAL WATCH — HUNTER TRACKER",
-
-      status:
-        "ONLINE",
-
-      mode:
-        "CRON ONLY + TELEGRAM",
-
-      message:
-        "Tracker runs from Cron. Telegram commands enabled.",
-
-      time:
-        local.text
-
+      worker: "GOAL WATCH — HUNTER TRACKER",
+      status: "ONLINE",
+      mode: "CRON ONLY",
+      message: "Tracker runs only from Cron.",
+      time: getSofiaTime(new Date()).text
     });
 
   },
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // CRON
-  // ==========================================================
+  // ----------------------------------------------------------
 
   async scheduled(event, env, ctx) {
 
     ctx.waitUntil(
       processTracker(env)
         .catch(error => {
-
           console.error(
-            "TRACKER CRON ERROR",
-            error
+            "TRACKER ERROR",
+            error?.message || String(error)
           );
-
         })
     );
 
@@ -142,15 +76,12 @@ export default {
 
 async function processTracker(env) {
 
-  const now =
-    new Date();
-
-  const local =
-    getSofiaTime(now);
+  const now = new Date();
+  const local = getSofiaTime(now);
 
 
   // ==========================================================
-  // CONFIG
+  // CONFIG CHECK
   // ==========================================================
 
   if (!env.V27)
@@ -175,13 +106,9 @@ async function processTracker(env) {
     local.minute === 0
   ) {
 
-    await sendDailyReport(
-      env,
-      local
-    );
+    await sendDailyReport(env, local);
 
     return;
-
   }
 
 
@@ -195,69 +122,44 @@ async function processTracker(env) {
   ) {
 
     return;
-
   }
 
 
   // ==========================================================
-  // FETCH V27
+  // GET V27
   // ==========================================================
 
-  const v27Request =
+  const response = await env.V27.fetch(
     new Request(
       "https://v27.internal/",
       {
         method: "GET",
         headers: {
-          "Accept":
-            "application/json"
+          "Accept": "application/json"
         }
       }
-    );
-
-
-  const response =
-    await env.V27.fetch(
-      v27Request
-    );
-
-
-  const responseText =
-    await response.text();
+    )
+  );
 
 
   if (!response.ok) {
 
+    const text = await response.text();
+
     throw new Error(
-      "V27 SERVICE HTTP " +
+      "V27 HTTP " +
       response.status +
       " | " +
-      responseText.substring(0, 500)
+      text.substring(0, 300)
     );
 
   }
 
 
-  let data;
-
-  try {
-
-    data =
-      JSON.parse(responseText);
-
-  } catch {
-
-    throw new Error(
-      "V27 JSON ERROR | " +
-      responseText.substring(0, 500)
-    );
-
-  }
+  const data = await response.json();
 
 
-  if (
-    data?.success !== true
-  ) {
+  if (data?.success !== true) {
 
     throw new Error(
       "V27 returned success=false"
@@ -273,75 +175,34 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD ALL ACTIVE TRACKING SIGNALS ONCE
+  // LOAD TRACKING SIGNALS ONCE
   // ==========================================================
 
-  const trackingResult =
+  const result =
     await env.DB
-      .prepare(
-        `
+      .prepare(`
         SELECT *
         FROM hunter_signals
         WHERE status = 'TRACKING'
-        `
-      )
+      `)
       .all();
 
 
-  const trackingSignals =
-    trackingResult?.results || [];
+  const signals =
+    result?.results || [];
 
-
-  // ==========================================================
-  // TRACKING MAP BY ID
-  // ==========================================================
 
   const trackingMap =
     new Map();
 
 
-  // ==========================================================
-  // TRACKING MAP BY NORMALIZED MATCH NAME
-  // ==========================================================
-
-  const trackingNameMap =
-    new Map();
-
-
-  for (
-    const signal of trackingSignals
-  ) {
+  for (const signal of signals) {
 
     const id =
-      String(
-        signal?.match_id || ""
-      ).trim();
+      String(signal?.match_id || "");
 
-
-    if (id) {
-
-      trackingMap.set(
-        id,
-        signal
-      );
-
-    }
-
-
-    const name =
-      normalizeMatchName(
-        signal?.match_name
-      );
-
-
-    if (name) {
-
-      trackingNameMap.set(
-        name,
-        signal
-      );
-
-    }
+    if (id)
+      trackingMap.set(id, signal);
 
   }
 
@@ -350,106 +211,42 @@ async function processTracker(env) {
   // CURRENT MATCH IDS
   // ==========================================================
 
-  const currentMatchIds =
+  const currentIds =
     new Set();
 
-
-  for (
-    const match of matches
-  ) {
+  for (const match of matches) {
 
     const id =
-      String(
-        match?.id || ""
-      ).trim();
+      String(match?.id || "");
 
-
-    if (id) {
-
-      currentMatchIds.add(id);
-
-    }
+    if (id)
+      currentIds.add(id);
 
   }
 
 
   // ==========================================================
-  // COUNTERS
+  // PROCESS LIVE MATCHES
   // ==========================================================
 
-  let entries = 0;
-  let goals = 0;
-  let noGoals = 0;
-  let candidates = 0;
-  let duplicates = 0;
-
-  let matchErrors = 0;
-
-  let missingChecked = 0;
-  let missingFinalized = 0;
-
-  const errorDetails = [];
-
-
-  // ==========================================================
-  // PROCESS MATCHES
-  // ==========================================================
-
-  for (
-    const match of matches
-  ) {
+  for (const match of matches) {
 
     try {
 
-      const result =
-        await processMatch(
-          env,
-          match,
-          now,
-          local,
-          trackingMap,
-          trackingNameMap
-        );
-
-
-      if (result === "ENTRY")
-        entries++;
-
-      if (result === "GOAL")
-        goals++;
-
-      if (result === "NO_GOAL")
-        noGoals++;
-
-      if (result === "CANDIDATE")
-        candidates++;
-
-      if (result === "DUPLICATE")
-        duplicates++;
+      await processMatch(
+        env,
+        match,
+        now,
+        local,
+        trackingMap
+      );
 
     } catch (error) {
-
-      matchErrors++;
-
-      errorDetails.push({
-
-        id:
-          match?.id || null,
-
-        match:
-          match?.match || null,
-
-        error:
-          error?.message ||
-          String(error)
-
-      });
 
       console.error(
         "MATCH ERROR",
         match?.id,
-        match?.match,
-        error
+        error?.message || String(error)
       );
 
     }
@@ -458,136 +255,42 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // FINALIZE MATCHES MISSING FROM V27
+  // MISSING TRACKING
+  //
+  // Only check signals that disappeared from V27.
   // ==========================================================
 
-  for (
-    const signal of trackingSignals
-  ) {
+  for (const signal of signals) {
 
-    const matchId =
-      String(
-        signal?.match_id || ""
-      ).trim();
+    const id =
+      String(signal?.match_id || "");
 
-
-    if (!matchId)
+    if (!id)
       continue;
 
-
-    if (
-      currentMatchIds.has(
-        matchId
-      )
-    ) {
-
+    if (currentIds.has(id))
       continue;
-
-    }
-
-
-    missingChecked++;
 
 
     try {
 
-      const finalized =
-        await finalizeMissingTracking(
-          env,
-          signal,
-          now
-        );
-
-
-      if (finalized) {
-
-        missingFinalized++;
-
-        noGoals++;
-
-      }
+      await finalizeMissingTracking(
+        env,
+        signal,
+        now
+      );
 
     } catch (error) {
 
-      matchErrors++;
-
-      errorDetails.push({
-
-        id:
-          matchId,
-
-        match:
-          signal?.match_name || null,
-
-        error:
-          error?.message ||
-          String(error)
-
-      });
-
       console.error(
-        "MISSING TRACKING ERROR",
-        matchId,
-        error
+        "FINALIZE ERROR",
+        id,
+        error?.message || String(error)
       );
 
     }
 
   }
-
-
-  // ==========================================================
-  // CRON LOG
-  // ==========================================================
-
-  console.log(
-    JSON.stringify({
-
-      success: true,
-
-      action:
-        "TRACKING",
-
-      local_time:
-        local.text,
-
-      source:
-        "V27 SERVICE BINDING",
-
-      source_status:
-        response.status,
-
-      source_matches:
-        matches.length,
-
-      active_tracking:
-        trackingMap.size,
-
-      entries,
-
-      goals,
-
-      no_goals:
-        noGoals,
-
-      candidates,
-
-      duplicates,
-
-      missing_tracking_checked:
-        missingChecked,
-
-      missing_finalized:
-        missingFinalized,
-
-      match_errors:
-        matchErrors,
-
-      error_details:
-        errorDetails.slice(0, 10)
-
-    })
-  );
 
 }
 
@@ -601,127 +304,72 @@ async function processMatch(
   m,
   now,
   local,
-  trackingMap,
-  trackingNameMap
+  trackingMap
 ) {
 
   const id =
-    String(
-      m?.id || ""
-    ).trim();
-
+    String(m?.id || "");
 
   if (!id)
-    return null;
+    return;
 
 
   const home =
-    Number(
-      m?.score?.home ?? 0
-    );
-
+    Number(m?.score?.home ?? 0);
 
   const away =
-    Number(
-      m?.score?.away ?? 0
-    );
-
+    Number(m?.score?.away ?? 0);
 
   const minute =
-    getMatchMinute(m);
-
-
-  // ==========================================================
-  // FIND EXISTING TRACKING
-  //
-  // 1. FIRST BY ID
-  // 2. FALLBACK BY MATCH NAME
-  // ==========================================================
-
-  let existing =
-    trackingMap.get(id);
-
-
-  if (!existing) {
-
-    const name =
-      normalizeMatchName(
-        m?.match
-      );
-
-
-    if (name) {
-
-      existing =
-        trackingNameMap.get(name);
-
-    }
-
-  }
+    Number(m?.minute ?? 0);
 
 
   // ==========================================================
   // EXISTING TRACKING
   // ==========================================================
 
+  const existing =
+    trackingMap.get(id);
+
+
   if (existing) {
 
     const entryHome =
-      Number(
-        existing.entry_home_score || 0
-      );
-
+      Number(existing.entry_home_score || 0);
 
     const entryAway =
-      Number(
-        existing.entry_away_score || 0
-      );
+      Number(existing.entry_away_score || 0);
 
 
     // ========================================================
-    // GOAL DETECTED
+    // GOAL
     // ========================================================
 
-    const goalDetected =
+    if (
       home > entryHome ||
-      away > entryAway;
-
-
-    if (goalDetected) {
+      away > entryAway
+    ) {
 
       const goalMinute =
-        getGoalMinute(
-          m,
-          existing,
-          now
-        );
-
+        minute > 0
+          ? minute
+          : null;
 
       const entryMinute =
-        Number(
-          existing.entry_minute || 0
-        );
-
+        Number(existing.entry_minute || 0);
 
       const afterMinutes =
-        goalMinute !== null &&
-        entryMinute > 0
+        goalMinute !== null
           ? Math.max(
               0,
-              goalMinute -
-              entryMinute
+              goalMinute - entryMinute
             )
           : null;
 
 
-      // ======================================================
-      // ATOMIC FINALIZATION
-      // ======================================================
-
       const update =
         await env.DB
-          .prepare(
-            `
+          .prepare(`
             UPDATE hunter_signals
 
             SET
@@ -733,8 +381,7 @@ async function processMatch(
 
             WHERE id = ?
               AND status = 'TRACKING'
-            `
-          )
+          `)
           .bind(
             goalMinute,
             afterMinutes,
@@ -750,28 +397,15 @@ async function processMatch(
         );
 
 
-      if (changes < 1) {
+      // IMPORTANT:
+      // Telegram is sent ONLY if DB update succeeded.
+      // This prevents duplicate notifications.
 
-        trackingMap.delete(id);
-
-        trackingNameMap.delete(
-          normalizeMatchName(
-            existing.match_name
-          )
-        );
-
-        return "DUPLICATE";
-
-      }
+      if (changes < 1)
+        return;
 
 
       trackingMap.delete(id);
-
-      trackingNameMap.delete(
-        normalizeMatchName(
-          existing.match_name
-        )
-      );
 
 
       await sendTelegram(
@@ -785,8 +419,7 @@ async function processMatch(
       );
 
 
-      return "GOAL";
-
+      return;
     }
 
 
@@ -800,8 +433,7 @@ async function processMatch(
 
       const update =
         await env.DB
-          .prepare(
-            `
+          .prepare(`
             UPDATE hunter_signals
 
             SET
@@ -811,8 +443,7 @@ async function processMatch(
 
             WHERE id = ?
               AND status = 'TRACKING'
-            `
-          )
+          `)
           .bind(
             now.toISOString(),
             existing.id
@@ -826,28 +457,11 @@ async function processMatch(
         );
 
 
-      if (changes < 1) {
-
-        trackingMap.delete(id);
-
-        trackingNameMap.delete(
-          normalizeMatchName(
-            existing.match_name
-          )
-        );
-
-        return "DUPLICATE";
-
-      }
+      if (changes < 1)
+        return;
 
 
       trackingMap.delete(id);
-
-      trackingNameMap.delete(
-        normalizeMatchName(
-          existing.match_name
-        )
-      );
 
 
       await sendTelegram(
@@ -859,18 +473,16 @@ async function processMatch(
       );
 
 
-      return "NO_GOAL";
-
+      return;
     }
 
 
-    return null;
-
+    return;
   }
 
 
   // ==========================================================
-  // NEW HUNTER CANDIDATE
+  // NEW HUNTER ENTRY
   // ==========================================================
 
   const hunterScore =
@@ -884,8 +496,7 @@ async function processMatch(
     )
   ) {
 
-    return null;
-
+    return;
   }
 
 
@@ -924,17 +535,15 @@ async function processMatch(
 
 
   // ==========================================================
-  // SAVE ENTRY
+  // DUPLICATE PROTECTION
+  //
+  // No extra SELECT.
+  // trackingMap already contains active signals.
   // ==========================================================
 
-  let savedSignal = null;
-
-
-  try {
-
+  const insert =
     await env.DB
-      .prepare(
-        `
+      .prepare(`
         INSERT INTO hunter_signals (
 
           match_id,
@@ -976,8 +585,7 @@ async function processMatch(
           ?, ?
 
         )
-        `
-      )
+      `)
       .bind(
 
         id,
@@ -1002,71 +610,31 @@ async function processMatch(
       .run();
 
 
-    // --------------------------------------------------------
-    // LOAD REAL DB ROW
-    // --------------------------------------------------------
+  // ==========================================================
+  // INSERT SUCCESS
+  // ==========================================================
 
-    savedSignal =
-      await env.DB
-        .prepare(
-          `
-          SELECT *
-          FROM hunter_signals
-          WHERE match_id = ?
-            AND status = 'TRACKING'
-          ORDER BY id DESC
-          LIMIT 1
-          `
-        )
-        .bind(id)
-        .first();
-
-  } catch (error) {
-
-    const existingAfterError =
-      await env.DB
-        .prepare(
-          `
-          SELECT *
-          FROM hunter_signals
-          WHERE match_id = ?
-            AND status = 'TRACKING'
-          ORDER BY id DESC
-          LIMIT 1
-          `
-        )
-        .bind(id)
-        .first();
+  const changes =
+    Number(
+      insert?.meta?.changes || 0
+    );
 
 
-    if (existingAfterError) {
-
-      trackingMap.set(
-        id,
-        existingAfterError
-      );
-
-      trackingNameMap.set(
-        normalizeMatchName(
-          existingAfterError.match_name
-        ),
-        existingAfterError
-      );
-
-      return "DUPLICATE";
-
-    }
+  if (changes < 1)
+    return;
 
 
-    throw error;
+  // ==========================================================
+  // ADD TO MEMORY MAP
+  // ==========================================================
 
-  }
+  trackingMap.set(
+    id,
+    {
 
-
-  const newSignal =
-    savedSignal || {
-
-      id: null,
+      id:
+        insert?.meta?.last_row_id ||
+        null,
 
       match_id:
         id,
@@ -1091,20 +659,7 @@ async function processMatch(
       entry_away_score:
         away
 
-    };
-
-
-  trackingMap.set(
-    id,
-    newSignal
-  );
-
-
-  trackingNameMap.set(
-    normalizeMatchName(
-      matchName
-    ),
-    newSignal
+    }
   );
 
 
@@ -1120,248 +675,6 @@ async function processMatch(
       local
     )
   );
-
-
-  return "ENTRY";
-
-}
-
-
-// ============================================================
-// NORMALIZE MATCH NAME
-// ============================================================
-
-function normalizeMatchName(
-  name
-) {
-
-  return String(
-    name || ""
-  )
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(
-      /[\u0300-\u036f]/g,
-      ""
-    )
-    .replace(
-      /[^a-z0-9]+/g,
-      " "
-    )
-    .trim()
-    .replace(
-      /\s+/g,
-      " "
-    );
-
-}
-
-
-// ============================================================
-// GOAL MINUTE FALLBACK
-// ============================================================
-
-function getGoalMinute(
-  m,
-  existing,
-  now
-) {
-
-  // ----------------------------------------------------------
-  // 1. DIRECT MINUTE
-  // ----------------------------------------------------------
-
-  const directMinute =
-    numberOrNull(
-      m?.minute
-    );
-
-
-  if (
-    directMinute !== null &&
-    directMinute > 0 &&
-    directMinute <= 130
-  ) {
-
-    return Math.floor(
-      directMinute
-    );
-
-  }
-
-
-  // ----------------------------------------------------------
-  // 2. MINUTE DISPLAY
-  // ----------------------------------------------------------
-
-  const display =
-    String(
-      m?.minute_display || ""
-    ).trim();
-
-
-  const displayMatch =
-    display.match(
-      /^(\d{1,3})(?:\+(\d{1,2}))?['′]?/
-    );
-
-
-  if (displayMatch) {
-
-    const base =
-      Number(
-        displayMatch[1]
-      );
-
-
-    const added =
-      Number(
-        displayMatch[2] || 0
-      );
-
-
-    if (
-      base >= 1 &&
-      base <= 130
-    ) {
-
-      return base + added;
-
-    }
-
-  }
-
-
-  // ----------------------------------------------------------
-  // 3. FALLBACK FROM ENTRY TIME
-  // ----------------------------------------------------------
-
-  const entryMinute =
-    Number(
-      existing?.entry_minute || 0
-    );
-
-
-  if (
-    entryMinute >= 1 &&
-    entryMinute <= 42
-  ) {
-
-    const entryTime =
-      new Date(
-        existing?.entry_time ||
-        existing?.created_at ||
-        ""
-      );
-
-
-    if (
-      !Number.isNaN(
-        entryTime.getTime()
-      )
-    ) {
-
-      const elapsed =
-        Math.floor(
-          (
-            now.getTime() -
-            entryTime.getTime()
-          ) /
-          60000
-        );
-
-
-      const estimated =
-        entryMinute +
-        Math.max(
-          0,
-          elapsed
-        );
-
-
-      if (
-        estimated >= entryMinute &&
-        estimated <= 45
-      ) {
-
-        return estimated;
-
-      }
-
-    }
-
-  }
-
-
-  return null;
-
-}
-
-
-// ============================================================
-// MATCH MINUTE
-// ============================================================
-
-function getMatchMinute(m) {
-
-  const direct =
-    numberOrNull(
-      m?.minute
-    );
-
-
-  if (
-    direct !== null &&
-    direct >= 0 &&
-    direct <= 130
-  ) {
-
-    return Math.floor(
-      direct
-    );
-
-  }
-
-
-  const display =
-    String(
-      m?.minute_display || ""
-    ).trim();
-
-
-  const match =
-    display.match(
-      /^(\d{1,3})(?:\+(\d{1,2}))?['′]?/
-    );
-
-
-  if (match) {
-
-    const base =
-      Number(
-        match[1]
-      );
-
-
-    const added =
-      Number(
-        match[2] || 0
-      );
-
-
-    if (
-      base >= 0 &&
-      base <= 130
-    ) {
-
-      return base + added;
-
-    }
-
-  }
-
-
-  return 0;
 
 }
 
@@ -1415,8 +728,7 @@ async function finalizeMissingTracking(
     )
   ) {
 
-    return false;
-
+    return;
   }
 
 
@@ -1424,8 +736,7 @@ async function finalizeMissingTracking(
     (
       now.getTime() -
       entryTime.getTime()
-    ) /
-    60000;
+    ) / 60000;
 
 
   if (
@@ -1433,15 +744,17 @@ async function finalizeMissingTracking(
     requiredMinutes
   ) {
 
-    return false;
-
+    return;
   }
 
 
+  // ==========================================================
+  // FINALIZE ONLY IF STILL TRACKING
+  // ==========================================================
+
   const update =
     await env.DB
-      .prepare(
-        `
+      .prepare(`
         UPDATE hunter_signals
 
         SET
@@ -1451,8 +764,7 @@ async function finalizeMissingTracking(
 
         WHERE id = ?
           AND status = 'TRACKING'
-        `
-      )
+      `)
       .bind(
         now.toISOString(),
         signal.id
@@ -1466,12 +778,13 @@ async function finalizeMissingTracking(
     );
 
 
-  if (changes < 1) {
+  if (changes < 1)
+    return;
 
-    return false;
 
-  }
-
+  // ==========================================================
+  // TELEGRAM
+  // ==========================================================
 
   await sendTelegram(
     env,
@@ -1493,9 +806,6 @@ async function finalizeMissingTracking(
     )
   );
 
-
-  return true;
-
 }
 
 
@@ -1509,7 +819,7 @@ function isHunterCandidate(
 ) {
 
   const minute =
-    getMatchMinute(m);
+    Number(m?.minute ?? 0);
 
 
   const period =
@@ -1519,15 +829,11 @@ function isHunterCandidate(
 
 
   const home =
-    Number(
-      m?.score?.home ?? 0
-    );
+    Number(m?.score?.home ?? 0);
 
 
   const away =
-    Number(
-      m?.score?.away ?? 0
-    );
+    Number(m?.score?.away ?? 0);
 
 
   const firstHalf =
@@ -1579,24 +885,19 @@ function getHunterScore(m) {
     );
 
 
-  if (
-    score !== null
-  ) {
+  if (score === null)
+    return 0;
 
-    return Math.round(
-      Math.max(
-        0,
-        Math.min(
-          100,
-          score
-        )
+
+  return Math.round(
+    Math.max(
+      0,
+      Math.min(
+        100,
+        score
       )
-    );
-
-  }
-
-
-  return 0;
+    )
+  );
 
 }
 
@@ -1622,135 +923,6 @@ function isFirstHalfFinished(m) {
 
 
 // ============================================================
-// TODAY STATS
-// ============================================================
-
-async function buildTodayStats(env) {
-
-  const local =
-    getSofiaTime(
-      new Date()
-    );
-
-
-  const stats =
-    await env.DB
-      .prepare(
-        `
-        SELECT
-
-          COUNT(*) AS total,
-
-          SUM(
-            CASE
-              WHEN result = 'GOAL HIT'
-              THEN 1
-              ELSE 0
-            END
-          ) AS goals,
-
-          SUM(
-            CASE
-              WHEN result = 'NO GOAL'
-              THEN 1
-              ELSE 0
-            END
-          ) AS no_goals,
-
-          AVG(
-            CASE
-              WHEN result = 'GOAL HIT'
-              AND goal_after_minutes IS NOT NULL
-              THEN goal_after_minutes
-            END
-          ) AS avg_goal_after
-
-        FROM hunter_signals
-
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
-
-        `
-      )
-      .bind(
-        local.date
-      )
-      .first();
-
-
-  const total =
-    Number(
-      stats?.total || 0
-    );
-
-
-  const goals =
-    Number(
-      stats?.goals || 0
-    );
-
-
-  const noGoals =
-    Number(
-      stats?.no_goals || 0
-    );
-
-
-  const resolved =
-    goals +
-    noGoals;
-
-
-  const rate =
-    resolved > 0
-      ? (
-          goals /
-          resolved *
-          100
-        )
-      : 0;
-
-
-  const avg =
-    stats?.avg_goal_after !== null &&
-    stats?.avg_goal_after !== undefined
-      ? Number(
-          stats.avg_goal_after
-        )
-      : null;
-
-
-  return `📊 HUNTER STATISTICS — ДНЕС
-
-📅 ${local.date}
-
-🎯 ENTRY: ${total}
-
-🟢 GOAL HIT: ${goals}
-
-🔴 NO GOAL: ${noGoals}
-
-📈 Успеваемост:
-${rate.toFixed(1)}%
-
-⏱ Средно до гол:
-${
-  avg !== null
-    ? avg.toFixed(1) + " мин."
-    : "—"
-}
-
-━━━━━━━━━━━━━━━━
-NEXT GOAL HUNTER
-━━━━━━━━━━━━━━━━`;
-
-}
-
-
-// ============================================================
 // DAILY REPORT
 // ============================================================
 
@@ -1767,17 +939,13 @@ async function sendDailyReport(
 
   const already =
     await env.DB
-      .prepare(
-        `
+      .prepare(`
         SELECT id
         FROM daily_reports
         WHERE report_date = ?
         LIMIT 1
-        `
-      )
-      .bind(
-        reportDate
-      )
+      `)
+      .bind(reportDate)
       .first();
 
 
@@ -1787,8 +955,7 @@ async function sendDailyReport(
 
   const stats =
     await env.DB
-      .prepare(
-        `
+      .prepare(`
         SELECT
 
           COUNT(*) AS total,
@@ -1816,12 +983,8 @@ async function sendDailyReport(
           1,
           10
         ) = ?
-
-        `
-      )
-      .bind(
-        reportDate
-      )
+      `)
+      .bind(reportDate)
       .first();
 
 
@@ -1859,7 +1022,6 @@ async function sendDailyReport(
 
 
   const message =
-
 `📊 DAILY HUNTER REPORT
 
 📅 ${reportDate}
@@ -1885,8 +1047,7 @@ NEXT GOAL HUNTER
 
 
   await env.DB
-    .prepare(
-      `
+    .prepare(`
       INSERT INTO daily_reports (
 
         report_date,
@@ -1899,8 +1060,7 @@ NEXT GOAL HUNTER
       )
 
       VALUES (?, ?, ?, ?, ?, ?)
-      `
-    )
+    `)
     .bind(
 
       reportDate,
@@ -1933,75 +1093,57 @@ async function sendTelegram(
     env.TELEGRAM_CHAT_ID;
 
 
-  const url =
-    `https://api.telegram.org/bot${token}/sendMessage`;
-
-
   const text =
     String(
       message || ""
     );
 
 
-  const MAX_LENGTH = 4000;
+  if (!text)
+    return;
 
 
-  for (
-    let i = 0;
-    i < text.length;
-    i += MAX_LENGTH
-  ) {
+  const response =
+    await fetch(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      {
 
-    const part =
-      text.substring(
-        i,
-        i + MAX_LENGTH
-      );
+        method: "POST",
 
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
 
-    const response =
-      await fetch(
-        url,
-        {
+        body:
+          JSON.stringify({
 
-          method:
-            "POST",
+            chat_id:
+              chatId,
 
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
+            text
 
-          body:
-            JSON.stringify({
+          })
 
-              chat_id:
-                chatId,
-
-              text:
-                part
-
-            })
-
-          }
+        }
 
       );
 
 
-    if (!response.ok) {
+  if (!response.ok) {
 
-      const errorText =
-        await response.text();
+    const errorText =
+      await response.text();
 
-
-      throw new Error(
-        "Telegram HTTP " +
-        response.status +
-        " | " +
-        errorText
-      );
-
-    }
+    throw new Error(
+      "Telegram HTTP " +
+      response.status +
+      " | " +
+      errorText.substring(
+        0,
+        500
+      )
+    );
 
   }
 
@@ -2201,21 +1343,15 @@ function getSofiaTime(date) {
 
 
   const hour =
-    Number(
-      get("hour")
-    );
+    Number(get("hour"));
 
 
   const minute =
-    Number(
-      get("minute")
-    );
+    Number(get("minute"));
 
 
   const second =
-    Number(
-      get("second")
-    );
+    Number(get("second"));
 
 
   return {
@@ -2329,7 +1465,7 @@ function corsHeaders() {
       "*",
 
     "Access-Control-Allow-Methods":
-      "GET,HEAD,POST,OPTIONS",
+      "GET,HEAD,OPTIONS",
 
     "Access-Control-Allow-Headers":
       "Content-Type"
