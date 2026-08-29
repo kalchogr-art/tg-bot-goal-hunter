@@ -4,7 +4,7 @@ export default {
     const url = new URL(request.url);
 
     // ========================================================
-    // TEMP FLASHscore DIAGNOSTIC
+    // TEMP FLASHscore DIAGNOSTIC v1
     // ========================================================
 
     if (url.pathname === "/debug-flashscore") {
