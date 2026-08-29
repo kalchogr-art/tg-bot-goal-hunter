@@ -18,7 +18,51 @@ const TIME_ZONE = "Europe/Sofia";
 export default {
 
   async fetch(request, env) {
+const url = new URL(request.url);
 
+if (url.pathname === "/debug-proxy-binding") {
+  try {
+    const response = await env.V27.fetch(
+      "https://v27.internal/"
+    );
+
+    const text = await response.text();
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        binding: "V27",
+        status: response.status,
+        response: text
+      }, null, 2),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store"
+        }
+      }
+    );
+
+  } catch (error) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        binding: "V27",
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      }, null, 2),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8"
+        }
+      }
+    );
+  }
+}
     // ========================================================
     // OPTIONS
     // ========================================================
