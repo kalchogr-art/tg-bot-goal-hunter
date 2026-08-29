@@ -1,6 +1,8 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
 // OPTIMIZED + CRON ONLY + DUPLICATE PROTECTION
+// + GOAL MINUTE FALLBACK
+// + TELEGRAM /stats
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -9,8 +11,6 @@ const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
 
-// След колко време липсващ TRACKING сигнал
-// може консервативно да бъде финализиран като NO GOAL.
 const FINAL_BUFFER_MINUTES = 20;
 
 
@@ -19,14 +19,6 @@ const FINAL_BUFFER_MINUTES = 20;
 // ============================================================
 
 export default {
-
-  // ----------------------------------------------------------
-  // HTTP
-  //
-  // ВАЖНО:
-  // HTTP НЕ стартира Tracker.
-  // Това предотвратява стартиране при отваряне/refresh на URL.
-  // ----------------------------------------------------------
 
   async fetch(request, env) {
 
@@ -38,6 +30,50 @@ export default {
       });
 
     }
+
+
+    // ========================================================
+    // TELEGRAM WEBHOOK
+    // ========================================================
+
+    if (request.method === "POST") {
+
+      try {
+
+        const update =
+          await request.json();
+
+        await handleTelegramUpdate(
+          env,
+          update
+        );
+
+        return json({
+          success: true
+        });
+
+      } catch (error) {
+
+        console.error(
+          "TELEGRAM WEBHOOK ERROR",
+          error
+        );
+
+        return json({
+          success: false,
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+
+      }
+
+    }
+
+
+    // ========================================================
+    // HTTP STATUS
+    // ========================================================
 
     const local =
       getSofiaTime(new Date());
@@ -53,10 +89,10 @@ export default {
         "ONLINE",
 
       mode:
-        "CRON ONLY",
+        "CRON ONLY + TELEGRAM",
 
       message:
-        "Tracker runs only from Cron.",
+        "Tracker runs from Cron. Telegram commands are handled by POST.",
 
       time:
         local.text
@@ -66,19 +102,21 @@ export default {
   },
 
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // CRON
-  // ----------------------------------------------------------
+  // ==========================================================
 
   async scheduled(event, env, ctx) {
 
     ctx.waitUntil(
       processTracker(env)
         .catch(error => {
+
           console.error(
             "TRACKER CRON ERROR",
             error
           );
+
         })
     );
 
@@ -160,7 +198,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // TRACKING WINDOW
-  // 12:00 - 23:59
   // ==========================================================
 
   if (
@@ -458,9 +495,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // FINALIZE MISSING TRACKING
-  //
-  // Това обработва мачове, които вече са изчезнали
-  // от V27.
   // ==========================================================
 
   for (
@@ -477,7 +511,6 @@ async function processTracker(env) {
       continue;
 
 
-    // Все още присъства във V27.
     if (
       currentMatchIds.has(
         matchId
@@ -545,10 +578,6 @@ async function processTracker(env) {
 
   }
 
-
-  // ==========================================================
-  // RESULT
-  // ==========================================================
 
   return {
 
@@ -675,16 +704,109 @@ async function processMatch(
       away > entryAway
     ) {
 
-      const goalMinute =
+      // ======================================================
+      // GOAL MINUTE + FALLBACK
+      //
+      // 1. m.minute
+      // 2. m.minute_display
+      // 3. ENTRY TIME + elapsed minutes
+      //
+      // Нормалната логика не се променя.
+      // ======================================================
+
+      let goalMinute =
         minute > 0
           ? minute
           : null;
+
+
+      // ------------------------------------------------------
+      // FALLBACK 1 — minute_display
+      // ------------------------------------------------------
+
+      if (goalMinute === null) {
+
+        const displayMinute =
+          String(
+            m?.minute_display || ""
+          )
+            .replace(
+              /[^0-9]/g,
+              ""
+            );
+
+
+        const parsedDisplayMinute =
+          Number(
+            displayMinute
+          );
+
+
+        if (
+          Number.isFinite(
+            parsedDisplayMinute
+          ) &&
+          parsedDisplayMinute > 0
+        ) {
+
+          goalMinute =
+            parsedDisplayMinute;
+
+        }
+
+      }
 
 
       const entryMinute =
         Number(
           existing.entry_minute || 0
         );
+
+
+      // ------------------------------------------------------
+      // FALLBACK 2 — ENTRY TIME
+      // ------------------------------------------------------
+
+      if (goalMinute === null) {
+
+        const entryTime =
+          new Date(
+            existing.entry_time ||
+            existing.created_at ||
+            ""
+          );
+
+
+        if (
+          entryMinute > 0 &&
+          !Number.isNaN(
+            entryTime.getTime()
+          )
+        ) {
+
+          const elapsedMinutes =
+            Math.floor(
+              (
+                now.getTime() -
+                entryTime.getTime()
+              ) /
+              60000
+            );
+
+
+          goalMinute =
+            Math.min(
+              90,
+              Math.max(
+                entryMinute,
+                entryMinute +
+                elapsedMinutes
+              )
+            );
+
+        }
+
+      }
 
 
       const afterMinutes =
@@ -697,12 +819,9 @@ async function processMatch(
           : null;
 
 
-      // ------------------------------------------------------
+      // ======================================================
       // ATOMIC FINALIZATION
-      //
-      // Само един процес може да промени TRACKING -> GOAL.
-      // Ако changes = 0, друг процес вече го е обработил.
-      // ------------------------------------------------------
+      // ======================================================
 
       const update =
         await env.DB
@@ -736,7 +855,6 @@ async function processMatch(
         );
 
 
-      // Друг процес вече е изпратил GOAL.
       if (changes < 1) {
 
         trackingMap.delete(id);
@@ -748,10 +866,6 @@ async function processMatch(
 
       trackingMap.delete(id);
 
-
-      // ------------------------------------------------------
-      // САМО ПЪРВИЯТ ПРОЦЕС СТИГА ДО TELEGRAM
-      // ------------------------------------------------------
 
       await sendTelegram(
         env,
@@ -776,10 +890,6 @@ async function processMatch(
     if (
       isFirstHalfFinished(m)
     ) {
-
-      // ------------------------------------------------------
-      // ATOMIC FINALIZATION
-      // ------------------------------------------------------
 
       const update =
         await env.DB
@@ -809,7 +919,6 @@ async function processMatch(
         );
 
 
-      // Вече е финализиран от друг процес.
       if (changes < 1) {
 
         trackingMap.delete(id);
@@ -972,13 +1081,6 @@ async function processMatch(
 
   } catch (error) {
 
-    // --------------------------------------------------------
-    // Ако два Cron процеса едновременно са видели
-    // един и същ кандидат, единият може да е записал ENTRY.
-    //
-    // Не изпращаме второ ENTRY.
-    // --------------------------------------------------------
-
     const existingAfterError =
       await env.DB
         .prepare(
@@ -1098,9 +1200,6 @@ async function finalizeMissingTracking(
     );
 
 
-  // 90 минути до края
-  // + 15 минути halftime
-  // + 20 минути buffer
   const requiredMinutes =
     Math.max(
       68,
@@ -1147,10 +1246,6 @@ async function finalizeMissingTracking(
   }
 
 
-  // ==========================================================
-  // ATOMIC NO GOAL
-  // ==========================================================
-
   const update =
     await env.DB
       .prepare(
@@ -1179,17 +1274,12 @@ async function finalizeMissingTracking(
     );
 
 
-  // Друг процес вече го е финализирал.
   if (changes < 1) {
 
     return false;
 
   }
 
-
-  // ==========================================================
-  // TELEGRAM
-  // ==========================================================
 
   await sendTelegram(
     env,
@@ -1218,125 +1308,382 @@ async function finalizeMissingTracking(
 
 
 // ============================================================
-// HUNTER FILTER
+// TELEGRAM COMMANDS
 // ============================================================
 
-function isHunterCandidate(
-  m,
-  score
+async function handleTelegramUpdate(
+  env,
+  update
 ) {
 
-  const minute =
-    Number(
-      m?.minute ?? 0
-    );
+  const message =
+    update?.message;
 
 
-  const period =
+  if (!message)
+    return;
+
+
+  const chatId =
     String(
-      m?.period || ""
-    ).toUpperCase();
-
-
-  const home =
-    Number(
-      m?.score?.home ?? 0
+      message?.chat?.id || ""
     );
 
 
-  const away =
-    Number(
-      m?.score?.away ?? 0
-    );
-
-
-  const firstHalf =
-    period === "1H" ||
-    period === "FIRST" ||
-    period === "FIRST HALF" ||
-    period === "1ST HALF" ||
-    period.includes("1H");
-
-
-  if (!firstHalf)
-    return false;
-
+  // ==========================================================
+  // SECURITY
+  // ==========================================================
 
   if (
-    home !== 0 ||
-    away !== 0
-  )
-    return false;
-
-
-  if (
-    minute < HUNTER_FROM ||
-    minute > HUNTER_TO
-  )
-    return false;
-
-
-  if (
-    score < HUNTER_MIN_SCORE
-  )
-    return false;
-
-
-  return true;
-
-}
-
-
-// ============================================================
-// HUNTER SCORE
-// ============================================================
-
-function getHunterScore(m) {
-
-  const score =
-    numberOrNull(
-      m?.goal_signal?.score
-    );
-
-
-  if (
-    score !== null
+    chatId !==
+    String(env.TELEGRAM_CHAT_ID)
   ) {
 
-    return Math.round(
-      Math.max(
-        0,
-        Math.min(
-          100,
-          score
-        )
-      )
-    );
+    return;
 
   }
 
 
-  return 0;
+  const text =
+    String(
+      message?.text || ""
+    )
+      .trim();
+
+
+  if (!text)
+    return;
+
+
+  const command =
+    text
+      .split(/\s+/)[0]
+      .toLowerCase()
+      .split("@")[0];
+
+
+  // ==========================================================
+  // START / HELP
+  // ==========================================================
+
+  if (
+    command === "/start" ||
+    command === "/help"
+  ) {
+
+    await sendTelegram(
+      env,
+      `🤖 GOAL WATCH
+
+Команди:
+
+/stats — статистика за днес
+
+━━━━━━━━━━━━━━━━
+NEXT GOAL HUNTER
+━━━━━━━━━━━━━━━━`
+    );
+
+    return;
+
+  }
+
+
+  // ==========================================================
+  // STATS
+  // ==========================================================
+
+  if (
+    command === "/stats"
+  ) {
+
+    await sendTodayStats(
+      env
+    );
+
+    return;
+
+  }
 
 }
 
 
 // ============================================================
-// FIRST HALF FINISHED
+// TODAY STATISTICS
 // ============================================================
 
-function isFirstHalfFinished(m) {
+async function sendTodayStats(
+  env
+) {
 
-  const period =
-    String(
-      m?.period || ""
-    ).toUpperCase();
+  const local =
+    getSofiaTime(
+      new Date()
+    );
 
 
-  return (
-    period === "2H" ||
-    period.includes("2H")
+  const range =
+    getSofiaDayUtcRange(
+      local.date
+    );
+
+
+  const stats =
+    await env.DB
+      .prepare(
+        `
+        SELECT
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+                   AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+              ELSE NULL
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+        `
+      )
+      .bind(
+        range.start,
+        range.end
+      )
+      .first();
+
+
+  const total =
+    Number(
+      stats?.total || 0
+    );
+
+
+  const goals =
+    Number(
+      stats?.goals || 0
+    );
+
+
+  const noGoals =
+    Number(
+      stats?.no_goals || 0
+    );
+
+
+  const resolved =
+    goals +
+    noGoals;
+
+
+  const rate =
+    resolved > 0
+      ? (
+          goals /
+          resolved *
+          100
+        )
+      : 0;
+
+
+  const avgGoalAfter =
+    stats?.avg_goal_after !== null &&
+    stats?.avg_goal_after !== undefined
+      ? Number(
+          stats.avg_goal_after
+        )
+      : null;
+
+
+  const avgText =
+    avgGoalAfter !== null &&
+    Number.isFinite(
+      avgGoalAfter
+    )
+      ? avgGoalAfter.toFixed(1) +
+        " мин."
+      : "—";
+
+
+  const message =
+`📊 HUNTER STATISTICS — ДНЕС
+
+📅 ${local.date}
+
+🎯 ENTRY: ${total}
+
+🟢 GOAL HIT: ${goals}
+
+🔴 NO GOAL: ${noGoals}
+
+📈 Успеваемост:
+${rate.toFixed(1)}%
+
+⏱ Средно до гол:
+${avgText}
+
+━━━━━━━━━━━━━━━━
+NEXT GOAL HUNTER
+━━━━━━━━━━━━━━━━`;
+
+
+  await sendTelegram(
+    env,
+    message
   );
+
+}
+
+
+// ============================================================
+// SOFIA DAY -> UTC RANGE
+// ============================================================
+
+function getSofiaDayUtcRange(
+  dateString
+) {
+
+  const start =
+    localSofiaMidnightToUtc(
+      dateString
+    );
+
+
+  const parts =
+    dateString
+      .split("-")
+      .map(Number);
+
+
+  const next =
+    new Date(
+      Date.UTC(
+        parts[0],
+        parts[1] - 1,
+        parts[2] + 1
+      )
+    );
+
+
+  const nextDate =
+    next.getUTCFullYear() +
+    "-" +
+    String(
+      next.getUTCMonth() + 1
+    ).padStart(2, "0") +
+    "-" +
+    String(
+      next.getUTCDate()
+    ).padStart(2, "0");
+
+
+  const end =
+    localSofiaMidnightToUtc(
+      nextDate
+    );
+
+
+  return {
+    start,
+    end
+  };
+
+}
+
+
+function localSofiaMidnightToUtc(
+  dateString
+) {
+
+  const guess =
+    new Date(
+      `${dateString}T00:00:00Z`
+    );
+
+
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-GB",
+      {
+        timeZone:
+          TIME_ZONE,
+
+        year:
+          "numeric",
+
+        month:
+          "2-digit",
+
+        day:
+          "2-digit",
+
+        hour:
+          "2-digit",
+
+        minute:
+          "2-digit",
+
+        second:
+          "2-digit",
+
+        hourCycle:
+          "h23"
+      }
+    )
+    .formatToParts(
+      guess
+    );
+
+
+  const get =
+    type =>
+      parts.find(
+        p =>
+          p.type === type
+      )?.value;
+
+
+  const localAsUtc =
+    Date.UTC(
+      Number(get("year")),
+      Number(get("month")) - 1,
+      Number(get("day")),
+      Number(get("hour")),
+      Number(get("minute")),
+      Number(get("second"))
+    );
+
+
+  const offsetMs =
+    localAsUtc -
+    guess.getTime();
+
+
+  return new Date(
+    guess.getTime() -
+    offsetMs
+  ).toISOString();
 
 }
 
@@ -1377,6 +1724,12 @@ async function sendDailyReport(
   }
 
 
+  const range =
+    getSofiaDayUtcRange(
+      reportDate
+    );
+
+
   const stats =
     await env.DB
       .prepare(
@@ -1403,15 +1756,14 @@ async function sendDailyReport(
 
         FROM hunter_signals
 
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
-
+        WHERE created_at >= ?
+          AND created_at < ?
         `
       )
-      .bind(reportDate)
+      .bind(
+        range.start,
+        range.end
+      )
       .first();
 
 
@@ -1502,98 +1854,6 @@ NEXT GOAL HUNTER
 
     )
     .run();
-
-}
-
-
-// ============================================================
-// TELEGRAM
-// ============================================================
-
-async function sendTelegram(
-  env,
-  message
-) {
-
-  const token =
-    env.TELEGRAM_BOT_TOKEN;
-
-
-  const chatId =
-    env.TELEGRAM_CHAT_ID;
-
-
-  const url =
-    `https://api.telegram.org/bot${token}/sendMessage`;
-
-
-  const text =
-    String(
-      message || ""
-    );
-
-
-  const MAX_LENGTH = 4000;
-
-
-  for (
-    let i = 0;
-    i < text.length;
-    i += MAX_LENGTH
-  ) {
-
-    const part =
-      text.substring(
-        i,
-        i + MAX_LENGTH
-      );
-
-
-    const response =
-      await fetch(
-        url,
-        {
-
-          method:
-            "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
-
-          body:
-            JSON.stringify({
-
-              chat_id:
-                chatId,
-
-              text:
-                part
-
-            })
-
-          }
-
-      );
-
-
-    if (!response.ok) {
-
-      const errorText =
-        await response.text();
-
-
-      throw new Error(
-        "Telegram HTTP " +
-        response.status +
-        " | " +
-        errorText
-      );
-
-    }
-
-  }
 
 }
 
@@ -1726,6 +1986,222 @@ ${existing.hunter_score}/100
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
 
 RESULT: NO GOAL`;
+
+}
+
+
+// ============================================================
+// TELEGRAM
+// ============================================================
+
+async function sendTelegram(
+  env,
+  message
+) {
+
+  const token =
+    env.TELEGRAM_BOT_TOKEN;
+
+
+  const chatId =
+    env.TELEGRAM_CHAT_ID;
+
+
+  const url =
+    `https://api.telegram.org/bot${token}/sendMessage`;
+
+
+  const text =
+    String(
+      message || ""
+    );
+
+
+  const MAX_LENGTH = 4000;
+
+
+  for (
+    let i = 0;
+    i < text.length;
+    i += MAX_LENGTH
+  ) {
+
+    const part =
+      text.substring(
+        i,
+        i + MAX_LENGTH
+      );
+
+
+    const response =
+      await fetch(
+        url,
+        {
+
+          method:
+            "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify({
+
+              chat_id:
+                chatId,
+
+              text:
+                part
+
+            })
+
+          }
+
+      );
+
+
+    if (!response.ok) {
+
+      const errorText =
+        await response.text();
+
+
+      throw new Error(
+        "Telegram HTTP " +
+        response.status +
+        " | " +
+        errorText
+      );
+
+    }
+
+  }
+
+}
+
+
+// ============================================================
+// HUNTER FILTER
+// ============================================================
+
+function isHunterCandidate(
+  m,
+  score
+) {
+
+  const minute =
+    Number(
+      m?.minute ?? 0
+    );
+
+
+  const period =
+    String(
+      m?.period || ""
+    ).toUpperCase();
+
+
+  const home =
+    Number(
+      m?.score?.home ?? 0
+    );
+
+
+  const away =
+    Number(
+      m?.score?.away ?? 0
+    );
+
+
+  const firstHalf =
+    period === "1H" ||
+    period === "FIRST" ||
+    period === "FIRST HALF" ||
+    period === "1ST HALF" ||
+    period.includes("1H");
+
+
+  if (!firstHalf)
+    return false;
+
+
+  if (
+    home !== 0 ||
+    away !== 0
+  )
+    return false;
+
+
+  if (
+    minute < HUNTER_FROM ||
+    minute > HUNTER_TO
+  )
+    return false;
+
+
+  if (
+    score < HUNTER_MIN_SCORE
+  )
+    return false;
+
+
+  return true;
+
+}
+
+
+// ============================================================
+// HUNTER SCORE
+// ============================================================
+
+function getHunterScore(m) {
+
+  const score =
+    numberOrNull(
+      m?.goal_signal?.score
+    );
+
+
+  if (
+    score !== null
+  ) {
+
+    return Math.round(
+      Math.max(
+        0,
+        Math.min(
+          100,
+          score
+        )
+      )
+    );
+
+  }
+
+
+  return 0;
+
+}
+
+
+// ============================================================
+// FIRST HALF FINISHED
+// ============================================================
+
+function isFirstHalfFinished(m) {
+
+  const period =
+    String(
+      m?.period || ""
+    ).toUpperCase();
+
+
+  return (
+    period === "2H" ||
+    period.includes("2H")
+  );
 
 }
 
@@ -1919,7 +2395,7 @@ function corsHeaders() {
       "*",
 
     "Access-Control-Allow-Methods":
-      "GET,HEAD,OPTIONS",
+      "GET,HEAD,POST,OPTIONS",
 
     "Access-Control-Allow-Headers":
       "Content-Type"
