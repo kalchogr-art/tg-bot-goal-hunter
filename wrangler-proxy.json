@@ -1,0 +1,8 @@
+{
+  "compatibility_date": "2026-08-29",
+  "main": "src/worker.ts",
+  "name": "goal-watch-proxy",
+  "observability": {
+    "enabled": true
+  }
+}
