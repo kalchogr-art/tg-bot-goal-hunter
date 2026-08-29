@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// LOW CPU / TELEGRAM STATS / FAST 1H NO GOAL
+// LOW CPU / TELEGRAM STATS / IMMEDIATE FINAL 0:0
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -16,10 +16,6 @@ const TIME_ZONE = "Europe/Sofia";
 
 export default {
 
-  // ----------------------------------------------------------
-  // HTTP STATUS + TELEGRAM WEBHOOK
-  // ----------------------------------------------------------
-
   async fetch(request, env) {
 
     if (request.method === "OPTIONS") {
@@ -33,7 +29,7 @@ export default {
 
 
     // ========================================================
-    // TELEGRAM COMMANDS
+    // TELEGRAM WEBHOOK
     // ========================================================
 
     if (request.method === "POST") {
@@ -51,10 +47,6 @@ export default {
             message?.text || ""
           ).trim();
 
-
-        // ----------------------------------------------------
-        // /stats
-        // ----------------------------------------------------
 
         if (
           text === "/stats" ||
@@ -83,7 +75,7 @@ export default {
 
         console.error(
           "TELEGRAM WEBHOOK ERROR",
-          error?.message || String(error)
+          error
         );
 
         return json({
@@ -99,7 +91,7 @@ export default {
 
 
     // ========================================================
-    // HTTP STATUS
+    // STATUS
     // ========================================================
 
     return json({
@@ -113,10 +105,10 @@ export default {
         "ONLINE",
 
       mode:
-        "CRON ONLY + TELEGRAM STATS",
+        "CRON ONLY + TELEGRAM",
 
       message:
-        "Tracker runs only from Cron. Telegram /stats enabled.",
+        "Tracker runs from Cron. Telegram commands enabled.",
 
       time:
         getSofiaTime(new Date()).text
@@ -126,9 +118,9 @@ export default {
   },
 
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // CRON
-  // ----------------------------------------------------------
+  // ==========================================================
 
   async scheduled(event, env, ctx) {
 
@@ -139,7 +131,8 @@ export default {
 
           console.error(
             "TRACKER ERROR",
-            error?.message || String(error)
+            error?.message ||
+            String(error)
           );
 
         })
@@ -165,7 +158,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // CONFIG CHECK
+  // CONFIG
   // ==========================================================
 
   if (!env.V27)
@@ -287,7 +280,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD TRACKING SIGNALS ONCE
+  // LOAD ACTIVE TRACKING
   // ==========================================================
 
   const result =
@@ -304,10 +297,6 @@ async function processTracker(env) {
     result?.results || [];
 
 
-  // ==========================================================
-  // TRACKING MAP
-  // ==========================================================
-
   const trackingMap =
     new Map();
 
@@ -321,15 +310,11 @@ async function processTracker(env) {
         signal?.match_id || ""
       );
 
-
-    if (id) {
-
+    if (id)
       trackingMap.set(
         id,
         signal
       );
-
-    }
 
   }
 
@@ -351,12 +336,8 @@ async function processTracker(env) {
         match?.id || ""
       );
 
-
-    if (id) {
-
+    if (id)
       currentIds.add(id);
-
-    }
 
   }
 
@@ -395,6 +376,8 @@ async function processTracker(env) {
 
   // ==========================================================
   // MISSING TRACKING
+  //
+  // Only used when V27 completely removes a match.
   // ==========================================================
 
   for (
@@ -405,7 +388,6 @@ async function processTracker(env) {
       String(
         signal?.match_id || ""
       );
-
 
     if (!id)
       continue;
@@ -474,6 +456,12 @@ async function processMatch(
       m?.score?.away ?? 0
     );
 
+
+  // ==========================================================
+  // MINUTE
+  //
+  // НЕ ПРОМЕНЯМЕ ЛОГИКАТА ЗА МИНУТИТЕ
+  // ==========================================================
 
   const minute =
     Number(
@@ -554,15 +542,10 @@ async function processMatch(
               AND status = 'TRACKING'
           `)
           .bind(
-
             goalMinute,
-
             afterMinutes,
-
             now.toISOString(),
-
             existing.id
-
           )
           .run();
 
@@ -573,7 +556,9 @@ async function processMatch(
         );
 
 
-      if (changes < 1) {
+      if (
+        changes < 1
+      ) {
 
         return;
 
@@ -600,20 +585,19 @@ async function processMatch(
 
 
     // ========================================================
-    // NO GOAL — END OF FIRST HALF
+    // FINAL 0:0
     //
-    // IMPORTANT:
-    // NO 20 MINUTE BUFFER.
-    // NO +15 WAIT.
+    // ВАЖНО:
+    // НЕ изпращаме NO GOAL при 2H.
     //
-    // As soon as V27 reports 2H,
-    // TRACKING 0:0 becomes NO GOAL.
+    // Изпращаме го само когато V27 показва,
+    // че мачът действително е приключил.
     // ========================================================
 
     if (
-      isFirstHalfFinished(m) &&
-      home === entryHome &&
-      away === entryAway
+      home === 0 &&
+      away === 0 &&
+      isMatchFinished(m)
     ) {
 
       const update =
@@ -630,11 +614,8 @@ async function processMatch(
               AND status = 'TRACKING'
           `)
           .bind(
-
             now.toISOString(),
-
             existing.id
-
           )
           .run();
 
@@ -645,7 +626,9 @@ async function processMatch(
         );
 
 
-      if (changes < 1) {
+      if (
+        changes < 1
+      ) {
 
         return;
 
@@ -729,7 +712,7 @@ async function processMatch(
 
 
   // ==========================================================
-  // INSERT TRACKING
+  // INSERT
   // ==========================================================
 
   const insert =
@@ -780,29 +763,21 @@ async function processMatch(
       .bind(
 
         id,
-
         matchName,
-
         league,
 
         now.toISOString(),
-
         minute,
 
         hunterScore,
-
         goalPressure,
-
         dangerIndex,
-
         attackScore,
 
         home,
-
         away,
 
         now.toISOString(),
-
         now.toISOString()
 
       )
@@ -815,8 +790,13 @@ async function processMatch(
     );
 
 
-  if (changes < 1)
+  if (
+    changes < 1
+  ) {
+
     return;
+
+  }
 
 
   // ==========================================================
@@ -875,7 +855,80 @@ async function processMatch(
 
 
 // ============================================================
-// MISSING TRACKING FINALIZER
+// MATCH FINISHED DETECTION
+// ============================================================
+
+function isMatchFinished(m) {
+
+  const values = [
+
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state,
+    m?.period,
+    m?.phase
+
+  ];
+
+
+  for (
+    const value of values
+  ) {
+
+    const text =
+      String(
+        value || ""
+      )
+      .toUpperCase()
+      .trim();
+
+
+    if (!text)
+      continue;
+
+
+    if (
+      text === "FT" ||
+      text === "FINISHED" ||
+      text === "FINISH" ||
+      text === "ENDED" ||
+      text === "END" ||
+      text === "FULL TIME" ||
+      text === "AFTER FULL TIME" ||
+      text === "AET" ||
+      text === "PEN"
+    ) {
+
+      return true;
+
+    }
+
+  }
+
+
+  // ----------------------------------------------------------
+  // Common Flashscore-style values
+  // ----------------------------------------------------------
+
+  if (
+    m?.is_finished === true ||
+    m?.finished === true ||
+    m?.ended === true
+  ) {
+
+    return true;
+
+  }
+
+
+  return false;
+
+}
+
+
+// ============================================================
+// MISSING TRACKING
 // ============================================================
 
 async function finalizeMissingTracking(
@@ -886,12 +939,73 @@ async function finalizeMissingTracking(
 
   // ----------------------------------------------------------
   // IMPORTANT:
-  // We DO NOT wait 20 minutes here anymore.
+  // If V27 completely removes a match, we cannot know
+  // whether it finished 0:0 or simply disappeared.
   //
-  // If a tracked match disappears from V27,
-  // we finalize immediately only when its stored state
-  // indicates that it reached the end of the first half.
+  // Therefore we keep the existing safety fallback.
   // ----------------------------------------------------------
+
+  const entryMinute =
+    Number(
+      signal?.entry_minute || 0
+    );
+
+
+  const safeEntryMinute =
+    Math.max(
+      0,
+      Math.min(
+        42,
+        entryMinute
+      )
+    );
+
+
+  const requiredMinutes =
+    Math.max(
+      68,
+      (90 - safeEntryMinute) +
+      15 +
+      20
+    );
+
+
+  const entryTime =
+    new Date(
+      signal?.entry_time ||
+      signal?.created_at ||
+      ""
+    );
+
+
+  if (
+    Number.isNaN(
+      entryTime.getTime()
+    )
+  ) {
+
+    return;
+
+  }
+
+
+  const ageMinutes =
+    (
+      now.getTime() -
+      entryTime.getTime()
+    ) /
+    60000;
+
+
+  if (
+    ageMinutes <
+    requiredMinutes
+  ) {
+
+    return;
+
+  }
+
 
   const update =
     await env.DB
@@ -907,11 +1021,8 @@ async function finalizeMissingTracking(
           AND status = 'TRACKING'
       `)
       .bind(
-
         now.toISOString(),
-
         signal.id
-
       )
       .run();
 
@@ -922,8 +1033,13 @@ async function finalizeMissingTracking(
     );
 
 
-  if (changes < 1)
+  if (
+    changes < 1
+  ) {
+
     return;
+
+  }
 
 
   await sendTelegram(
@@ -1033,8 +1149,11 @@ function getHunterScore(m) {
 
   if (
     score === null
-  )
+  ) {
+
     return 0;
+
+  }
 
 
   return Math.round(
@@ -1045,35 +1164,6 @@ function getHunterScore(m) {
         score
       )
     )
-  );
-
-}
-
-
-// ============================================================
-// FIRST HALF FINISHED
-// ============================================================
-
-function isFirstHalfFinished(m) {
-
-  const period =
-    String(
-      m?.period || ""
-    ).toUpperCase();
-
-
-  return (
-
-    period === "2H" ||
-
-    period.includes("2H") ||
-
-    period === "HT" ||
-
-    period === "HALF TIME" ||
-
-    period === "HALFTIME"
-
   );
 
 }
@@ -1193,10 +1283,10 @@ ${rate.toFixed(1)}%
 
 ⏱ Средно до гол:
 ${
-  avg !== null
-    ? avg.toFixed(1) + " мин."
-    : "—"
-}
+    avg !== null
+      ? avg.toFixed(1) + " мин."
+      : "—"
+  }
 
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
@@ -1351,15 +1441,10 @@ NEXT GOAL HUNTER
     .bind(
 
       reportDate,
-
       total,
-
       goals,
-
       noGoals,
-
       rate,
-
       new Date().toISOString()
 
     )
@@ -1406,10 +1491,8 @@ async function sendTelegram(
           "POST",
 
         headers: {
-
           "Content-Type":
             "application/json"
-
         },
 
         body:
@@ -1424,7 +1507,7 @@ async function sendTelegram(
 
         }
 
-      );
+    );
 
 
   if (!response.ok) {
@@ -1434,7 +1517,6 @@ async function sendTelegram(
 
 
     throw new Error(
-
       "Telegram HTTP " +
       response.status +
       " | " +
@@ -1442,7 +1524,6 @@ async function sendTelegram(
         0,
         500
       )
-
     );
 
   }
@@ -1572,7 +1653,7 @@ ${existing.entry_minute}'
 📊 HUNTER SCORE:
 ${existing.hunter_score}/100
 
-⏱ КРАЙ НА 1H
+⏱ КРАЙ НА МАЧА
 
 Резултат:
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
@@ -1714,24 +1795,17 @@ function getPreviousSofiaDate(
   return (
 
     d.getUTCFullYear() +
-
     "-" +
 
     String(
       d.getUTCMonth() + 1
-    ).padStart(
-      2,
-      "0"
-    ) +
+    ).padStart(2, "0") +
 
     "-" +
 
     String(
       d.getUTCDate()
-    ).padStart(
-      2,
-      "0"
-    )
+    ).padStart(2, "0")
 
   );
 
@@ -1822,4 +1896,4 @@ function json(
 
   );
 
-      }
+    }
