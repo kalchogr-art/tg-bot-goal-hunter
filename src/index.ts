@@ -1,6 +1,7 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// LOW CPU / TELEGRAM STATS / ALL-TIME DB STATS / IMMEDIATE HT 0:0
+// LOW CPU / TELEGRAM STATS / DAILY + ALL-TIME DB STATS
+// IMMEDIATE HT 0:0
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -189,9 +190,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // DAILY REPORT
-  //
-  // ОСТАВА САМО ДНЕВНИЯТ REPORT.
-  // /stats НЕ използва този механизъм.
   // ==========================================================
 
   if (
@@ -384,8 +382,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // MISSING TRACKING
-  //
-  // SAFETY FALLBACK ONLY
   // ==========================================================
 
   for (
@@ -1267,18 +1263,120 @@ function getHunterScore(m) {
 
 
 // ============================================================
-// ALL-TIME STATS
+// ALL-TIME + DAILY STATS
 //
-// /stats гледа ВСИЧКИ записани записи.
-// Няма date filter.
-// Няма weekly.
-// Няма натоварване върху Cron.
+// /stats показва:
+// 1. DAILY — най-отгоре
+// 2. ALL TIME — след него
+//
+// Cron НЕ изчислява статистики.
 // ============================================================
 
 async function buildStats(env) {
 
   // ==========================================================
-  // MAIN
+  // DAILY — PREVIOUS COMPLETED DAY
+  // ==========================================================
+
+  const now =
+    new Date();
+
+  const local =
+    getSofiaTime(now);
+
+  const dailyDate =
+    getPreviousSofiaDate(
+      local.date
+    );
+
+
+  const daily =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE substr(
+          created_at,
+          1,
+          10
+        ) = ?
+      `)
+      .bind(
+        dailyDate
+      )
+      .first();
+
+
+  const dailyTotal =
+    Number(
+      daily?.total || 0
+    );
+
+
+  const dailyGoals =
+    Number(
+      daily?.goals || 0
+    );
+
+
+  const dailyNoGoals =
+    Number(
+      daily?.no_goals || 0
+    );
+
+
+  const dailyResolved =
+    dailyGoals +
+    dailyNoGoals;
+
+
+  const dailyRate =
+    dailyResolved > 0
+      ? dailyGoals /
+        dailyResolved *
+        100
+      : 0;
+
+
+  const dailyAvg =
+    daily?.avg_goal_after !== null &&
+    daily?.avg_goal_after !== undefined
+      ? Number(
+          daily.avg_goal_after
+        )
+      : null;
+
+
+  // ==========================================================
+  // ALL-TIME MAIN
   // ==========================================================
 
   const main =
@@ -1540,7 +1638,7 @@ async function buildStats(env) {
 
 
   // ==========================================================
-  // MAIN VALUES
+  // ALL-TIME VALUES
   // ==========================================================
 
   const total =
@@ -1584,11 +1682,33 @@ async function buildStats(env) {
 
 
   // ==========================================================
-  // MESSAGE
+  // MESSAGE — DAILY FIRST
   // ==========================================================
 
   let message =
-`📊 HUNTER STATISTICS — ALL TIME
+`📊 DAILY HUNTER REPORT
+
+📅 ${dailyDate}
+
+🎯 ENTRY: ${dailyTotal}
+
+🟢 GOAL HIT: ${dailyGoals}
+
+🔴 NO GOAL: ${dailyNoGoals}
+
+📈 Успеваемост:
+${dailyRate.toFixed(1)}%
+
+⏱ Средно до гол:
+${
+    dailyAvg !== null
+      ? dailyAvg.toFixed(1) + " мин."
+      : "—"
+  }
+
+━━━━━━━━━━━━━━━━
+📊 HUNTER STATISTICS — ALL TIME
+━━━━━━━━━━━━━━━━
 
 🎯 ENTRY: ${total}
 
@@ -1951,7 +2071,8 @@ ${
   message +=
 `━━━━━━━━━━━━━━━━
 💾 Данните са от hunter_signals
-📊 Статистиката се изчислява при /stats
+📅 Daily: предишен завършен ден
+📊 All-Time: всички записи
 ⚡ Cron не изчислява статистики
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
@@ -1965,9 +2086,6 @@ NEXT GOAL HUNTER
 
 // ============================================================
 // DAILY REPORT
-//
-// НЕ ГО ПИПАМЕ.
-// Той остава отделен дневен отчет.
 // ============================================================
 
 async function sendDailyReport(
@@ -2567,4 +2685,4 @@ function json(
 
   );
 
-        }
+    }
