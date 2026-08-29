@@ -1,8 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// OPTIMIZED + CRON ONLY + DUPLICATE PROTECTION
-// + GOAL MINUTE FALLBACK
-// + TELEGRAM /stats
+// FINAL — CRON + TELEGRAM STATS + GOAL MINUTE FALLBACK
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -19,6 +17,10 @@ const FINAL_BUFFER_MINUTES = 20;
 // ============================================================
 
 export default {
+
+  // ----------------------------------------------------------
+  // HTTP
+  // ----------------------------------------------------------
 
   async fetch(request, env) {
 
@@ -43,14 +45,45 @@ export default {
         const update =
           await request.json();
 
-        await handleTelegramUpdate(
-          env,
-          update
-        );
+
+        const message =
+          update?.message;
+
+
+        const text =
+          String(
+            message?.text || ""
+          ).trim();
+
+
+        // ----------------------------------------------------
+        // /stats
+        // ----------------------------------------------------
+
+        if (
+          text === "/stats" ||
+          text.startsWith("/stats@")
+        ) {
+
+          await sendTelegram(
+            env,
+            await buildTodayStats(env)
+          );
+
+
+          return json({
+            success: true,
+            action: "STATS"
+          });
+
+        }
+
 
         return json({
-          success: true
+          success: true,
+          action: "IGNORED"
         });
+
 
       } catch (error) {
 
@@ -58,6 +91,7 @@ export default {
           "TELEGRAM WEBHOOK ERROR",
           error
         );
+
 
         return json({
           success: false,
@@ -71,12 +105,13 @@ export default {
     }
 
 
-    // ========================================================
+    // ----------------------------------------------------------
     // HTTP STATUS
-    // ========================================================
+    // ----------------------------------------------------------
 
     const local =
       getSofiaTime(new Date());
+
 
     return json({
 
@@ -92,7 +127,7 @@ export default {
         "CRON ONLY + TELEGRAM",
 
       message:
-        "Tracker runs from Cron. Telegram commands are handled by POST.",
+        "Tracker runs from Cron. Telegram commands enabled.",
 
       time:
         local.text
@@ -102,9 +137,9 @@ export default {
   },
 
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // CRON
-  // ==========================================================
+  // ----------------------------------------------------------
 
   async scheduled(event, env, ctx) {
 
@@ -134,6 +169,7 @@ async function processTracker(env) {
   const now =
     new Date();
 
+
   const local =
     getSofiaTime(now);
 
@@ -143,27 +179,38 @@ async function processTracker(env) {
   // ==========================================================
 
   if (!env.V27) {
+
     throw new Error(
       "V27 Service Binding missing"
     );
+
   }
 
+
   if (!env.DB) {
+
     throw new Error(
       "DB binding missing"
     );
+
   }
 
+
   if (!env.TELEGRAM_BOT_TOKEN) {
+
     throw new Error(
       "TELEGRAM_BOT_TOKEN missing"
     );
+
   }
 
+
   if (!env.TELEGRAM_CHAT_ID) {
+
     throw new Error(
       "TELEGRAM_CHAT_ID missing"
     );
+
   }
 
 
@@ -180,6 +227,7 @@ async function processTracker(env) {
       env,
       local
     );
+
 
     return {
 
@@ -198,6 +246,7 @@ async function processTracker(env) {
 
   // ==========================================================
   // TRACKING WINDOW
+  // 12:00 - 23:59
   // ==========================================================
 
   if (
@@ -265,6 +314,7 @@ async function processTracker(env) {
 
 
   let data;
+
 
   try {
 
@@ -399,6 +449,7 @@ async function processTracker(env) {
   let missingChecked = 0;
   let missingFinalized = 0;
 
+
   const errorDetails = [];
 
 
@@ -425,40 +476,51 @@ async function processTracker(env) {
       if (
         result === "ENTRY"
       ) {
+
         entries++;
+
       }
 
 
       if (
         result === "GOAL"
       ) {
+
         goals++;
+
       }
 
 
       if (
         result === "NO_GOAL"
       ) {
+
         noGoals++;
+
       }
 
 
       if (
         result === "CANDIDATE"
       ) {
+
         candidates++;
+
       }
 
 
       if (
         result === "DUPLICATE"
       ) {
+
         duplicates++;
+
       }
 
     } catch (error) {
 
       matchErrors++;
+
 
       const detail = {
 
@@ -485,6 +547,7 @@ async function processTracker(env) {
       console.error(
         "MATCH ERROR",
         match?.id,
+        match?.match,
         error
       );
 
@@ -547,6 +610,7 @@ async function processTracker(env) {
 
       matchErrors++;
 
+
       const detail = {
 
         id:
@@ -578,6 +642,10 @@ async function processTracker(env) {
 
   }
 
+
+  // ==========================================================
+  // RESULT
+  // ==========================================================
 
   return {
 
@@ -651,7 +719,9 @@ async function processMatch(
 
 
   if (!id) {
+
     return null;
+
   }
 
 
@@ -668,9 +738,7 @@ async function processMatch(
 
 
   const minute =
-    Number(
-      m?.minute ?? 0
-    );
+    getMatchMinute(m);
 
 
   // ==========================================================
@@ -704,57 +772,12 @@ async function processMatch(
       away > entryAway
     ) {
 
-      // ======================================================
-      // GOAL MINUTE + FALLBACK
-      //
-      // 1. m.minute
-      // 2. m.minute_display
-      // 3. ENTRY TIME + elapsed minutes
-      //
-      // Нормалната логика не се променя.
-      // ======================================================
-
-      let goalMinute =
-        minute > 0
-          ? minute
-          : null;
-
-
-      // ------------------------------------------------------
-      // FALLBACK 1 — minute_display
-      // ------------------------------------------------------
-
-      if (goalMinute === null) {
-
-        const displayMinute =
-          String(
-            m?.minute_display || ""
-          )
-            .replace(
-              /[^0-9]/g,
-              ""
-            );
-
-
-        const parsedDisplayMinute =
-          Number(
-            displayMinute
-          );
-
-
-        if (
-          Number.isFinite(
-            parsedDisplayMinute
-          ) &&
-          parsedDisplayMinute > 0
-        ) {
-
-          goalMinute =
-            parsedDisplayMinute;
-
-        }
-
-      }
+      const goalMinute =
+        getGoalMinute(
+          m,
+          existing,
+          now
+        );
 
 
       const entryMinute =
@@ -763,54 +786,9 @@ async function processMatch(
         );
 
 
-      // ------------------------------------------------------
-      // FALLBACK 2 — ENTRY TIME
-      // ------------------------------------------------------
-
-      if (goalMinute === null) {
-
-        const entryTime =
-          new Date(
-            existing.entry_time ||
-            existing.created_at ||
-            ""
-          );
-
-
-        if (
-          entryMinute > 0 &&
-          !Number.isNaN(
-            entryTime.getTime()
-          )
-        ) {
-
-          const elapsedMinutes =
-            Math.floor(
-              (
-                now.getTime() -
-                entryTime.getTime()
-              ) /
-              60000
-            );
-
-
-          goalMinute =
-            Math.min(
-              90,
-              Math.max(
-                entryMinute,
-                entryMinute +
-                elapsedMinutes
-              )
-            );
-
-        }
-
-      }
-
-
       const afterMinutes =
-        goalMinute !== null
+        goalMinute !== null &&
+        entryMinute > 0
           ? Math.max(
               0,
               goalMinute -
@@ -819,9 +797,9 @@ async function processMatch(
           : null;
 
 
-      // ======================================================
+      // ------------------------------------------------------
       // ATOMIC FINALIZATION
-      // ======================================================
+      // ------------------------------------------------------
 
       const update =
         await env.DB
@@ -1115,38 +1093,55 @@ async function processMatch(
 
 
   // ==========================================================
-  // ADD TO LOCAL MAP
+  // GET REAL DATABASE ROW
   // ==========================================================
 
-  const newSignal = {
+  const savedSignal =
+    await env.DB
+      .prepare(
+        `
+        SELECT *
+        FROM hunter_signals
+        WHERE match_id = ?
+          AND status = 'TRACKING'
+        ORDER BY id DESC
+        LIMIT 1
+        `
+      )
+      .bind(id)
+      .first();
 
-    id:
-      null,
 
-    match_id:
-      id,
+  const newSignal =
+    savedSignal || {
 
-    match_name:
-      matchName,
+      id:
+        null,
 
-    league,
+      match_id:
+        id,
 
-    entry_time:
-      now.toISOString(),
+      match_name:
+        matchName,
 
-    entry_minute:
-      minute,
+      league,
 
-    hunter_score:
-      hunterScore,
+      entry_time:
+        now.toISOString(),
 
-    entry_home_score:
-      home,
+      entry_minute:
+        minute,
 
-    entry_away_score:
-      away
+      hunter_score:
+        hunterScore,
 
-  };
+      entry_home_score:
+        home,
+
+      entry_away_score:
+        away
+
+    };
 
 
   trackingMap.set(
@@ -1170,6 +1165,230 @@ async function processMatch(
 
 
   return "ENTRY";
+
+}
+
+
+// ============================================================
+// GOAL MINUTE
+// ============================================================
+
+function getGoalMinute(
+  m,
+  existing,
+  now
+) {
+
+  // ----------------------------------------------------------
+  // 1. REAL NUMERIC MINUTE
+  // ----------------------------------------------------------
+
+  const directMinute =
+    numberOrNull(
+      m?.minute
+    );
+
+
+  if (
+    directMinute !== null &&
+    directMinute > 0 &&
+    directMinute <= 130
+  ) {
+
+    return Math.floor(
+      directMinute
+    );
+
+  }
+
+
+  // ----------------------------------------------------------
+  // 2. minute_display
+  // ----------------------------------------------------------
+
+  const display =
+    String(
+      m?.minute_display || ""
+    ).trim();
+
+
+  const displayMatch =
+    display.match(
+      /^(\d{1,3})(?:\+(\d{1,2}))?['′]?/
+    );
+
+
+  if (displayMatch) {
+
+    const base =
+      Number(
+        displayMatch[1]
+      );
+
+
+    const added =
+      Number(
+        displayMatch[2] || 0
+      );
+
+
+    if (
+      base >= 1 &&
+      base <= 130
+    ) {
+
+      return (
+        base +
+        added
+      );
+
+    }
+
+  }
+
+
+  // ----------------------------------------------------------
+  // 3. FALLBACK FROM ENTRY TIME
+  //
+  // Това е само за липсваща минута.
+  // Не променя GOAL detection.
+  // ----------------------------------------------------------
+
+  const entryMinute =
+    Number(
+      existing?.entry_minute || 0
+    );
+
+
+  if (
+    entryMinute >= 1 &&
+    entryMinute <= 42
+  ) {
+
+    const entryTime =
+      new Date(
+        existing?.entry_time ||
+        existing?.created_at ||
+        ""
+      );
+
+
+    if (
+      !Number.isNaN(
+        entryTime.getTime()
+      )
+    ) {
+
+      const elapsed =
+        Math.floor(
+          (
+            now.getTime() -
+            entryTime.getTime()
+          ) /
+          60000
+        );
+
+
+      // ------------------------------------------------------
+      // Approximate fallback.
+      //
+      // Ограничаваме до разумен диапазон за 1H.
+      // ------------------------------------------------------
+
+      const estimated =
+        entryMinute +
+        Math.max(
+          0,
+          elapsed
+        );
+
+
+      if (
+        estimated >= entryMinute &&
+        estimated <= 45
+      ) {
+
+        return estimated;
+
+      }
+
+    }
+
+  }
+
+
+  return null;
+
+}
+
+
+// ============================================================
+// MATCH MINUTE FOR ENTRY
+// ============================================================
+
+function getMatchMinute(m) {
+
+  const direct =
+    numberOrNull(
+      m?.minute
+    );
+
+
+  if (
+    direct !== null &&
+    direct >= 0 &&
+    direct <= 130
+  ) {
+
+    return Math.floor(
+      direct
+    );
+
+  }
+
+
+  const display =
+    String(
+      m?.minute_display || ""
+    ).trim();
+
+
+  const match =
+    display.match(
+      /^(\d{1,3})(?:\+(\d{1,2}))?['′]?/
+    );
+
+
+  if (match) {
+
+    const base =
+      Number(
+        match[1]
+      );
+
+
+    const added =
+      Number(
+        match[2] || 0
+      );
+
+
+    if (
+      base >= 0 &&
+      base <= 130
+    ) {
+
+      return (
+        base +
+        added
+      );
+
+    }
+
+  }
+
+
+  return 0;
 
 }
 
@@ -1308,123 +1527,138 @@ async function finalizeMissingTracking(
 
 
 // ============================================================
-// TELEGRAM COMMANDS
+// HUNTER FILTER
 // ============================================================
 
-async function handleTelegramUpdate(
-  env,
-  update
+function isHunterCandidate(
+  m,
+  score
 ) {
 
-  const message =
-    update?.message;
+  const minute =
+    Number(
+      m?.minute ?? 0
+    );
 
 
-  if (!message)
-    return;
-
-
-  const chatId =
+  const period =
     String(
-      message?.chat?.id || ""
+      m?.period || ""
+    ).toUpperCase();
+
+
+  const home =
+    Number(
+      m?.score?.home ?? 0
     );
 
 
-  // ==========================================================
-  // SECURITY
-  // ==========================================================
-
-  if (
-    chatId !==
-    String(env.TELEGRAM_CHAT_ID)
-  ) {
-
-    return;
-
-  }
-
-
-  const text =
-    String(
-      message?.text || ""
-    )
-      .trim();
-
-
-  if (!text)
-    return;
-
-
-  const command =
-    text
-      .split(/\s+/)[0]
-      .toLowerCase()
-      .split("@")[0];
-
-
-  // ==========================================================
-  // START / HELP
-  // ==========================================================
-
-  if (
-    command === "/start" ||
-    command === "/help"
-  ) {
-
-    await sendTelegram(
-      env,
-      `🤖 GOAL WATCH
-
-Команди:
-
-/stats — статистика за днес
-
-━━━━━━━━━━━━━━━━
-NEXT GOAL HUNTER
-━━━━━━━━━━━━━━━━`
+  const away =
+    Number(
+      m?.score?.away ?? 0
     );
 
-    return;
 
-  }
+  const firstHalf =
+    period === "1H" ||
+    period === "FIRST" ||
+    period === "FIRST HALF" ||
+    period === "1ST HALF" ||
+    period.includes("1H");
 
 
-  // ==========================================================
-  // STATS
-  // ==========================================================
+  if (!firstHalf)
+    return false;
+
 
   if (
-    command === "/stats"
-  ) {
+    home !== 0 ||
+    away !== 0
+  )
+    return false;
 
-    await sendTodayStats(
-      env
-    );
 
-    return;
+  if (
+    minute < HUNTER_FROM ||
+    minute > HUNTER_TO
+  )
+    return false;
 
-  }
+
+  if (
+    score < HUNTER_MIN_SCORE
+  )
+    return false;
+
+
+  return true;
 
 }
 
 
 // ============================================================
-// TODAY STATISTICS
+// HUNTER SCORE
 // ============================================================
 
-async function sendTodayStats(
-  env
-) {
+function getHunterScore(m) {
+
+  const score =
+    numberOrNull(
+      m?.goal_signal?.score
+    );
+
+
+  if (
+    score !== null
+  ) {
+
+    return Math.round(
+      Math.max(
+        0,
+        Math.min(
+          100,
+          score
+        )
+      )
+    );
+
+  }
+
+
+  return 0;
+
+}
+
+
+// ============================================================
+// FIRST HALF FINISHED
+// ============================================================
+
+function isFirstHalfFinished(m) {
+
+  const period =
+    String(
+      m?.period || ""
+    ).toUpperCase();
+
+
+  return (
+    period === "2H" ||
+    period.includes("2H")
+  );
+
+}
+
+
+// ============================================================
+// TODAY STATS
+// ============================================================
+
+async function buildTodayStats(env) {
 
   const local =
     getSofiaTime(
       new Date()
-    );
-
-
-  const range =
-    getSofiaDayUtcRange(
-      local.date
     );
 
 
@@ -1455,21 +1689,23 @@ async function sendTodayStats(
           AVG(
             CASE
               WHEN result = 'GOAL HIT'
-                   AND goal_after_minutes IS NOT NULL
+              AND goal_after_minutes IS NOT NULL
               THEN goal_after_minutes
-              ELSE NULL
             END
           ) AS avg_goal_after
 
         FROM hunter_signals
 
-        WHERE created_at >= ?
-          AND created_at < ?
+        WHERE substr(
+          created_at,
+          1,
+          10
+        ) = ?
+
         `
       )
       .bind(
-        range.start,
-        range.end
+        local.date
       )
       .first();
 
@@ -1507,7 +1743,7 @@ async function sendTodayStats(
       : 0;
 
 
-  const avgGoalAfter =
+  const avg =
     stats?.avg_goal_after !== null &&
     stats?.avg_goal_after !== undefined
       ? Number(
@@ -1516,18 +1752,7 @@ async function sendTodayStats(
       : null;
 
 
-  const avgText =
-    avgGoalAfter !== null &&
-    Number.isFinite(
-      avgGoalAfter
-    )
-      ? avgGoalAfter.toFixed(1) +
-        " мин."
-      : "—";
-
-
-  const message =
-`📊 HUNTER STATISTICS — ДНЕС
+  return `📊 HUNTER STATISTICS — ДНЕС
 
 📅 ${local.date}
 
@@ -1541,149 +1766,15 @@ async function sendTodayStats(
 ${rate.toFixed(1)}%
 
 ⏱ Средно до гол:
-${avgText}
+${
+  avg !== null
+    ? avg.toFixed(1) + " мин."
+    : "—"
+}
 
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
-
-
-  await sendTelegram(
-    env,
-    message
-  );
-
-}
-
-
-// ============================================================
-// SOFIA DAY -> UTC RANGE
-// ============================================================
-
-function getSofiaDayUtcRange(
-  dateString
-) {
-
-  const start =
-    localSofiaMidnightToUtc(
-      dateString
-    );
-
-
-  const parts =
-    dateString
-      .split("-")
-      .map(Number);
-
-
-  const next =
-    new Date(
-      Date.UTC(
-        parts[0],
-        parts[1] - 1,
-        parts[2] + 1
-      )
-    );
-
-
-  const nextDate =
-    next.getUTCFullYear() +
-    "-" +
-    String(
-      next.getUTCMonth() + 1
-    ).padStart(2, "0") +
-    "-" +
-    String(
-      next.getUTCDate()
-    ).padStart(2, "0");
-
-
-  const end =
-    localSofiaMidnightToUtc(
-      nextDate
-    );
-
-
-  return {
-    start,
-    end
-  };
-
-}
-
-
-function localSofiaMidnightToUtc(
-  dateString
-) {
-
-  const guess =
-    new Date(
-      `${dateString}T00:00:00Z`
-    );
-
-
-  const parts =
-    new Intl.DateTimeFormat(
-      "en-GB",
-      {
-        timeZone:
-          TIME_ZONE,
-
-        year:
-          "numeric",
-
-        month:
-          "2-digit",
-
-        day:
-          "2-digit",
-
-        hour:
-          "2-digit",
-
-        minute:
-          "2-digit",
-
-        second:
-          "2-digit",
-
-        hourCycle:
-          "h23"
-      }
-    )
-    .formatToParts(
-      guess
-    );
-
-
-  const get =
-    type =>
-      parts.find(
-        p =>
-          p.type === type
-      )?.value;
-
-
-  const localAsUtc =
-    Date.UTC(
-      Number(get("year")),
-      Number(get("month")) - 1,
-      Number(get("day")),
-      Number(get("hour")),
-      Number(get("minute")),
-      Number(get("second"))
-    );
-
-
-  const offsetMs =
-    localAsUtc -
-    guess.getTime();
-
-
-  return new Date(
-    guess.getTime() -
-    offsetMs
-  ).toISOString();
 
 }
 
@@ -1724,12 +1815,6 @@ async function sendDailyReport(
   }
 
 
-  const range =
-    getSofiaDayUtcRange(
-      reportDate
-    );
-
-
   const stats =
     await env.DB
       .prepare(
@@ -1756,14 +1841,15 @@ async function sendDailyReport(
 
         FROM hunter_signals
 
-        WHERE created_at >= ?
-          AND created_at < ?
+        WHERE substr(
+          created_at,
+          1,
+          10
+        ) = ?
+
         `
       )
-      .bind(
-        range.start,
-        range.end
-      )
+      .bind(reportDate)
       .first();
 
 
@@ -1854,6 +1940,98 @@ NEXT GOAL HUNTER
 
     )
     .run();
+
+}
+
+
+// ============================================================
+// TELEGRAM
+// ============================================================
+
+async function sendTelegram(
+  env,
+  message
+) {
+
+  const token =
+    env.TELEGRAM_BOT_TOKEN;
+
+
+  const chatId =
+    env.TELEGRAM_CHAT_ID;
+
+
+  const url =
+    `https://api.telegram.org/bot${token}/sendMessage`;
+
+
+  const text =
+    String(
+      message || ""
+    );
+
+
+  const MAX_LENGTH = 4000;
+
+
+  for (
+    let i = 0;
+    i < text.length;
+    i += MAX_LENGTH
+  ) {
+
+    const part =
+      text.substring(
+        i,
+        i + MAX_LENGTH
+      );
+
+
+    const response =
+      await fetch(
+        url,
+        {
+
+          method:
+            "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify({
+
+              chat_id:
+                chatId,
+
+              text:
+                part
+
+            })
+
+          }
+
+      );
+
+
+    if (!response.ok) {
+
+      const errorText =
+        await response.text();
+
+
+      throw new Error(
+        "Telegram HTTP " +
+        response.status +
+        " | " +
+        errorText
+      );
+
+    }
+
+  }
 
 }
 
@@ -1986,222 +2164,6 @@ ${existing.hunter_score}/100
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
 
 RESULT: NO GOAL`;
-
-}
-
-
-// ============================================================
-// TELEGRAM
-// ============================================================
-
-async function sendTelegram(
-  env,
-  message
-) {
-
-  const token =
-    env.TELEGRAM_BOT_TOKEN;
-
-
-  const chatId =
-    env.TELEGRAM_CHAT_ID;
-
-
-  const url =
-    `https://api.telegram.org/bot${token}/sendMessage`;
-
-
-  const text =
-    String(
-      message || ""
-    );
-
-
-  const MAX_LENGTH = 4000;
-
-
-  for (
-    let i = 0;
-    i < text.length;
-    i += MAX_LENGTH
-  ) {
-
-    const part =
-      text.substring(
-        i,
-        i + MAX_LENGTH
-      );
-
-
-    const response =
-      await fetch(
-        url,
-        {
-
-          method:
-            "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
-
-          body:
-            JSON.stringify({
-
-              chat_id:
-                chatId,
-
-              text:
-                part
-
-            })
-
-          }
-
-      );
-
-
-    if (!response.ok) {
-
-      const errorText =
-        await response.text();
-
-
-      throw new Error(
-        "Telegram HTTP " +
-        response.status +
-        " | " +
-        errorText
-      );
-
-    }
-
-  }
-
-}
-
-
-// ============================================================
-// HUNTER FILTER
-// ============================================================
-
-function isHunterCandidate(
-  m,
-  score
-) {
-
-  const minute =
-    Number(
-      m?.minute ?? 0
-    );
-
-
-  const period =
-    String(
-      m?.period || ""
-    ).toUpperCase();
-
-
-  const home =
-    Number(
-      m?.score?.home ?? 0
-    );
-
-
-  const away =
-    Number(
-      m?.score?.away ?? 0
-    );
-
-
-  const firstHalf =
-    period === "1H" ||
-    period === "FIRST" ||
-    period === "FIRST HALF" ||
-    period === "1ST HALF" ||
-    period.includes("1H");
-
-
-  if (!firstHalf)
-    return false;
-
-
-  if (
-    home !== 0 ||
-    away !== 0
-  )
-    return false;
-
-
-  if (
-    minute < HUNTER_FROM ||
-    minute > HUNTER_TO
-  )
-    return false;
-
-
-  if (
-    score < HUNTER_MIN_SCORE
-  )
-    return false;
-
-
-  return true;
-
-}
-
-
-// ============================================================
-// HUNTER SCORE
-// ============================================================
-
-function getHunterScore(m) {
-
-  const score =
-    numberOrNull(
-      m?.goal_signal?.score
-    );
-
-
-  if (
-    score !== null
-  ) {
-
-    return Math.round(
-      Math.max(
-        0,
-        Math.min(
-          100,
-          score
-        )
-      )
-    );
-
-  }
-
-
-  return 0;
-
-}
-
-
-// ============================================================
-// FIRST HALF FINISHED
-// ============================================================
-
-function isFirstHalfFinished(m) {
-
-  const period =
-    String(
-      m?.period || ""
-    ).toUpperCase();
-
-
-  return (
-    period === "2H" ||
-    period.includes("2H")
-  );
 
 }
 
