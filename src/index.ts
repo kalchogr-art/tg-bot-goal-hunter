@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER
-// LOW CPU / TELEGRAM STATS / IMMEDIATE FINAL 0:0
+// LOW CPU / TELEGRAM STATS / IMMEDIATE HT 0:0
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -75,7 +75,8 @@ export default {
 
         console.error(
           "TELEGRAM WEBHOOK ERROR",
-          error
+          error?.message ||
+          String(error)
         );
 
         return json({
@@ -280,7 +281,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD ACTIVE TRACKING
+  // LOAD ACTIVE TRACKING ONCE
   // ==========================================================
 
   const result =
@@ -377,7 +378,8 @@ async function processTracker(env) {
   // ==========================================================
   // MISSING TRACKING
   //
-  // Only used when V27 completely removes a match.
+  // SAFETY FALLBACK ONLY.
+  // Normal 0:0 finalization happens at HT.
   // ==========================================================
 
   for (
@@ -522,10 +524,6 @@ async function processMatch(
           : null;
 
 
-      // ------------------------------------------------------
-      // ATOMIC FINALIZATION
-      // ------------------------------------------------------
-
       const update =
         await env.DB
           .prepare(`
@@ -585,19 +583,17 @@ async function processMatch(
 
 
     // ========================================================
-    // FINAL 0:0
+    // IMMEDIATE 0:0 — END OF FIRST HALF
     //
-    // ВАЖНО:
-    // НЕ изпращаме NO GOAL при 2H.
-    //
-    // Изпращаме го само когато V27 показва,
-    // че мачът действително е приключил.
+    // Вече НЕ чакаме +15 / +20 минути.
+    // Ако V27 потвърди край на 1H и резултатът е 0:0,
+    // веднага приключваме сигнала.
     // ========================================================
 
     if (
       home === 0 &&
       away === 0 &&
-      isMatchFinished(m)
+      isFirstHalfFinished(m)
     ) {
 
       const update =
@@ -855,7 +851,109 @@ async function processMatch(
 
 
 // ============================================================
-// MATCH FINISHED DETECTION
+// FIRST HALF FINISHED
+// ============================================================
+
+function isFirstHalfFinished(m) {
+
+  const values = [
+
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state,
+    m?.phase
+
+  ];
+
+
+  for (
+    const value of values
+  ) {
+
+    const text =
+      String(
+        value || ""
+      )
+      .toUpperCase()
+      .trim();
+
+
+    if (!text)
+      continue;
+
+
+    if (
+      text === "HT" ||
+      text === "HALFTIME" ||
+      text === "HALF TIME" ||
+      text === "HALF-TIME" ||
+      text === "1H FINISHED" ||
+      text === "FIRST HALF FINISHED" ||
+      text === "END OF FIRST HALF"
+    ) {
+
+      return true;
+
+    }
+
+  }
+
+
+  // ----------------------------------------------------------
+  // Nested status objects
+  // ----------------------------------------------------------
+
+  const nestedValues = [
+
+    m?.status?.type,
+    m?.status?.name,
+    m?.status?.short,
+    m?.status?.long,
+    m?.match_status?.type,
+    m?.match_status?.name,
+    m?.state?.type,
+    m?.state?.name
+
+  ];
+
+
+  for (
+    const value of nestedValues
+  ) {
+
+    const text =
+      String(
+        value || ""
+      )
+      .toUpperCase()
+      .trim();
+
+
+    if (
+      text === "HT" ||
+      text === "HALFTIME" ||
+      text === "HALF TIME" ||
+      text === "HALF-TIME" ||
+      text === "1H FINISHED" ||
+      text === "FIRST HALF FINISHED" ||
+      text === "END OF FIRST HALF"
+    ) {
+
+      return true;
+
+    }
+
+  }
+
+
+  return false;
+
+}
+
+
+// ============================================================
+// FULL MATCH FINISHED
 // ============================================================
 
 function isMatchFinished(m) {
@@ -866,7 +964,6 @@ function isMatchFinished(m) {
     m?.status_type,
     m?.match_status,
     m?.state,
-    m?.period,
     m?.phase
 
   ];
@@ -907,10 +1004,6 @@ function isMatchFinished(m) {
   }
 
 
-  // ----------------------------------------------------------
-  // Common Flashscore-style values
-  // ----------------------------------------------------------
-
   if (
     m?.is_finished === true ||
     m?.finished === true ||
@@ -929,6 +1022,9 @@ function isMatchFinished(m) {
 
 // ============================================================
 // MISSING TRACKING
+//
+// Safety fallback only.
+// This is NOT used for normal HT 0:0 finalization.
 // ============================================================
 
 async function finalizeMissingTracking(
@@ -936,14 +1032,6 @@ async function finalizeMissingTracking(
   signal,
   now
 ) {
-
-  // ----------------------------------------------------------
-  // IMPORTANT:
-  // If V27 completely removes a match, we cannot know
-  // whether it finished 0:0 or simply disappeared.
-  //
-  // Therefore we keep the existing safety fallback.
-  // ----------------------------------------------------------
 
   const entryMinute =
     Number(
@@ -960,6 +1048,11 @@ async function finalizeMissingTracking(
       )
     );
 
+
+  // ----------------------------------------------------------
+  // Conservative fallback if V27 completely removes match.
+  // Normal 0:0 signals are finalized at HT before this.
+  // ----------------------------------------------------------
 
   const requiredMinutes =
     Math.max(
@@ -1170,7 +1263,7 @@ function getHunterScore(m) {
 
 
 // ============================================================
-// TODAY STATS
+// TODAY / WEEKLY STATS
 // ============================================================
 
 async function buildTodayStats(env) {
@@ -1181,7 +1274,25 @@ async function buildTodayStats(env) {
     );
 
 
-  const stats =
+  // ==========================================================
+  // DATE RANGE
+  // ==========================================================
+
+  const today =
+    local.date;
+
+
+  const weekStart =
+    getWeekStartDate(
+      today
+    );
+
+
+  // ==========================================================
+  // MAIN TODAY STATS
+  // ==========================================================
+
+  const todayStats =
     await env.DB
       .prepare(`
         SELECT
@@ -1221,76 +1332,828 @@ async function buildTodayStats(env) {
         ) = ?
       `)
       .bind(
-        local.date
+        today
       )
       .first();
 
 
-  const total =
+  // ==========================================================
+  // WEEKLY STATS
+  // ==========================================================
+
+  const weeklyStats =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE substr(
+          created_at,
+          1,
+          10
+        ) >= ?
+
+        AND substr(
+          created_at,
+          1,
+          10
+        ) <= ?
+      `)
+      .bind(
+        weekStart,
+        today
+      )
+      .first();
+
+
+  // ==========================================================
+  // SCORE GROUPS
+  // ==========================================================
+
+  const scoreStats =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          CASE
+
+            WHEN hunter_score BETWEEN 60 AND 69
+              THEN '60–69'
+
+            WHEN hunter_score BETWEEN 70 AND 79
+              THEN '70–79'
+
+            WHEN hunter_score BETWEEN 80 AND 89
+              THEN '80–89'
+
+            WHEN hunter_score BETWEEN 90 AND 100
+              THEN '90–100'
+
+            ELSE 'OTHER'
+
+          END AS score_group,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE substr(
+          created_at,
+          1,
+          10
+        ) = ?
+
+        AND hunter_score BETWEEN 60 AND 100
+
+        GROUP BY score_group
+
+        ORDER BY
+          CASE score_group
+            WHEN '60–69' THEN 1
+            WHEN '70–79' THEN 2
+            WHEN '80–89' THEN 3
+            WHEN '90–100' THEN 4
+            ELSE 5
+          END
+      `)
+      .bind(
+        today
+      )
+      .all();
+
+
+  // ==========================================================
+  // ENTRY MINUTE GROUPS
+  // ==========================================================
+
+  const minuteStats =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          CASE
+
+            WHEN entry_minute BETWEEN 10 AND 19
+              THEN '10–19′'
+
+            WHEN entry_minute BETWEEN 20 AND 29
+              THEN '20–29′'
+
+            WHEN entry_minute BETWEEN 30 AND 42
+              THEN '30–42′'
+
+            ELSE 'OTHER'
+
+          END AS minute_group,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE substr(
+          created_at,
+          1,
+          10
+        ) = ?
+
+        AND entry_minute BETWEEN 10 AND 42
+
+        GROUP BY minute_group
+
+        ORDER BY
+          CASE minute_group
+            WHEN '10–19′' THEN 1
+            WHEN '20–29′' THEN 2
+            WHEN '30–42′' THEN 3
+            ELSE 4
+          END
+      `)
+      .bind(
+        today
+      )
+      .all();
+
+
+  // ==========================================================
+  // LEAGUE STATS
+  // ==========================================================
+
+  const leagueStats =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          COALESCE(
+            NULLIF(TRIM(league), ''),
+            'UNKNOWN'
+          ) AS league,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE substr(
+          created_at,
+          1,
+          10
+        ) = ?
+
+        GROUP BY league
+
+        ORDER BY
+          (
+            CAST(
+              SUM(
+                CASE
+                  WHEN result = 'GOAL HIT'
+                  THEN 1
+                  ELSE 0
+                END
+              ) AS REAL
+            )
+            /
+            NULLIF(
+              SUM(
+                CASE
+                  WHEN result IN (
+                    'GOAL HIT',
+                    'NO GOAL'
+                  )
+                  THEN 1
+                  ELSE 0
+                END
+              ),
+              0
+            )
+          ) DESC,
+
+          total DESC
+      `)
+      .bind(
+        today
+      )
+      .all();
+
+
+  // ==========================================================
+  // FORMAT MAIN STATS
+  // ==========================================================
+
+  const todayTotal =
     Number(
-      stats?.total || 0
+      todayStats?.total || 0
     );
 
 
-  const goals =
+  const todayGoals =
     Number(
-      stats?.goals || 0
+      todayStats?.goals || 0
     );
 
 
-  const noGoals =
+  const todayNoGoals =
     Number(
-      stats?.no_goals || 0
+      todayStats?.no_goals || 0
     );
 
 
-  const resolved =
-    goals +
-    noGoals;
+  const todayResolved =
+    todayGoals +
+    todayNoGoals;
 
 
-  const rate =
-    resolved > 0
+  const todayRate =
+    todayResolved > 0
       ? (
-          goals /
-          resolved *
+          todayGoals /
+          todayResolved *
           100
         )
       : 0;
 
 
-  const avg =
-    stats?.avg_goal_after !== null &&
-    stats?.avg_goal_after !== undefined
+  const todayAvg =
+    todayStats?.avg_goal_after !== null &&
+    todayStats?.avg_goal_after !== undefined
       ? Number(
-          stats.avg_goal_after
+          todayStats.avg_goal_after
         )
       : null;
 
 
-  return `📊 HUNTER STATISTICS — ДНЕС
+  const weekTotal =
+    Number(
+      weeklyStats?.total || 0
+    );
 
-📅 ${local.date}
 
-🎯 ENTRY: ${total}
+  const weekGoals =
+    Number(
+      weeklyStats?.goals || 0
+    );
 
-🟢 GOAL HIT: ${goals}
 
-🔴 NO GOAL: ${noGoals}
+  const weekNoGoals =
+    Number(
+      weeklyStats?.no_goals || 0
+    );
+
+
+  const weekResolved =
+    weekGoals +
+    weekNoGoals;
+
+
+  const weekRate =
+    weekResolved > 0
+      ? (
+          weekGoals /
+          weekResolved *
+          100
+        )
+      : 0;
+
+
+  const weekAvg =
+    weeklyStats?.avg_goal_after !== null &&
+    weeklyStats?.avg_goal_after !== undefined
+      ? Number(
+          weeklyStats.avg_goal_after
+        )
+      : null;
+
+
+  // ==========================================================
+  // BUILD MESSAGE
+  // ==========================================================
+
+  let message =
+`📊 HUNTER STATISTICS — ДНЕС
+
+📅 ${today}
+
+🎯 ENTRY: ${todayTotal}
+
+🟢 GOAL HIT: ${todayGoals}
+
+🔴 NO GOAL: ${todayNoGoals}
 
 📈 Успеваемост:
-${rate.toFixed(1)}%
+${todayRate.toFixed(1)}%
 
 ⏱ Средно до гол:
 ${
-    avg !== null
-      ? avg.toFixed(1) + " мин."
+    todayAvg !== null
+      ? todayAvg.toFixed(1) + " мин."
+      : "—"
+  }
+
+━━━━━━━━━━━━━━━━
+🎯 ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+
+  // ==========================================================
+  // SCORE OUTPUT
+  // ==========================================================
+
+  const scoreRows =
+    scoreStats?.results || [];
+
+
+  const scoreMap =
+    new Map();
+
+
+  for (
+    const row of scoreRows
+  ) {
+
+    scoreMap.set(
+      row.score_group,
+      row
+    );
+
+  }
+
+
+  const scoreGroups = [
+    "60–69",
+    "70–79",
+    "80–89",
+    "90–100"
+  ];
+
+
+  for (
+    const group of scoreGroups
+  ) {
+
+    const row =
+      scoreMap.get(group);
+
+
+    if (!row) {
+
+      message +=
+        `${group}: 0 ENTRY\n`;
+
+      continue;
+
+    }
+
+
+    const total =
+      Number(
+        row.total || 0
+      );
+
+
+    const goals =
+      Number(
+        row.goals || 0
+      );
+
+
+    const noGoals =
+      Number(
+        row.no_goals || 0
+      );
+
+
+    const resolved =
+      goals +
+      noGoals;
+
+
+    const rate =
+      resolved > 0
+        ? goals /
+          resolved *
+          100
+        : 0;
+
+
+    message +=
+      `${group}: ${total} ENTRY | ` +
+      `${goals} GOAL | ` +
+      `${noGoals} NO GOAL | ` +
+      `${rate.toFixed(1)}%\n`;
+
+  }
+
+
+  // ==========================================================
+  // AVERAGE BY SCORE
+  // ==========================================================
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+⚽ СРЕДНО ДО ГОЛ ПО SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+
+  for (
+    const group of scoreGroups
+  ) {
+
+    const row =
+      scoreMap.get(group);
+
+
+    const avg =
+      row?.avg_goal_after !== null &&
+      row?.avg_goal_after !== undefined
+        ? Number(
+            row.avg_goal_after
+          )
+        : null;
+
+
+    message +=
+      `${group}: ` +
+      (
+        avg !== null
+          ? avg.toFixed(1) + " мин."
+          : "—"
+      ) +
+      `\n`;
+
+  }
+
+
+  // ==========================================================
+  // ENTRY MINUTE
+  // ==========================================================
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+⏱ ПО ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+`;
+
+
+  const minuteRows =
+    minuteStats?.results || [];
+
+
+  const minuteMap =
+    new Map();
+
+
+  for (
+    const row of minuteRows
+  ) {
+
+    minuteMap.set(
+      row.minute_group,
+      row
+    );
+
+  }
+
+
+  const minuteGroups = [
+    "10–19′",
+    "20–29′",
+    "30–42′"
+  ];
+
+
+  for (
+    const group of minuteGroups
+  ) {
+
+    const row =
+      minuteMap.get(group);
+
+
+    if (!row) {
+
+      message +=
+        `${group}: 0 ENTRY\n`;
+
+      continue;
+
+    }
+
+
+    const total =
+      Number(
+        row.total || 0
+      );
+
+
+    const goals =
+      Number(
+        row.goals || 0
+      );
+
+
+    const noGoals =
+      Number(
+        row.no_goals || 0
+      );
+
+
+    const resolved =
+      goals +
+      noGoals;
+
+
+    const rate =
+      resolved > 0
+        ? goals /
+          resolved *
+          100
+        : 0;
+
+
+    message +=
+      `${group}: ${total} ENTRY | ` +
+      `${goals} GOAL | ` +
+      `${noGoals} NO GOAL | ` +
+      `${rate.toFixed(1)}%\n`;
+
+  }
+
+
+  // ==========================================================
+  // LEAGUES
+  // ==========================================================
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+🏆 ПО ЛИГА
+━━━━━━━━━━━━━━━━
+`;
+
+
+  const leagueRows =
+    leagueStats?.results || [];
+
+
+  if (
+    leagueRows.length === 0
+  ) {
+
+    message +=
+      `Няма данни.\n`;
+
+  } else {
+
+    for (
+      const row of leagueRows
+    ) {
+
+      const league =
+        String(
+          row?.league ||
+          "UNKNOWN"
+        );
+
+
+      const total =
+        Number(
+          row?.total || 0
+        );
+
+
+      const goals =
+        Number(
+          row?.goals || 0
+        );
+
+
+      const noGoals =
+        Number(
+          row?.no_goals || 0
+        );
+
+
+      const resolved =
+        goals +
+        noGoals;
+
+
+      const rate =
+        resolved > 0
+          ? goals /
+            resolved *
+            100
+          : 0;
+
+
+      message +=
+        `${league}\n` +
+        `ENTRY: ${total} | ` +
+        `GOAL: ${goals} | ` +
+        `NO GOAL: ${noGoals} | ` +
+        `${rate.toFixed(1)}%\n\n`;
+
+    }
+
+  }
+
+
+  // ==========================================================
+  // WEEKLY
+  // ==========================================================
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+📈 СЕДМИЦА
+━━━━━━━━━━━━━━━━
+
+📅 ${weekStart} → ${today}
+
+🎯 ENTRY: ${weekTotal}
+
+🟢 GOAL HIT: ${weekGoals}
+
+🔴 NO GOAL: ${weekNoGoals}
+
+📈 Успеваемост:
+${weekRate.toFixed(1)}%
+
+⏱ Средно до гол:
+${
+    weekAvg !== null
+      ? weekAvg.toFixed(1) + " мин."
       : "—"
   }
 
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
+
+
+  return message;
+
+}
+
+
+// ============================================================
+// WEEK START — MONDAY
+// ============================================================
+
+function getWeekStartDate(
+  dateString
+) {
+
+  const parts =
+    dateString
+      .split("-")
+      .map(Number);
+
+
+  const d =
+    new Date(
+      Date.UTC(
+        parts[0],
+        parts[1] - 1,
+        parts[2]
+      )
+    );
+
+
+  const day =
+    d.getUTCDay();
+
+
+  const diff =
+    day === 0
+      ? 6
+      : day - 1;
+
+
+  d.setUTCDate(
+    d.getUTCDate() -
+    diff
+  );
+
+
+  return (
+
+    d.getUTCFullYear() +
+    "-" +
+
+    String(
+      d.getUTCMonth() + 1
+    ).padStart(2, "0") +
+
+    "-" +
+
+    String(
+      d.getUTCDate()
+    ).padStart(2, "0")
+
+  );
 
 }
 
@@ -1653,7 +2516,7 @@ ${existing.entry_minute}'
 📊 HUNTER SCORE:
 ${existing.hunter_score}/100
 
-⏱ КРАЙ НА МАЧА
+⏱ КРАЙ НА 1H
 
 Резултат:
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
@@ -1896,4 +2759,4 @@ function json(
 
   );
 
-    }
+  }
