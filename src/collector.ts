@@ -1,138 +1,161 @@
 // ============================================================
 // GOAL WATCH — FLASHSCORE COLLECTOR V1
 // ============================================================
-// Flashscore -> Collector -> JSON
-// Re update 
-// V1 НЕ използва:
-// - Hunter
-// - Tracker
-// - D1
-// - Telegram
-// - текущия сайт
+// FLASHscore ONLY
 //
-// Цел:
-// Само взима Flashscore feed и връща нормализирани мачове.
+// This Worker:
+//   1. Fetches the Flashscore live feed
+//   2. Parses the raw Flashscore events
+//   3. Returns normalized live-match data
+//
+// NO:
+//   - Hunter
+//   - Tracker
+//   - D1
+//   - Telegram
+//   - Website logic
 // ============================================================
 
-const FLASHSCORE_URL =
+const MAIN_URL =
   "https://www.flashscore.com/x/feed/f_1_0_3_en_1";
 
-const HEADERS = {
+// ------------------------------------------------------------
+// THESE ARE THE SAME FLASHscore REQUEST HEADERS USED BY
+// THE WORKING V3 WORKER.
+// ------------------------------------------------------------
+
+const headers = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36",
-  Accept: "*/*",
-  "Accept-Language": "en-US,en;q=0.9",
-  Referer: "https://www.flashscore.com/",
+
+  "Accept": "*/*",
+
+  "Accept-Language":
+    "en-US,en;q=0.9",
+
+  "Referer":
+    "https://www.flashscore.com/",
+
+  "Origin":
+    "https://www.flashscore.com",
+
+  "x-fsign":
+    "SW9D1eZo",
+
+  "Cache-Control":
+    "no-cache"
 };
 
 // ------------------------------------------------------------
-// FIELD READER
+// FLASHscore PARSER
+// SAME FORMAT AS WORKING V3
 // ------------------------------------------------------------
 
-function getField(raw: string, key: string): string {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function parse(text: string) {
 
-  const match = raw.match(
-    new RegExp(`(?:^|~)${escapedKey}÷([^~]*)`)
-  );
+  const result: any[] = [];
 
-  return match ? match[1] : "";
-}
+  let current: any = null;
 
-// ------------------------------------------------------------
-// MATCH PARSER
-// ------------------------------------------------------------
+  // Flashscore:
+  //
+  // fields separated by U+00AC
+  // key/value separated by U+00F7
+  //
+  // AA = event ID
 
-function parseMatch(raw: string) {
-  const id = getField(raw, "AA");
+  for (
+    const field of text.split("\xAC")
+  ) {
 
-  if (!id) return null;
+    if (!field) continue;
 
-  const home =
-    getField(raw, "AE") ||
-    getField(raw, "CX") ||
-    getField(raw, "FH") ||
-    "";
+    const separator =
+      field.indexOf("\xF7");
 
-  const away =
-    getField(raw, "AF") ||
-    getField(raw, "FK") ||
-    "";
+    if (separator === -1)
+      continue;
 
-  const homeScore =
-    getField(raw, "AG") ||
-    getField(raw, "AS") ||
-    "0";
+    const key =
+      field
+        .slice(0, separator)
+        .replace(/^~/, "");
 
-  const awayScore =
-    getField(raw, "AH") ||
-    getField(raw, "AZ") ||
-    "0";
+    const value =
+      field.slice(separator + 1);
 
-  const status = getField(raw, "AB");
+    if (!key)
+      continue;
 
-  const timestamp =
-    getField(raw, "AD") ||
-    getField(raw, "ADE") ||
-    "";
+    // --------------------------------------------------------
+    // NEW EVENT
+    // --------------------------------------------------------
 
-  const league = getField(raw, "ZA");
+    if (key === "AA") {
 
-  const country =
-    getField(raw, "ZY") ||
-    getField(raw, "ZAF") ||
-    "";
+      if (current) {
+        result.push(current);
+      }
 
-  return {
-    id,
-    home,
-    away,
+      current = {
+        id: value,
+        raw: {}
+      };
 
-    home_score: homeScore,
-    away_score: awayScore,
+      continue;
+    }
 
-    status,
-    timestamp,
+    // --------------------------------------------------------
+    // EVENT FIELD
+    // --------------------------------------------------------
 
-    league,
-    country
-  };
-}
-
-// ------------------------------------------------------------
-// FEED PARSER
-// ------------------------------------------------------------
-
-function parseFeed(feed: string) {
-  const records = feed.split("~AA÷").slice(1);
-
-  const matches = [];
-
-  for (const record of records) {
-    const raw = "AA÷" + record;
-
-    const match = parseMatch(raw);
-
-    if (match) {
-      matches.push(match);
+    if (current) {
+      current.raw[key] = value;
     }
   }
 
-  return matches;
+  // Last event
+  if (current) {
+    result.push(current);
+  }
+
+  // ----------------------------------------------------------
+  // REMOVE DUPLICATES
+  // ----------------------------------------------------------
+
+  const seen =
+    new Set<string>();
+
+  return result.filter(
+    (match) => {
+
+      if (!match?.id)
+        return false;
+
+      if (seen.has(match.id))
+        return false;
+
+      seen.add(match.id);
+
+      return true;
+    }
+  );
 }
 
 // ------------------------------------------------------------
-// JSON RESPONSE
+// JSON
 // ------------------------------------------------------------
 
 function json(
   data: unknown,
   status = 200
 ): Response {
+
   return new Response(
     JSON.stringify(data, null, 2),
     {
       status,
+
       headers: {
         "Content-Type":
           "application/json; charset=utf-8",
@@ -141,21 +164,54 @@ function json(
           "no-store",
 
         "Access-Control-Allow-Origin":
-          "*"
+          "*",
+
+        "Access-Control-Allow-Methods":
+          "GET, HEAD, OPTIONS",
+
+        "Access-Control-Allow-Headers":
+          "Content-Type, Authorization"
       }
     }
   );
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // WORKER
-// ------------------------------------------------------------
+// ============================================================
 
 export default {
 
   async fetch(
     request: Request
   ): Promise<Response> {
+
+    // --------------------------------------------------------
+    // CORS
+    // --------------------------------------------------------
+
+    if (
+      request.method === "OPTIONS"
+    ) {
+
+      return new Response(
+        null,
+        {
+          status: 204,
+
+          headers: {
+            "Access-Control-Allow-Origin":
+              "*",
+
+            "Access-Control-Allow-Methods":
+              "GET, HEAD, OPTIONS",
+
+            "Access-Control-Allow-Headers":
+              "Content-Type, Authorization"
+          }
+        }
+      );
+    }
 
     const url =
       new URL(request.url);
@@ -168,13 +224,19 @@ export default {
       url.pathname === "/" ||
       url.pathname === "/health"
     ) {
+
       return json({
         success: true,
+
         worker:
           "goal-watch-collector",
-        version: "V1",
+
+        version:
+          "V1",
+
         source:
           "FLASHSCORE ONLY",
+
         status:
           "online"
       });
@@ -187,10 +249,13 @@ export default {
     if (
       url.pathname !== "/matches"
     ) {
+
       return json(
         {
           success: false,
-          error: "Not found",
+
+          error:
+            "Not found",
 
           available_endpoints: [
             "/",
@@ -205,44 +270,58 @@ export default {
     try {
 
       // ------------------------------------------------------
-      // GET FLASHSCORE FEED
+      // EXACT WORKING FLASHscore REQUEST METHOD
       // ------------------------------------------------------
 
-      const response =
+      const mainRes =
         await fetch(
-          FLASHSCORE_URL,
+          MAIN_URL +
+            "?_=" +
+            Date.now(),
+
           {
-            method: "GET",
-            headers: HEADERS
+            headers,
+
+            cache:
+              "no-store"
           }
         );
 
-      const feed =
-        await response.text();
+      const mainText =
+        await mainRes.text();
 
       // ------------------------------------------------------
-      // FLASHCORE ERROR
+      // FLASHscore ERROR
       // ------------------------------------------------------
 
-      if (!response.ok) {
+      if (!mainRes.ok) {
 
         return json(
           {
             success: false,
 
+            worker:
+              "goal-watch-collector",
+
+            version:
+              "V1",
+
             source:
               "FLASHSCORE ONLY",
 
+            stage:
+              "live_feed",
+
             feed_status:
-              response.status,
+              mainRes.status,
 
             feed_length:
-              feed.length,
+              mainText.length,
 
-            error:
-              "Flashscore feed request failed"
+            message:
+              "Flashscore live feed failed"
           },
-          502
+          503
         );
       }
 
@@ -251,28 +330,28 @@ export default {
       // ------------------------------------------------------
 
       const matches =
-        parseFeed(feed);
+        parse(mainText);
 
       // ------------------------------------------------------
-      // LIVE
+      // LIVE = AB 2
+      // SAME AS WORKING V3
       // ------------------------------------------------------
 
       const liveMatches =
         matches.filter(
-          match =>
-            match.status === "1" ||
-            match.status === "2"
+          m =>
+            m?.raw?.AB === "2"
         );
 
       // ------------------------------------------------------
-      // 0:0
+      // 0:0 LIVE
       // ------------------------------------------------------
 
       const zeroZeroMatches =
         liveMatches.filter(
-          match =>
-            match.home_score === "0" &&
-            match.away_score === "0"
+          m =>
+            String(m?.raw?.AG ?? "0") === "0" &&
+            String(m?.raw?.AH ?? "0") === "0"
         );
 
       // ------------------------------------------------------
@@ -286,15 +365,16 @@ export default {
         const match of matches
       ) {
 
-        const status =
-          match.status || "unknown";
+        const ab =
+          match?.raw?.AB ??
+          "MISSING";
 
-        abCounts[status] =
-          (abCounts[status] || 0) + 1;
+        abCounts[ab] =
+          (abCounts[ab] || 0) + 1;
       }
 
       // ------------------------------------------------------
-      // RESPONSE
+      // RETURN
       // ------------------------------------------------------
 
       return json({
@@ -308,61 +388,10 @@ export default {
           "V1",
 
         parser:
-          "FLASHSCORE V1",
+          "FLASHscore V3 parser",
 
         source:
           "FLASHSCORE ONLY",
 
         timestamp:
-          new Date().toISOString(),
-
-        feed: {
-
-          status:
-            response.status,
-
-          length:
-            feed.length,
-
-          total_matches:
-            matches.length,
-
-          live_matches:
-            liveMatches.length,
-
-          zero_zero_matches:
-            zeroZeroMatches.length,
-
-          ab_counts:
-            abCounts
-        },
-
-        matches
-
-      });
-
-    } catch (error) {
-
-      return json(
-        {
-          success: false,
-
-          worker:
-            "goal-watch-collector",
-
-          version:
-            "V1",
-
-          source:
-            "FLASHSCORE ONLY",
-
-          error:
-            error instanceof Error
-              ? error.message
-              : String(error)
-        },
-        500
-      );
-    }
-  }
-};
+          new Date().
