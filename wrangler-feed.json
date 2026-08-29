@@ -1,0 +1,8 @@
+{
+  "compatibility_date": "2026-08-29",
+  "main": "src/collector.ts",
+  "name": "goal-watch-feed",
+  "observability": {
+    "enabled": true
+  }
+}
