@@ -1,10 +1,11 @@
 export default {
+
   async fetch(request, env) {
 
     const url = new URL(request.url);
 
     // ========================================================
-    // TEMP FLASHscore DIAGNOSTIC v1
+    // FLASHscore DIAGNOSTIC
     // ========================================================
 
     if (url.pathname === "/debug-flashscore") {
@@ -16,13 +17,17 @@ export default {
 
         const response = await fetch(target, {
           method: "GET",
+
           headers: {
             "User-Agent":
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
+
             "Accept":
               "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+
             "Accept-Language":
               "en-US,en;q=0.9",
+
             "Cache-Control":
               "no-cache"
           }
@@ -32,35 +37,47 @@ export default {
           await response.text();
 
         return new Response(
-          JSON.stringify({
-            success: true,
 
-            target,
+          JSON.stringify(
+            {
+              success: true,
 
-            http_status:
-              response.status,
+              target:
+                target,
 
-            content_type:
-              response.headers.get(
-                "content-type"
-              ),
+              http_status:
+                response.status,
 
-            content_length:
-              body.length,
+              content_type:
+                response.headers.get(
+                  "content-type"
+                ),
 
-            final_url:
-              response.url,
+              content_length:
+                body.length,
 
-            first_500_chars:
-              body.substring(0, 500)
+              final_url:
+                response.url,
 
-          }, null, 2),
+              first_500_chars:
+                body.substring(
+                  0,
+                  500
+                )
+            },
+            null,
+            2
+          ),
+
           {
             status: 200,
 
             headers: {
-              "content-type":
-                "application/json; charset=utf-8"
+              "Content-Type":
+                "application/json; charset=utf-8",
+
+              "Cache-Control":
+                "no-store"
             }
           }
         );
@@ -68,29 +85,70 @@ export default {
       } catch (error) {
 
         return new Response(
-          JSON.stringify({
-            success: false,
 
-            error:
-              error?.message ||
-              String(error)
+          JSON.stringify(
+            {
+              success: false,
 
-          }, null, 2),
+              error:
+                error instanceof Error
+                  ? error.message
+                  : String(error)
+            },
+            null,
+            2
+          ),
+
           {
             status: 500,
 
             headers: {
-              "content-type":
-                "application/json; charset=utf-8"
+              "Content-Type":
+                "application/json; charset=utf-8",
+
+              "Cache-Control":
+                "no-store"
             }
           }
         );
-
       }
     }
 
     // ========================================================
-    // EXISTING WORKER CODE BELOW
+    // DEFAULT STATUS
     // ========================================================
 
-    // ТУК ОСТАВЯШ СТАРИЯ worker код
+    return new Response(
+
+      JSON.stringify(
+        {
+          success: true,
+
+          worker:
+            "GOAL WATCH — FLASHscore DIAGNOSTIC",
+
+          status:
+            "ONLINE",
+
+          endpoint:
+            "/debug-flashscore"
+        },
+        null,
+        2
+      ),
+
+      {
+        status: 200,
+
+        headers: {
+          "Content-Type":
+            "application/json; charset=utf-8",
+
+          "Cache-Control":
+            "no-store"
+        }
+      }
+    );
+  }
+
+};
