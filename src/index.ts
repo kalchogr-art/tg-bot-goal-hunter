@@ -1492,10 +1492,14 @@ function isHunterCandidate(
   score
 ) {
 
+  // ----------------------------------------------------------
+  // ВАЖНО:
+  // Използваме същия fallback за минутата,
+  // който използва processMatch().
+  // ----------------------------------------------------------
+
   const minute =
-    Number(
-      m?.minute ?? 0
-    );
+    getMatchMinute(m);
 
 
   const period =
@@ -2015,7 +2019,7 @@ function formatEntryMessage(
     m?.minute_display ||
     (
       Number(
-        m?.minute || 0
+        getMatchMinute(m)
       ) +
       "'"
     );
@@ -2358,4 +2362,4 @@ function json(
 
   );
 
-        }
+    }
