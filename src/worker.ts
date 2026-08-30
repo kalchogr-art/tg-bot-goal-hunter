@@ -19,7 +19,7 @@ export default {
     }
 
     // =================================================
-    // FLASHscore ONLY
+    // FLASHSCORE ONLY
     // =================================================
 
     const MAIN_URL =
@@ -53,13 +53,14 @@ export default {
       // MAIN LIVE FEED
       // =================================================
 
-      const mainRes = await fetch(
-        MAIN_URL + "?_=" + Date.now(),
-        {
-          headers,
-          cache: "no-store"
-        }
-      );
+      const mainRes =
+        await fetch(
+          MAIN_URL + "?_=" + Date.now(),
+          {
+            headers,
+            cache: "no-store"
+          }
+        );
 
       const mainText =
         await mainRes.text();
@@ -704,7 +705,7 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v26",
+          "flashscore_only_v27",
 
         success:
           true,
@@ -714,6 +715,33 @@ export default {
 
         timestamp:
           new Date().toISOString(),
+
+        hunter_rules: {
+
+          window:
+            "10-42",
+
+          thresholds: {
+
+            "10-29":
+              61,
+
+            "30-34":
+              65,
+
+            "35-37":
+              68,
+
+            "38-39":
+              72,
+
+            "40-42":
+              75
+          },
+
+          after_42:
+            false
+        },
 
         feed: {
 
@@ -749,7 +777,7 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v26",
+          "flashscore_only_v27",
 
         success:
           false,
@@ -768,7 +796,7 @@ export default {
 
 
 // =====================================================
-// FETCH FLASHscore ENDPOINT
+// FETCH FLASHSCORE ENDPOINT
 // =====================================================
 
 async function fetchEndpoint(
@@ -1645,6 +1673,48 @@ function calculateGoalPressure(data) {
 
 
 // =====================================================
+// HUNTER DYNAMIC THRESHOLD
+// =====================================================
+
+function getHunterMinScore(
+  minute,
+  period
+) {
+
+  if (
+    period !== "1H" ||
+    minute < 10 ||
+    minute > 42
+  ) {
+
+    return null;
+  }
+
+  if (minute <= 29) {
+
+    return 61;
+  }
+
+  if (minute <= 34) {
+
+    return 65;
+  }
+
+  if (minute <= 37) {
+
+    return 68;
+  }
+
+  if (minute <= 39) {
+
+    return 72;
+  }
+
+  return 75;
+}
+
+
+// =====================================================
 // GOAL DETECTOR
 // =====================================================
 
@@ -2051,6 +2121,20 @@ function calculateGoalSignal(data) {
     );
 
   // =================================================
+  // HUNTER DYNAMIC RULE
+  // =================================================
+
+  const hunterMinScore =
+    getHunterMinScore(
+      minute,
+      period
+    );
+
+  const hunterEligible =
+    hunterMinScore !== null &&
+    score >= hunterMinScore;
+
+  // =================================================
   // SIGNAL
   // =================================================
 
@@ -2086,12 +2170,16 @@ function calculateGoalSignal(data) {
     "NONE";
 
   if (
-    score >= 60
+    hunterEligible
   ) {
 
     target =
       "NEXT_GOAL";
   }
+
+  // =================================================
+  // RESULT
+  // =================================================
 
   return {
 
@@ -2100,6 +2188,12 @@ function calculateGoalSignal(data) {
     signal,
 
     target,
+
+    hunter_min_score:
+      hunterMinScore,
+
+    hunter_eligible:
+      hunterEligible,
 
     xg_used:
       valid(xg),
@@ -2207,4 +2301,4 @@ function json(
       }
     }
   );
-    }
+            }
