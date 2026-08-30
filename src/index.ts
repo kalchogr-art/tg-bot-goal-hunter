@@ -1,39 +1,36 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6
+// GOAL WATCH — HUNTER TRACKER V7
 // LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
 // V27 SERVICE BINDING
 //
-// FIXES:
-// 1. REAL GOAL MINUTE FROM V27
-// 2. DELAYED FEED DOES NOT CHANGE GOAL MINUTE
-// 3. ONLY GOAL AFTER ENTRY IS ACCEPTED
-// 4. 0:0 NO GOAL ONLY AT OFFICIAL HALF TIME
-// 5. SESSION START 12:15
-// 6. LOW CPU — ONE ACTIVE SIGNAL QUERY
-// 7. SAFE TRACKING MAP
-// 8. DAILY + ALL-TIME STATS
-// 9. ATOMIC ONE-ENTRY PER MATCH_ID
+// FIX 1:
+// REAL GOAL HIT restored.
+// Uses REAL V27 goal event minute.
+// Score change alone NEVER invents goal minute.
+//
+// FIX 2:
+// OFFICIAL HT 0:0 -> wait 10 minutes -> NO GOAL.
+//
+// Example:
+//
+// ENTRY 35'
+// HT    45'
+//       +
+//       10 minutes
+//       =
+// NO GOAL
+//
+// If GOAL arrives during those 10 minutes:
+// GOAL HIT immediately.
+//
+// FT 0:0 is NOT used for NO GOAL.
 //
 // IMPORTANT:
-// A match can have ONLY ONE Hunter ENTRY during its lifetime.
+// One ENTRY per match_id for lifetime.
 //
-// After GOAL HIT or NO GOAL:
+// After GOAL or NO GOAL:
 //
-//     SAME match_id = PERMANENTLY BLOCKED
-//
-// Delayed V27 feed:
-//
-//     SCORE CHANGES
-//     +
-//     REAL GOAL EVENT NOT YET AVAILABLE
-//
-//     => DO NOT GUESS THE MINUTE
-//     => KEEP TRACKING
-//     => WAIT FOR REAL V27 GOAL EVENT
-//
-// NO GOAL:
-//
-//     ONLY when V27 explicitly reports official HT.
+// SAME match_id = permanently blocked
 //
 // ============================================================
 
@@ -49,6 +46,13 @@ const TIME_ZONE = "Europe/Sofia";
 const SESSION_START_HOUR = 12;
 
 const SESSION_START_MINUTE = 15;
+
+// ============================================================
+// NEW FIX
+// Minutes to wait after official HT before NO GOAL
+// ============================================================
+
+const HT_NO_GOAL_DELAY_MINUTES = 10;
 
 
 // ============================================================
@@ -220,7 +224,7 @@ export default {
       success: true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6",
+        "GOAL WATCH — HUNTER TRACKER V7",
 
       status:
         "ONLINE",
@@ -444,7 +448,8 @@ async function processTracker(env) {
           entry_minute,
           hunter_score,
           entry_home_score,
-          entry_away_score
+          entry_away_score,
+          updated_at
         FROM hunter_signals
         WHERE status = 'TRACKING'
       `)
@@ -484,33 +489,6 @@ async function processTracker(env) {
       id,
       signal
     );
-
-  }
-
-
-  // ==========================================================
-  // CURRENT MATCH IDS
-  // ==========================================================
-
-  const currentIds =
-    new Set();
-
-
-  for (
-    const match of matches
-  ) {
-
-    const id =
-      String(
-        match?.id || ""
-      );
-
-
-    if (id) {
-
-      currentIds.add(id);
-
-    }
 
   }
 
@@ -617,23 +595,6 @@ async function processTracker(env) {
 
   }
 
-
-  // ==========================================================
-  // IMPORTANT
-  //
-  // NO automatic "missing match = NO GOAL".
-  //
-  // NO GOAL is created ONLY from official V27 HT.
-  //
-  // This prevents:
-  //
-  // match disappears from feed
-  // ->
-  // automatic NO GOAL
-  //
-  // without real halftime confirmation.
-  // ==========================================================
-
 }
 
 
@@ -710,17 +671,17 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // SCORE CHANGED
+  // FIX 1
+  //
+  // SCORE CHANGE -> SEARCH REAL GOAL EVENT
+  //
+  // We NEVER use currentMinute as goal minute.
   // ==========================================================
 
   const scoreChanged =
     home > entryHome ||
     away > entryAway;
 
-
-  // ==========================================================
-  // GOAL DETECTED
-  // ==========================================================
 
   if (scoreChanged) {
 
@@ -729,30 +690,22 @@ async function processTrackingMatch(
         m,
         entryHome,
         entryAway,
-        entryMinute,
-        currentMinute
+        entryMinute
       );
 
 
-    // ========================================================
-    // CRITICAL FIX:
+    // --------------------------------------------------------
+    // Real event not available yet
     //
-    // NEVER use currentMinute as a fake goal minute.
-    //
-    // If V27 has changed the score but has not yet supplied
-    // the real goal event/minute:
-    //
-    // KEEP TRACKING.
-    //
-    // Next Cron will check V27 again.
-    // ========================================================
+    // Keep tracking.
+    // --------------------------------------------------------
 
     if (
       goalMinute === null
     ) {
 
       console.log(
-        "GOAL SCORE DETECTED BUT REAL MINUTE NOT AVAILABLE",
+        "GOAL SCORE DETECTED - WAITING FOR REAL EVENT",
         id,
         {
           entryMinute,
@@ -777,9 +730,7 @@ async function processTrackingMatch(
 
 
     // ========================================================
-    // FINAL DB UPDATE
-    //
-    // status TRACKING condition prevents duplicate GOAL.
+    // FINAL ATOMIC GOAL UPDATE
     // ========================================================
 
     const update =
@@ -822,6 +773,10 @@ async function processTrackingMatch(
     trackingMap.delete(id);
 
 
+    // ========================================================
+    // GOAL TELEGRAM
+    // ========================================================
+
     await sendTelegram(
       env,
       formatGoalMessage(
@@ -839,11 +794,22 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // OFFICIAL HALF TIME ONLY
+  // FIX 2
   //
-  // 0:0 by itself is NOT enough.
+  // OFFICIAL HT 0:0
   //
-  // V27 must explicitly report HT.
+  // We record HT time ONCE.
+  //
+  // updated_at is used as the persistent HT timestamp.
+  //
+  // IMPORTANT:
+  // We only set it when:
+  //
+  //     0:0
+  //     +
+  //     official HT
+  //
+  // After that we DO NOT reset it every Cron.
   // ==========================================================
 
   if (
@@ -851,6 +817,96 @@ async function processTrackingMatch(
     away === 0 &&
     isFirstHalfFinished(m)
   ) {
+
+    const entryTimestamp =
+      parseDate(
+        existing.entry_time
+      );
+
+
+    const markerTimestamp =
+      parseDate(
+        existing.updated_at
+      );
+
+
+    // --------------------------------------------------------
+    // HT has not yet been recorded.
+    //
+    // updated_at is normally equal to entry_time after ENTRY.
+    // --------------------------------------------------------
+
+    const htAlreadyRecorded =
+      entryTimestamp !== null &&
+      markerTimestamp !== null &&
+      markerTimestamp.getTime() >
+        entryTimestamp.getTime();
+
+
+    if (
+      !htAlreadyRecorded
+    ) {
+
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          now.toISOString(),
+          existing.id
+        )
+        .run();
+
+
+      console.log(
+        "OFFICIAL HT RECORDED",
+        id,
+        now.toISOString()
+      );
+
+
+      return;
+
+    }
+
+
+    // ========================================================
+    // HT WAS ALREADY RECORDED
+    //
+    // Check whether +10 minutes have passed.
+    // ========================================================
+
+    const htTime =
+      markerTimestamp;
+
+
+    const elapsedMinutes =
+      (
+        now.getTime() -
+        htTime.getTime()
+      ) /
+      60000;
+
+
+    if (
+      elapsedMinutes <
+      HT_NO_GOAL_DELAY_MINUTES
+    ) {
+
+      return;
+
+    }
+
+
+    // ========================================================
+    // +10 MINUTES AFTER HT
+    //
+    // Still 0:0 -> NO GOAL
+    // ========================================================
 
     const update =
       await env.DB
@@ -896,6 +952,12 @@ async function processTrackingMatch(
       )
     );
 
+
+    console.log(
+      "NO GOAL AFTER HT + 10 MINUTES",
+      id
+    );
+
   }
 
 }
@@ -905,23 +967,19 @@ async function processTrackingMatch(
 // REAL GOAL MINUTE
 // ============================================================
 //
-// IMPORTANT:
+// Priority:
 //
-// There is NO currentMinute fallback.
+// 1. V27 goal_events
+// 2. V27 goals
+// 3. V27 events
+// 4. V27 incidents
+// 5. nested V27 goal arrays
 //
-// If V27 says:
-// score = 1:0
-// minute = 38
+// NEVER use current match minute.
 //
-// but the actual event says:
-// goal = 35'
+// Goal must be:
 //
-// result = 35'
-//
-// If V27 does not yet expose the event:
-// result = null
-//
-// Tracker waits for the next V27 update.
+//     > ENTRY MINUTE
 //
 // ============================================================
 
@@ -929,74 +987,117 @@ function getRealGoalMinute(
   m,
   entryHome,
   entryAway,
-  entryMinute,
-  currentMinute
+  entryMinute
 ) {
 
   const candidates = [];
 
 
   // ----------------------------------------------------------
-  // DIRECT GOALS
+  // Direct V27 fields
   // ----------------------------------------------------------
 
-  if (
-    Array.isArray(m?.goals)
-  ) {
-
-    candidates.push(
-      ...m.goals
-    );
-
-  }
+  addArray(
+    candidates,
+    m?.goal_events
+  );
 
 
-  // ----------------------------------------------------------
-  // EVENTS
-  // ----------------------------------------------------------
+  addArray(
+    candidates,
+    m?.goals
+  );
 
-  if (
-    Array.isArray(m?.events)
-  ) {
 
-    candidates.push(
-      ...m.events
-    );
+  addArray(
+    candidates,
+    m?.events
+  );
 
-  }
+
+  addArray(
+    candidates,
+    m?.incidents
+  );
 
 
   // ----------------------------------------------------------
-  // INCIDENTS
+  // Possible nested V27 structures
   // ----------------------------------------------------------
 
-  if (
-    Array.isArray(m?.incidents)
-  ) {
+  addArray(
+    candidates,
+    m?.raw?.goal_events
+  );
 
-    candidates.push(
-      ...m.incidents
-    );
 
-  }
+  addArray(
+    candidates,
+    m?.raw?.goals
+  );
+
+
+  addArray(
+    candidates,
+    m?.raw?.events
+  );
+
+
+  addArray(
+    candidates,
+    m?.raw?.incidents
+  );
+
+
+  addArray(
+    candidates,
+    m?.data?.goal_events
+  );
+
+
+  addArray(
+    candidates,
+    m?.data?.goals
+  );
+
+
+  addArray(
+    candidates,
+    m?.data?.events
+  );
 
 
   // ----------------------------------------------------------
-  // GOAL EVENTS
+  // Flashscore parser structures
   // ----------------------------------------------------------
 
-  if (
-    Array.isArray(
-      m?.goal_events
-    )
-  ) {
+  addArray(
+    candidates,
+    m?.raw?.df_sui
+  );
 
-    candidates.push(
-      ...m.goal_events
-    );
 
-  }
+  addArray(
+    candidates,
+    m?.raw?.df_sui_1
+  );
 
+
+  addArray(
+    candidates,
+    m?.df_sui
+  );
+
+
+  addArray(
+    candidates,
+    m?.df_sui_1
+  );
+
+
+  // ----------------------------------------------------------
+  // Search
+  // ----------------------------------------------------------
 
   const validGoals = [];
 
@@ -1006,68 +1107,116 @@ function getRealGoalMinute(
   ) {
 
     if (
-      !event ||
-      typeof event !== "object"
+      !event
     ) {
 
       continue;
 
     }
 
+
+    // --------------------------------------------------------
+    // Object event
+    // --------------------------------------------------------
 
     if (
-      !isGoalEvent(event)
+      typeof event === "object" &&
+      !Array.isArray(event)
     ) {
 
-      continue;
+      if (
+        !isGoalEvent(event)
+      ) {
 
-    }
+        continue;
+
+      }
 
 
-    const minute =
-      extractEventMinute(
-        event
+      const minute =
+        extractEventMinute(
+          event
+        );
+
+
+      if (
+        minute === null
+      ) {
+
+        continue;
+
+      }
+
+
+      if (
+        minute <= 0 ||
+        minute > 130
+      ) {
+
+        continue;
+
+      }
+
+
+      if (
+        minute <= entryMinute
+      ) {
+
+        continue;
+
+      }
+
+
+      validGoals.push(
+        minute
       );
 
 
-    if (
-      minute === null
-    ) {
-
       continue;
 
     }
 
 
-    if (
-      minute <= 0 ||
-      minute > 130
-    ) {
-
-      continue;
-
-    }
-
-
-    // ========================================================
-    // GOAL MUST BE STRICTLY AFTER ENTRY
-    // ========================================================
+    // --------------------------------------------------------
+    // Array / parser event
+    //
+    // Flashscore parser may expose:
+    //
+    // IA = event type
+    // IB = event minute
+    //
+    // IA=1 => goal
+    // --------------------------------------------------------
 
     if (
-      minute <= entryMinute
+      Array.isArray(event)
     ) {
 
-      continue;
+      const goal =
+        parseFlashscoreArrayGoal(
+          event,
+          entryMinute
+        );
+
+
+      if (
+        goal !== null
+      ) {
+
+        validGoals.push(
+          goal
+        );
+
+      }
 
     }
-
-
-    validGoals.push(
-      minute
-    );
 
   }
 
+
+  // ==========================================================
+  // RETURN EARLIEST REAL GOAL AFTER ENTRY
+  // ==========================================================
 
   if (
     validGoals.length > 0
@@ -1083,16 +1232,134 @@ function getRealGoalMinute(
   }
 
 
-  // ==========================================================
-  // NO FALLBACK
-  // ==========================================================
-  //
-  // DO NOT RETURN currentMinute.
-  //
-  // The score change alone is not enough to determine the
-  // actual goal minute.
-  //
-  // ==========================================================
+  return null;
+
+}
+
+
+// ============================================================
+// ARRAY HELPER
+// ============================================================
+
+function addArray(
+  target,
+  value
+) {
+
+  if (
+    Array.isArray(value)
+  ) {
+
+    target.push(
+      ...value
+    );
+
+  }
+
+}
+
+
+// ============================================================
+// FLASHSCORE ARRAY GOAL
+// ============================================================
+//
+// Supports parser style:
+//
+// IA = event type
+// IB = event minute
+//
+// IA = 1 => GOAL
+//
+// Also supports object-like arrays where the values are
+// accessible by known positions.
+//
+// ============================================================
+
+function parseFlashscoreArrayGoal(
+  event,
+  entryMinute
+) {
+
+  if (
+    event.length === 0
+  ) {
+
+    return null;
+
+  }
+
+
+  // ----------------------------------------------------------
+  // Look for explicit type=1 and a nearby minute value.
+  // ----------------------------------------------------------
+
+  for (
+    let i = 0;
+    i < event.length;
+    i++
+  ) {
+
+    const value =
+      event[i];
+
+
+    const numeric =
+      Number(value);
+
+
+    if (
+      numeric !== 1
+    ) {
+
+      continue;
+
+    }
+
+
+    // --------------------------------------------------------
+    // IA=1
+    //
+    // Try following values as IB/minute.
+    // --------------------------------------------------------
+
+    for (
+      let j = i + 1;
+      j < Math.min(
+        event.length,
+        i + 5
+      );
+      j++
+    ) {
+
+      const minute =
+        parseMinuteValue(
+          event[j]
+        );
+
+
+      if (
+        minute === null
+      ) {
+
+        continue;
+
+      }
+
+
+      if (
+        minute > entryMinute &&
+        minute > 0 &&
+        minute <= 130
+      ) {
+
+        return minute;
+
+      }
+
+    }
+
+  }
+
 
   return null;
 
@@ -1105,18 +1372,40 @@ function getRealGoalMinute(
 
 function isGoalEvent(event) {
 
+  if (
+    event?.is_goal === true ||
+    event?.isGoal === true ||
+    event?.goal === true
+  ) {
+
+    return true;
+
+  }
+
+
   const values = [
 
     event?.type,
     event?.event_type,
+    event?.eventType,
+
     event?.incident_type,
     event?.incidentType,
+
     event?.kind,
+
     event?.name,
     event?.description,
+
     event?.action,
     event?.incident,
-    event?.event
+    event?.event,
+
+    event?.IA,
+    event?.ia,
+
+    event?.eventCode,
+    event?.event_code
 
   ];
 
@@ -1124,6 +1413,19 @@ function isGoalEvent(event) {
   for (
     const value of values
   ) {
+
+    // --------------------------------------------------------
+    // Flashscore event type 1
+    // --------------------------------------------------------
+
+    if (
+      Number(value) === 1
+    ) {
+
+      return true;
+
+    }
+
 
     const text =
       String(
@@ -1136,23 +1438,13 @@ function isGoalEvent(event) {
     if (
       text === "goal" ||
       text === "goals" ||
-      text.includes("goal")
+      text.includes("goal") ||
+      text === "1"
     ) {
 
       return true;
 
     }
-
-  }
-
-
-  if (
-    event?.is_goal === true ||
-    event?.isGoal === true ||
-    event?.goal === true
-  ) {
-
-    return true;
 
   }
 
@@ -1173,9 +1465,18 @@ function extractEventMinute(event) {
     event?.minute,
     event?.minute_display,
     event?.minuteDisplay,
+
     event?.match_minute,
+    event?.matchMinute,
+
     event?.incident_minute,
-    event?.time_minute
+    event?.incidentMinute,
+
+    event?.time_minute,
+    event?.timeMinute,
+
+    event?.IB,
+    event?.ib
 
   ];
 
@@ -1220,6 +1521,7 @@ function extractEventMinute(event) {
 
     event?.time,
     event?.match_time,
+    event?.matchTime,
     event?.clock
 
   ];
@@ -1241,9 +1543,12 @@ function extractEventMinute(event) {
 
     const minute =
       parseMinuteValue(
+
         value?.minute ??
         value?.display ??
-        value?.value
+        value?.value ??
+        value?.text
+
       );
 
 
@@ -1326,27 +1631,6 @@ function parseMinuteValue(value) {
 
 
   // ----------------------------------------------------------
-  // 35:12
-  // ----------------------------------------------------------
-
-  const clock =
-    text.match(
-      /^(\d{1,3}):(\d{1,2})/
-    );
-
-
-  if (
-    clock
-  ) {
-
-    return Number(
-      clock[1]
-    );
-
-  }
-
-
-  // ----------------------------------------------------------
   // 45+2
   // ----------------------------------------------------------
 
@@ -1363,6 +1647,27 @@ function parseMinuteValue(value) {
     return (
       Number(added[1]) +
       Number(added[2])
+    );
+
+  }
+
+
+  // ----------------------------------------------------------
+  // 35:12
+  // ----------------------------------------------------------
+
+  const clock =
+    text.match(
+      /^(\d{1,3}):(\d{1,2})/
+    );
+
+
+  if (
+    clock
+  ) {
+
+    return Number(
+      clock[1]
     );
 
   }
@@ -1395,10 +1700,51 @@ function parseMinuteValue(value) {
 
 
 // ============================================================
+// OFFICIAL FIRST HALF FINISHED
+// ============================================================
+//
+// Official HT can be:
+//
+// HT
+// HALFTIME
+// HALF TIME
+// 1H FINISHED
 // FIRST HALF FINISHED
+// END OF FIRST HALF
+// END OF 1H
+// 1H END
+//
+// Also:
+//
+// period = 2H
+//
+// because some V27 versions switch period to 2H immediately
+// after the official first-half whistle.
+//
 // ============================================================
 
 function isFirstHalfFinished(m) {
+
+  const period =
+    String(
+      m?.period || ""
+    )
+    .toUpperCase()
+    .trim();
+
+
+  if (
+    period === "2H" ||
+    period === "SECOND" ||
+    period === "SECOND HALF" ||
+    period === "2ND HALF" ||
+    period.includes("2H")
+  ) {
+
+    return true;
+
+  }
+
 
   const values = [
 
@@ -1509,18 +1855,6 @@ function hasHalfTimeValue(value) {
 // ============================================================
 // CREATE HUNTER ENTRY
 // ============================================================
-//
-// ATOMIC PROTECTION:
-//
-// The INSERT itself checks that this match_id has NEVER existed
-// before in hunter_signals.
-//
-// This is stronger than:
-//     trackingMap.has(id)
-//
-// because trackingMap only protects the current Worker execution.
-//
-// ============================================================
 
 async function createHunterEntry(
   env,
@@ -1543,10 +1877,6 @@ async function createHunterEntry(
 
   }
 
-
-  // ==========================================================
-  // MEMORY SAFETY
-  // ==========================================================
 
   if (
     trackingMap.has(id)
@@ -1610,19 +1940,7 @@ async function createHunterEntry(
 
 
   // ==========================================================
-  // ATOMIC INSERT
-  //
-  // If ANY record already exists for match_id:
-  //
-  //     INSERT = 0
-  //
-  // Therefore:
-  //
-  // TRACKING
-  // GOAL
-  // NO_GOAL
-  //
-  // all permanently block another ENTRY.
+  // ATOMIC ONE ENTRY PER MATCH
   // ==========================================================
 
   const insert =
@@ -1708,10 +2026,6 @@ async function createHunterEntry(
     );
 
 
-  // ==========================================================
-  // ALREADY EXISTS
-  // ==========================================================
-
   if (
     changes < 1
   ) {
@@ -1721,18 +2035,10 @@ async function createHunterEntry(
   }
 
 
-  // ==========================================================
-  // DB ROW ID
-  // ==========================================================
-
   const rowId =
     insert?.meta?.last_row_id ||
     null;
 
-
-  // ==========================================================
-  // ADD TO TRACKING MAP
-  // ==========================================================
 
   trackingMap.set(
     id,
@@ -1762,15 +2068,14 @@ async function createHunterEntry(
         home,
 
       entry_away_score:
-        away
+        away,
+
+      updated_at:
+        timestamp
 
     }
   );
 
-
-  // ==========================================================
-  // TELEGRAM ENTRY
-  // ==========================================================
 
   await sendTelegram(
     env,
@@ -1946,10 +2251,6 @@ async function buildStats(env) {
     local.date;
 
 
-  // ==========================================================
-  // DAILY
-  // ==========================================================
-
   const daily =
     await env.DB
       .prepare(`
@@ -2035,10 +2336,6 @@ async function buildStats(env) {
       : null;
 
 
-  // ==========================================================
-  // ALL TIME
-  // ==========================================================
-
   const main =
     await env.DB
       .prepare(`
@@ -2074,10 +2371,6 @@ async function buildStats(env) {
       `)
       .first();
 
-
-  // ==========================================================
-  // SCORE
-  // ==========================================================
 
   const scoreResult =
     await env.DB
@@ -2143,10 +2436,6 @@ async function buildStats(env) {
       .all();
 
 
-  // ==========================================================
-  // ENTRY MINUTE
-  // ==========================================================
-
   const minuteResult =
     await env.DB
       .prepare(`
@@ -2199,10 +2488,6 @@ async function buildStats(env) {
       .all();
 
 
-  // ==========================================================
-  // LEAGUE
-  // ==========================================================
-
   const leagueResult =
     await env.DB
       .prepare(`
@@ -2247,10 +2532,6 @@ async function buildStats(env) {
       `)
       .all();
 
-
-  // ==========================================================
-  // MAIN VALUES
-  // ==========================================================
 
   const total =
     Number(
@@ -3019,12 +3300,49 @@ ${existing.entry_minute}'
 📊 HUNTER SCORE:
 ${existing.hunter_score}/100
 
-⏱ КРАЙ НА 1H
+⏱ HT + 10 МИНУТИ
 
 Резултат:
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
 
 RESULT: NO GOAL`;
+
+}
+
+
+// ============================================================
+// PARSE DATE
+// ============================================================
+
+function parseDate(value) {
+
+  if (
+    !value
+  ) {
+
+    return null;
+
+  }
+
+
+  const d =
+    new Date(
+      value
+    );
+
+
+  if (
+    Number.isNaN(
+      d.getTime()
+    )
+  ) {
+
+    return null;
+
+  }
+
+
+  return d;
 
 }
 
@@ -3262,4 +3580,4 @@ function json(
 
   );
 
-  }
+       }
