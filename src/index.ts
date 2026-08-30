@@ -2,6 +2,7 @@
 // GOAL WATCH — HUNTER TRACKER V2
 // LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
 // V27 SERVICE BINDING
+// SESSION START — TEST 12:15
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -18,51 +19,69 @@ const TIME_ZONE = "Europe/Sofia";
 export default {
 
   async fetch(request, env) {
-const url = new URL(request.url);
 
-if (url.pathname === "/debug-proxy-binding") {
-  try {
-    const response = await env.V27.fetch(
-      "https://v27.internal/"
-    );
+    const url = new URL(request.url);
 
-    const text = await response.text();
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        binding: "V27",
-        status: response.status,
-        response: text
-      }, null, 2),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json; charset=utf-8",
-          "Cache-Control": "no-store"
-        }
+    // ========================================================
+    // DEBUG PROXY BINDING
+    // ========================================================
+
+    if (url.pathname === "/debug-proxy-binding") {
+
+      try {
+
+        const response =
+          await env.V27.fetch(
+            "https://v27.internal/"
+          );
+
+        const text =
+          await response.text();
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            binding: "V27",
+            status: response.status,
+            response: text
+          }, null, 2),
+          {
+            status: 200,
+            headers: {
+              "Content-Type":
+                "application/json; charset=utf-8",
+              "Cache-Control":
+                "no-store"
+            }
+          }
+        );
+
+      } catch (error) {
+
+        return new Response(
+          JSON.stringify({
+            success: false,
+            binding: "V27",
+            error:
+              error instanceof Error
+                ? error.message
+                : String(error)
+          }, null, 2),
+          {
+            status: 500,
+            headers: {
+              "Content-Type":
+                "application/json; charset=utf-8"
+            }
+          }
+        );
+
       }
-    );
 
-  } catch (error) {
-    return new Response(
-      JSON.stringify({
-        success: false,
-        binding: "V27",
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error)
-      }, null, 2),
-      {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json; charset=utf-8"
-        }
-      }
-    );
-  }
-}
+    }
+
+
     // ========================================================
     // OPTIONS
     // ========================================================
@@ -234,6 +253,34 @@ async function processTracker(env) {
 
 
   // ==========================================================
+  // SESSION START — TEST 12:15
+  // ==========================================================
+  //
+  // При Cron точно в 12:15 по Europe/Sofia
+  // изпраща SESSION START.
+  //
+  // ==========================================================
+
+  if (
+    local.hour === 12 &&
+    local.minute === 15
+  ) {
+
+    await sendTelegram(
+      env,
+`🚀 SESSION START
+
+📅 ${local.date}
+
+🕐 ${local.text}
+
+STATUS: SESSION START`
+    );
+
+  }
+
+
+  // ==========================================================
   // DAILY REPORT
   // ==========================================================
 
@@ -328,13 +375,6 @@ async function processTracker(env) {
   // ==========================================================
   // LOAD ONLY ACTIVE SIGNAL DATA
   // ==========================================================
-  //
-  // ВМЕСТО:
-  // SELECT *
-  //
-  // Зареждаме само необходимите колони.
-  //
-  // ==========================================================
 
   const result =
     await env.DB
@@ -419,10 +459,6 @@ async function processTracker(env) {
   // ==========================================================
   // PROCESS ONLY RELEVANT MATCHES
   // ==========================================================
-  //
-  // Няма DB query за всеки мач.
-  //
-  // ==========================================================
 
   for (
     const match of matches
@@ -439,7 +475,7 @@ async function processTracker(env) {
 
 
     // --------------------------------------------------------
-    // Ако вече се следи → processMatch
+    // EXISTING TRACKING
     // --------------------------------------------------------
 
     if (
@@ -473,10 +509,7 @@ async function processTracker(env) {
 
 
     // --------------------------------------------------------
-    // Нов Hunter кандидат
-    //
-    // Първо евтиният филтър.
-    // Само ако мине → insert.
+    // NEW HUNTER CANDIDATE
     // --------------------------------------------------------
 
     const score =
@@ -1342,10 +1375,6 @@ function getHunterScore(m) {
 
 async function buildStats(env) {
 
-  // ==========================================================
-  // DAILY FIRST
-  // ==========================================================
-
   const now =
     new Date();
 
@@ -1355,6 +1384,10 @@ async function buildStats(env) {
   const today =
     local.date;
 
+
+  // ==========================================================
+  // DAILY FIRST
+  // ==========================================================
 
   const daily =
     await env.DB
@@ -2690,4 +2723,4 @@ function json(
 
   );
 
-        }
+}
