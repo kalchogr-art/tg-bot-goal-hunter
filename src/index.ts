@@ -1,5 +1,5 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V4
+// GOAL WATCH — HUNTER TRACKER V5
 // LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
 // V27 SERVICE BINDING
 //
@@ -12,6 +12,12 @@
 // 6. LOW CPU — ONE ACTIVE SIGNAL QUERY
 // 7. SAFE TRACKING MAP
 // 8. DAILY + ALL-TIME STATS
+// 9. PREVENT DUPLICATE ENTRY FOR SAME MATCH_ID
+//
+// IMPORTANT:
+// A match can have ONLY ONE Hunter ENTRY during its lifetime.
+// After GOAL HIT or NO GOAL, the same match_id is permanently
+// blocked from creating another Hunter ENTRY.
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -184,7 +190,7 @@ export default {
       success: true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V4",
+        "GOAL WATCH — HUNTER TRACKER V5",
 
       status:
         "ONLINE",
@@ -433,6 +439,54 @@ async function processTracker(env) {
 
 
   // ==========================================================
+  // FIX #9
+  // LOAD FINISHED MATCHES — ONE DB QUERY
+  //
+  // Every match which already has GOAL or NO GOAL is blocked.
+  //
+  // This prevents:
+  //
+  // ENTRY 19'
+  // GOAL 27'
+  // ENTRY 30'  <-- BLOCKED
+  //
+  // ==========================================================
+
+  const finishedResult =
+    await env.DB
+      .prepare(`
+        SELECT DISTINCT match_id
+        FROM hunter_signals
+        WHERE status IN ('GOAL', 'NO_GOAL')
+      `)
+      .all();
+
+
+  const finishedMatchIds =
+    new Set();
+
+
+  for (
+    const row of
+      finishedResult?.results || []
+  ) {
+
+    const id =
+      String(
+        row?.match_id || ""
+      );
+
+
+    if (id) {
+
+      finishedMatchIds.add(id);
+
+    }
+
+  }
+
+
+  // ==========================================================
   // CURRENT MATCH IDS
   // ==========================================================
 
@@ -505,6 +559,22 @@ async function processTracker(env) {
         );
 
       }
+
+      continue;
+
+    }
+
+
+    // --------------------------------------------------------
+    // FIX #9:
+    // MATCH ALREADY FINISHED
+    //
+    // NEVER CREATE ANOTHER ENTRY.
+    // --------------------------------------------------------
+
+    if (
+      finishedMatchIds.has(id)
+    ) {
 
       continue;
 
@@ -817,23 +887,6 @@ async function processTrackingMatch(
 // ============================================================
 // REAL GOAL MINUTE
 // ============================================================
-//
-// IMPORTANT:
-//
-// Търсим само гол, който е настъпил СЛЕД ENTRY.
-//
-// Това предотвратява следния проблем:
-//
-// ENTRY 33'
-// Мачът вече е имал гол на 20'
-// Feed-ът закъснява
-// V27 връща цялата история на головете
-//
-// Старият код можеше да избере 20'.
-//
-// Този код игнорира всичко <= ENTRY.
-//
-// ============================================================
 
 function getRealGoalMinute(
   m,
@@ -960,7 +1013,6 @@ function getRealGoalMinute(
 
 
     // ========================================================
-    // CRITICAL FIX:
     // GOAL MUST BE AFTER ENTRY
     // ========================================================
 
@@ -997,12 +1049,6 @@ function getRealGoalMinute(
   // ==========================================================
   // FALLBACK
   // ==========================================================
-  //
-  // Ако V27 не предоставя никаква event/goal информация,
-  // използваме текущата минута само като fallback.
-  //
-  // Никога не връщаме минута преди ENTRY.
-  //
 
   if (
     currentMinute > entryMinute
@@ -1065,10 +1111,6 @@ function isGoalEvent(event) {
   }
 
 
-  // ----------------------------------------------------------
-  // FLAGS
-  // ----------------------------------------------------------
-
   if (
     event?.is_goal === true ||
     event?.isGoal === true ||
@@ -1124,10 +1166,6 @@ function extractEventMinute(event) {
   }
 
 
-  // ----------------------------------------------------------
-  // TIME
-  // ----------------------------------------------------------
-
   const timeValue =
     event?.time;
 
@@ -1146,10 +1184,6 @@ function extractEventMinute(event) {
 
   }
 
-
-  // ----------------------------------------------------------
-  // NESTED OBJECTS
-  // ----------------------------------------------------------
 
   const nested = [
 
@@ -1236,10 +1270,6 @@ function parseMinuteValue(value) {
     return null;
 
 
-  // ----------------------------------------------------------
-  // 26'
-  // ----------------------------------------------------------
-
   const apostrophe =
     text.match(
       /^(\d{1,3})\s*['′]/
@@ -1256,10 +1286,6 @@ function parseMinuteValue(value) {
 
   }
 
-
-  // ----------------------------------------------------------
-  // 26:34
-  // ----------------------------------------------------------
 
   const clock =
     text.match(
@@ -1278,10 +1304,6 @@ function parseMinuteValue(value) {
   }
 
 
-  // ----------------------------------------------------------
-  // 26+2
-  // ----------------------------------------------------------
-
   const added =
     text.match(
       /^(\d{1,3})\s*\+\s*(\d{1,2})/
@@ -1299,10 +1321,6 @@ function parseMinuteValue(value) {
 
   }
 
-
-  // ----------------------------------------------------------
-  // 26
-  // ----------------------------------------------------------
 
   const plain =
     text.match(
@@ -1331,14 +1349,6 @@ function parseMinuteValue(value) {
 // ============================================================
 
 function isFirstHalfFinished(m) {
-
-  // ==========================================================
-  // ONLY OFFICIAL HT STATUS
-  //
-  // НЕ използваме:
-  // minute >= 45
-  // minute_display >= 45
-  // ==========================================================
 
   const values = [
 
@@ -1472,6 +1482,12 @@ async function createHunterEntry(
   if (!id)
     return;
 
+
+  // ==========================================================
+  // SECOND SAFETY CHECK
+  //
+  // Prevents duplicate tracking in memory.
+  // ==========================================================
 
   if (
     trackingMap.has(id)
@@ -3251,4 +3267,4 @@ function json(
 
   );
 
-      }
+    }
