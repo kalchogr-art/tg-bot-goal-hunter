@@ -1,58 +1,36 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V7
+// GOAL WATCH — HUNTER TRACKER V6.1
 // LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
 // V27 SERVICE BINDING
 //
-// FIX 1:
-// REAL GOAL HIT restored.
-// Uses REAL V27 goal event minute.
-// Score change alone NEVER invents goal minute.
-//
-// FIX 2:
-// OFFICIAL HT 0:0 -> wait 10 minutes -> NO GOAL.
-//
-// Example:
-//
-// ENTRY 35'
-// HT    45'
-//       +
-//       10 minutes
-//       =
-// NO GOAL
-//
-// If GOAL arrives during those 10 minutes:
-// GOAL HIT immediately.
-//
-// FT 0:0 is NOT used for NO GOAL.
+// FIXES:
+// 1. REAL GOAL MINUTE FROM V27
+// 2. DELAYED FEED DOES NOT CHANGE GOAL MINUTE
+// 3. ONLY GOAL AFTER ENTRY IS ACCEPTED
+// 4. HT 0:0 -> WAIT 10 MIN -> NO GOAL
+// 5. FT 0:0 -> IMMEDIATE NO GOAL
+// 6. OLD TRACKING MATCHES ARE ALSO FINALIZED
+// 7. SESSION START 12:15
+// 8. LOW CPU — ONE ACTIVE SIGNAL QUERY
+// 9. SAFE TRACKING MAP
+// 10. DAILY + ALL-TIME STATS
+// 11. ATOMIC ONE-ENTRY PER MATCH_ID
 //
 // IMPORTANT:
-// One ENTRY per match_id for lifetime.
-//
-// After GOAL or NO GOAL:
-//
-// SAME match_id = permanently blocked
+// A match can have ONLY ONE Hunter ENTRY during its lifetime.
 //
 // ============================================================
 
-
 const HUNTER_MIN_SCORE = 60;
-
 const HUNTER_FROM = 10;
-
 const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
 
 const SESSION_START_HOUR = 12;
-
 const SESSION_START_MINUTE = 15;
 
-// ============================================================
-// NEW FIX
-// Minutes to wait after official HT before NO GOAL
-// ============================================================
-
-const HT_NO_GOAL_DELAY_MINUTES = 10;
+const HT_WAIT_MINUTES = 10;
 
 
 // ============================================================
@@ -64,7 +42,6 @@ export default {
   async fetch(request, env) {
 
     const url = new URL(request.url);
-
 
     // ========================================================
     // DEBUG PROXY BINDING
@@ -79,10 +56,8 @@ export default {
             "https://v27.internal/"
           );
 
-
         const text =
           await response.text();
-
 
         return new Response(
           JSON.stringify({
@@ -96,13 +71,11 @@ export default {
             headers: {
               "Content-Type":
                 "application/json; charset=utf-8",
-
               "Cache-Control":
                 "no-store"
             }
           }
         );
-
 
       } catch (error) {
 
@@ -125,7 +98,6 @@ export default {
         );
 
       }
-
     }
 
 
@@ -154,10 +126,8 @@ export default {
         const update =
           await request.json();
 
-
         const message =
           update?.message;
-
 
         const text =
           String(
@@ -178,7 +148,6 @@ export default {
             env,
             await buildStats(env)
           );
-
 
           return json({
             success: true,
@@ -202,7 +171,6 @@ export default {
           String(error)
         );
 
-
         return json({
           success: false,
           error:
@@ -211,7 +179,6 @@ export default {
         }, 500);
 
       }
-
     }
 
 
@@ -224,7 +191,7 @@ export default {
       success: true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V7",
+        "GOAL WATCH — HUNTER TRACKER V6.1",
 
       status:
         "ONLINE",
@@ -275,7 +242,6 @@ async function processTracker(env) {
   const now =
     new Date();
 
-
   const local =
     getSofiaTime(now);
 
@@ -292,7 +258,6 @@ async function processTracker(env) {
 
   }
 
-
   if (!env.DB) {
 
     throw new Error(
@@ -301,7 +266,6 @@ async function processTracker(env) {
 
   }
 
-
   if (!env.TELEGRAM_BOT_TOKEN) {
 
     throw new Error(
@@ -309,7 +273,6 @@ async function processTracker(env) {
     );
 
   }
-
 
   if (!env.TELEGRAM_CHAT_ID) {
 
@@ -382,7 +345,6 @@ async function processTracker(env) {
         "https://v27.internal/",
         {
           method: "GET",
-
           headers: {
             "Accept":
               "application/json"
@@ -397,7 +359,6 @@ async function processTracker(env) {
 
     const text =
       await response.text();
-
 
     throw new Error(
       "V27 HTTP " +
@@ -449,7 +410,8 @@ async function processTracker(env) {
           hunter_score,
           entry_home_score,
           entry_away_score,
-          updated_at
+          ht_detected_at,
+          ht_minute
         FROM hunter_signals
         WHERE status = 'TRACKING'
       `)
@@ -477,13 +439,9 @@ async function processTracker(env) {
         signal?.match_id || ""
       );
 
-
     if (!id) {
-
       continue;
-
     }
-
 
     trackingMap.set(
       id,
@@ -506,11 +464,8 @@ async function processTracker(env) {
         match?.id || ""
       );
 
-
     if (!id) {
-
       continue;
-
     }
 
 
@@ -532,7 +487,6 @@ async function processTracker(env) {
           trackingMap
         );
 
-
       } catch (error) {
 
         console.error(
@@ -543,7 +497,6 @@ async function processTracker(env) {
         );
 
       }
-
 
       continue;
 
@@ -581,7 +534,6 @@ async function processTracker(env) {
         score
       );
 
-
     } catch (error) {
 
       console.error(
@@ -615,22 +567,15 @@ async function processTrackingMatch(
       m?.id || ""
     );
 
-
   if (!id) {
-
     return;
-
   }
-
 
   const existing =
     trackingMap.get(id);
 
-
   if (!existing) {
-
     return;
-
   }
 
 
@@ -639,30 +584,25 @@ async function processTrackingMatch(
       m?.score?.home ?? 0
     );
 
-
   const away =
     Number(
       m?.score?.away ?? 0
     );
-
 
   const currentMinute =
     Number(
       m?.minute ?? 0
     );
 
-
   const entryHome =
     Number(
       existing.entry_home_score || 0
     );
 
-
   const entryAway =
     Number(
       existing.entry_away_score || 0
     );
-
 
   const entryMinute =
     Number(
@@ -671,11 +611,7 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // FIX 1
-  //
-  // SCORE CHANGE -> SEARCH REAL GOAL EVENT
-  //
-  // We NEVER use currentMinute as goal minute.
+  // 1. GOAL — ALWAYS FIRST
   // ==========================================================
 
   const scoreChanged =
@@ -690,14 +626,13 @@ async function processTrackingMatch(
         m,
         entryHome,
         entryAway,
-        entryMinute
+        entryMinute,
+        currentMinute
       );
 
 
     // --------------------------------------------------------
-    // Real event not available yet
-    //
-    // Keep tracking.
+    // SCORE CHANGED BUT REAL EVENT NOT AVAILABLE
     // --------------------------------------------------------
 
     if (
@@ -705,7 +640,7 @@ async function processTrackingMatch(
     ) {
 
       console.log(
-        "GOAL SCORE DETECTED - WAITING FOR REAL EVENT",
+        "SCORE CHANGED — WAITING FOR REAL GOAL EVENT",
         id,
         {
           entryMinute,
@@ -714,7 +649,6 @@ async function processTrackingMatch(
           away
         }
       );
-
 
       return;
 
@@ -728,10 +662,6 @@ async function processTrackingMatch(
         entryMinute
       );
 
-
-    // ========================================================
-    // FINAL ATOMIC GOAL UPDATE
-    // ========================================================
 
     const update =
       await env.DB
@@ -773,10 +703,6 @@ async function processTrackingMatch(
     trackingMap.delete(id);
 
 
-    // ========================================================
-    // GOAL TELEGRAM
-    // ========================================================
-
     await sendTelegram(
       env,
       formatGoalMessage(
@@ -794,119 +720,14 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // FIX 2
-  //
-  // OFFICIAL HT 0:0
-  //
-  // We record HT time ONCE.
-  //
-  // updated_at is used as the persistent HT timestamp.
-  //
-  // IMPORTANT:
-  // We only set it when:
-  //
-  //     0:0
-  //     +
-  //     official HT
-  //
-  // After that we DO NOT reset it every Cron.
+  // 2. FT 0:0 — IMMEDIATE NO GOAL
   // ==========================================================
 
   if (
     home === 0 &&
     away === 0 &&
-    isFirstHalfFinished(m)
+    isFullTime(m)
   ) {
-
-    const entryTimestamp =
-      parseDate(
-        existing.entry_time
-      );
-
-
-    const markerTimestamp =
-      parseDate(
-        existing.updated_at
-      );
-
-
-    // --------------------------------------------------------
-    // HT has not yet been recorded.
-    //
-    // updated_at is normally equal to entry_time after ENTRY.
-    // --------------------------------------------------------
-
-    const htAlreadyRecorded =
-      entryTimestamp !== null &&
-      markerTimestamp !== null &&
-      markerTimestamp.getTime() >
-        entryTimestamp.getTime();
-
-
-    if (
-      !htAlreadyRecorded
-    ) {
-
-      await env.DB
-        .prepare(`
-          UPDATE hunter_signals
-          SET
-            updated_at = ?
-          WHERE id = ?
-            AND status = 'TRACKING'
-        `)
-        .bind(
-          now.toISOString(),
-          existing.id
-        )
-        .run();
-
-
-      console.log(
-        "OFFICIAL HT RECORDED",
-        id,
-        now.toISOString()
-      );
-
-
-      return;
-
-    }
-
-
-    // ========================================================
-    // HT WAS ALREADY RECORDED
-    //
-    // Check whether +10 minutes have passed.
-    // ========================================================
-
-    const htTime =
-      markerTimestamp;
-
-
-    const elapsedMinutes =
-      (
-        now.getTime() -
-        htTime.getTime()
-      ) /
-      60000;
-
-
-    if (
-      elapsedMinutes <
-      HT_NO_GOAL_DELAY_MINUTES
-    ) {
-
-      return;
-
-    }
-
-
-    // ========================================================
-    // +10 MINUTES AFTER HT
-    //
-    // Still 0:0 -> NO GOAL
-    // ========================================================
 
     const update =
       await env.DB
@@ -953,9 +774,321 @@ async function processTrackingMatch(
     );
 
 
-    console.log(
-      "NO GOAL AFTER HT + 10 MINUTES",
-      id
+    return;
+
+  }
+
+
+  // ==========================================================
+  // 3. HT 0:0
+  //
+  // OFFICIAL HT:
+  //
+  //     save timestamp
+  //
+  // +10 MIN:
+  //
+  //     NO GOAL
+  //
+  // ==========================================================
+
+  if (
+    home === 0 &&
+    away === 0 &&
+    isFirstHalfFinished(m)
+  ) {
+
+    let htDetectedAt =
+      existing.ht_detected_at
+        ? new Date(
+            existing.ht_detected_at
+          )
+        : null;
+
+
+    // --------------------------------------------------------
+    // FIRST HT DETECTION
+    // --------------------------------------------------------
+
+    if (
+      !htDetectedAt ||
+      Number.isNaN(
+        htDetectedAt.getTime()
+      )
+    ) {
+
+      const htTimestamp =
+        now.toISOString();
+
+      const htMinute =
+        currentMinute > 0
+          ? currentMinute
+          : 45;
+
+
+      const update =
+        await env.DB
+          .prepare(`
+            UPDATE hunter_signals
+            SET
+              ht_detected_at = ?,
+              ht_minute = ?,
+              updated_at = ?
+            WHERE id = ?
+              AND status = 'TRACKING'
+              AND ht_detected_at IS NULL
+          `)
+          .bind(
+            htTimestamp,
+            htMinute,
+            htTimestamp,
+            existing.id
+          )
+          .run();
+
+
+      existing.ht_detected_at =
+        htTimestamp;
+
+      existing.ht_minute =
+        htMinute;
+
+
+      console.log(
+        "HT 0:0 DETECTED",
+        id,
+        {
+          htTimestamp,
+          htMinute,
+          changes:
+            update?.meta?.changes
+        }
+      );
+
+
+      return;
+
+    }
+
+
+    // --------------------------------------------------------
+    // CHECK 10 MINUTES
+    // --------------------------------------------------------
+
+    const elapsed =
+      now.getTime() -
+      htDetectedAt.getTime();
+
+
+    const waitMs =
+      HT_WAIT_MINUTES *
+      60 *
+      1000;
+
+
+    if (
+      elapsed < waitMs
+    ) {
+
+      return;
+
+    }
+
+
+    // --------------------------------------------------------
+    // 10 MINUTES PASSED
+    // --------------------------------------------------------
+
+    const update =
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            status = 'NO_GOAL',
+            result = 'NO GOAL',
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          now.toISOString(),
+          existing.id
+        )
+        .run();
+
+
+    const changes =
+      Number(
+        update?.meta?.changes || 0
+      );
+
+
+    if (
+      changes < 1
+    ) {
+
+      return;
+
+    }
+
+
+    trackingMap.delete(id);
+
+
+    await sendTelegram(
+      env,
+      formatNoGoalMessage(
+        existing,
+        m
+      )
+    );
+
+
+    return;
+
+  }
+
+
+  // ==========================================================
+  // 4. FALLBACK FOR OLD TRACKING RECORDS
+  //
+  // If an old tracking match has already passed HT and V27
+  // no longer exposes an explicit HT value, detect 2H.
+  //
+  // We start the 10-minute timer from the FIRST time we see
+  // the match after HT.
+  //
+  // ==========================================================
+
+  if (
+    home === 0 &&
+    away === 0 &&
+    isSecondHalf(m)
+  ) {
+
+    let htDetectedAt =
+      existing.ht_detected_at
+        ? new Date(
+            existing.ht_detected_at
+          )
+        : null;
+
+
+    // --------------------------------------------------------
+    // OLD TRACKING MATCH — FIRST 2H DETECTION
+    // --------------------------------------------------------
+
+    if (
+      !htDetectedAt ||
+      Number.isNaN(
+        htDetectedAt.getTime()
+      )
+    ) {
+
+      const htTimestamp =
+        now.toISOString();
+
+
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            ht_detected_at = ?,
+            ht_minute = ?,
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+            AND ht_detected_at IS NULL
+        `)
+        .bind(
+          htTimestamp,
+          45,
+          htTimestamp,
+          existing.id
+        )
+        .run();
+
+
+      existing.ht_detected_at =
+        htTimestamp;
+
+      existing.ht_minute =
+        45;
+
+
+      console.log(
+        "OLD TRACKING — 2H DETECTED",
+        id,
+        htTimestamp
+      );
+
+
+      return;
+
+    }
+
+
+    // --------------------------------------------------------
+    // 10 MINUTES AFTER FIRST 2H DETECTION
+    // --------------------------------------------------------
+
+    const elapsed =
+      now.getTime() -
+      htDetectedAt.getTime();
+
+
+    if (
+      elapsed <
+      HT_WAIT_MINUTES * 60 * 1000
+    ) {
+
+      return;
+
+    }
+
+
+    const update =
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            status = 'NO_GOAL',
+            result = 'NO GOAL',
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          now.toISOString(),
+          existing.id
+        )
+        .run();
+
+
+    const changes =
+      Number(
+        update?.meta?.changes || 0
+      );
+
+
+    if (
+      changes < 1
+    ) {
+
+      return;
+
+    }
+
+
+    trackingMap.delete(id);
+
+
+    await sendTelegram(
+      env,
+      formatNoGoalMessage(
+        existing,
+        m
+      )
     );
 
   }
@@ -966,138 +1099,61 @@ async function processTrackingMatch(
 // ============================================================
 // REAL GOAL MINUTE
 // ============================================================
-//
-// Priority:
-//
-// 1. V27 goal_events
-// 2. V27 goals
-// 3. V27 events
-// 4. V27 incidents
-// 5. nested V27 goal arrays
-//
-// NEVER use current match minute.
-//
-// Goal must be:
-//
-//     > ENTRY MINUTE
-//
-// ============================================================
 
 function getRealGoalMinute(
   m,
   entryHome,
   entryAway,
-  entryMinute
+  entryMinute,
+  currentMinute
 ) {
 
   const candidates = [];
 
 
-  // ----------------------------------------------------------
-  // Direct V27 fields
-  // ----------------------------------------------------------
+  if (
+    Array.isArray(m?.goals)
+  ) {
 
-  addArray(
-    candidates,
-    m?.goal_events
-  );
+    candidates.push(
+      ...m.goals
+    );
 
-
-  addArray(
-    candidates,
-    m?.goals
-  );
+  }
 
 
-  addArray(
-    candidates,
-    m?.events
-  );
+  if (
+    Array.isArray(m?.events)
+  ) {
+
+    candidates.push(
+      ...m.events
+    );
+
+  }
 
 
-  addArray(
-    candidates,
-    m?.incidents
-  );
+  if (
+    Array.isArray(m?.incidents)
+  ) {
+
+    candidates.push(
+      ...m.incidents
+    );
+
+  }
 
 
-  // ----------------------------------------------------------
-  // Possible nested V27 structures
-  // ----------------------------------------------------------
+  if (
+    Array.isArray(m?.goal_events)
+  ) {
 
-  addArray(
-    candidates,
-    m?.raw?.goal_events
-  );
+    candidates.push(
+      ...m.goal_events
+    );
 
+  }
 
-  addArray(
-    candidates,
-    m?.raw?.goals
-  );
-
-
-  addArray(
-    candidates,
-    m?.raw?.events
-  );
-
-
-  addArray(
-    candidates,
-    m?.raw?.incidents
-  );
-
-
-  addArray(
-    candidates,
-    m?.data?.goal_events
-  );
-
-
-  addArray(
-    candidates,
-    m?.data?.goals
-  );
-
-
-  addArray(
-    candidates,
-    m?.data?.events
-  );
-
-
-  // ----------------------------------------------------------
-  // Flashscore parser structures
-  // ----------------------------------------------------------
-
-  addArray(
-    candidates,
-    m?.raw?.df_sui
-  );
-
-
-  addArray(
-    candidates,
-    m?.raw?.df_sui_1
-  );
-
-
-  addArray(
-    candidates,
-    m?.df_sui
-  );
-
-
-  addArray(
-    candidates,
-    m?.df_sui_1
-  );
-
-
-  // ----------------------------------------------------------
-  // Search
-  // ----------------------------------------------------------
 
   const validGoals = [];
 
@@ -1107,7 +1163,8 @@ function getRealGoalMinute(
   ) {
 
     if (
-      !event
+      !event ||
+      typeof event !== "object"
     ) {
 
       continue;
@@ -1115,108 +1172,55 @@ function getRealGoalMinute(
     }
 
 
-    // --------------------------------------------------------
-    // Object event
-    // --------------------------------------------------------
-
     if (
-      typeof event === "object" &&
-      !Array.isArray(event)
+      !isGoalEvent(event)
     ) {
-
-      if (
-        !isGoalEvent(event)
-      ) {
-
-        continue;
-
-      }
-
-
-      const minute =
-        extractEventMinute(
-          event
-        );
-
-
-      if (
-        minute === null
-      ) {
-
-        continue;
-
-      }
-
-
-      if (
-        minute <= 0 ||
-        minute > 130
-      ) {
-
-        continue;
-
-      }
-
-
-      if (
-        minute <= entryMinute
-      ) {
-
-        continue;
-
-      }
-
-
-      validGoals.push(
-        minute
-      );
-
 
       continue;
 
     }
 
 
-    // --------------------------------------------------------
-    // Array / parser event
-    //
-    // Flashscore parser may expose:
-    //
-    // IA = event type
-    // IB = event minute
-    //
-    // IA=1 => goal
-    // --------------------------------------------------------
+    const minute =
+      extractEventMinute(event);
+
 
     if (
-      Array.isArray(event)
+      minute === null
     ) {
 
-      const goal =
-        parseFlashscoreArrayGoal(
-          event,
-          entryMinute
-        );
-
-
-      if (
-        goal !== null
-      ) {
-
-        validGoals.push(
-          goal
-        );
-
-      }
+      continue;
 
     }
+
+
+    if (
+      minute <= 0 ||
+      minute > 130
+    ) {
+
+      continue;
+
+    }
+
+
+    // GOAL MUST BE STRICTLY AFTER ENTRY
+
+    if (
+      minute <= entryMinute
+    ) {
+
+      continue;
+
+    }
+
+
+    validGoals.push(
+      minute
+    );
 
   }
 
-
-  // ==========================================================
-  // RETURN EARLIEST REAL GOAL AFTER ENTRY
-  // ==========================================================
 
   if (
     validGoals.length > 0
@@ -1226,140 +1230,12 @@ function getRealGoalMinute(
       (a, b) => a - b
     );
 
-
     return validGoals[0];
 
   }
 
 
-  return null;
-
-}
-
-
-// ============================================================
-// ARRAY HELPER
-// ============================================================
-
-function addArray(
-  target,
-  value
-) {
-
-  if (
-    Array.isArray(value)
-  ) {
-
-    target.push(
-      ...value
-    );
-
-  }
-
-}
-
-
-// ============================================================
-// FLASHSCORE ARRAY GOAL
-// ============================================================
-//
-// Supports parser style:
-//
-// IA = event type
-// IB = event minute
-//
-// IA = 1 => GOAL
-//
-// Also supports object-like arrays where the values are
-// accessible by known positions.
-//
-// ============================================================
-
-function parseFlashscoreArrayGoal(
-  event,
-  entryMinute
-) {
-
-  if (
-    event.length === 0
-  ) {
-
-    return null;
-
-  }
-
-
-  // ----------------------------------------------------------
-  // Look for explicit type=1 and a nearby minute value.
-  // ----------------------------------------------------------
-
-  for (
-    let i = 0;
-    i < event.length;
-    i++
-  ) {
-
-    const value =
-      event[i];
-
-
-    const numeric =
-      Number(value);
-
-
-    if (
-      numeric !== 1
-    ) {
-
-      continue;
-
-    }
-
-
-    // --------------------------------------------------------
-    // IA=1
-    //
-    // Try following values as IB/minute.
-    // --------------------------------------------------------
-
-    for (
-      let j = i + 1;
-      j < Math.min(
-        event.length,
-        i + 5
-      );
-      j++
-    ) {
-
-      const minute =
-        parseMinuteValue(
-          event[j]
-        );
-
-
-      if (
-        minute === null
-      ) {
-
-        continue;
-
-      }
-
-
-      if (
-        minute > entryMinute &&
-        minute > 0 &&
-        minute <= 130
-      ) {
-
-        return minute;
-
-      }
-
-    }
-
-  }
-
+  // NEVER USE currentMinute AS FALLBACK
 
   return null;
 
@@ -1372,40 +1248,18 @@ function parseFlashscoreArrayGoal(
 
 function isGoalEvent(event) {
 
-  if (
-    event?.is_goal === true ||
-    event?.isGoal === true ||
-    event?.goal === true
-  ) {
-
-    return true;
-
-  }
-
-
   const values = [
 
     event?.type,
     event?.event_type,
-    event?.eventType,
-
     event?.incident_type,
     event?.incidentType,
-
     event?.kind,
-
     event?.name,
     event?.description,
-
     event?.action,
     event?.incident,
-    event?.event,
-
-    event?.IA,
-    event?.ia,
-
-    event?.eventCode,
-    event?.event_code
+    event?.event
 
   ];
 
@@ -1413,19 +1267,6 @@ function isGoalEvent(event) {
   for (
     const value of values
   ) {
-
-    // --------------------------------------------------------
-    // Flashscore event type 1
-    // --------------------------------------------------------
-
-    if (
-      Number(value) === 1
-    ) {
-
-      return true;
-
-    }
-
 
     const text =
       String(
@@ -1438,13 +1279,23 @@ function isGoalEvent(event) {
     if (
       text === "goal" ||
       text === "goals" ||
-      text.includes("goal") ||
-      text === "1"
+      text.includes("goal")
     ) {
 
       return true;
 
     }
+
+  }
+
+
+  if (
+    event?.is_goal === true ||
+    event?.isGoal === true ||
+    event?.goal === true
+  ) {
+
+    return true;
 
   }
 
@@ -1465,18 +1316,9 @@ function extractEventMinute(event) {
     event?.minute,
     event?.minute_display,
     event?.minuteDisplay,
-
     event?.match_minute,
-    event?.matchMinute,
-
     event?.incident_minute,
-    event?.incidentMinute,
-
-    event?.time_minute,
-    event?.timeMinute,
-
-    event?.IB,
-    event?.ib
+    event?.time_minute
 
   ];
 
@@ -1486,9 +1328,7 @@ function extractEventMinute(event) {
   ) {
 
     const minute =
-      parseMinuteValue(
-        value
-      );
+      parseMinuteValue(value);
 
 
     if (
@@ -1521,7 +1361,6 @@ function extractEventMinute(event) {
 
     event?.time,
     event?.match_time,
-    event?.matchTime,
     event?.clock
 
   ];
@@ -1543,12 +1382,9 @@ function extractEventMinute(event) {
 
     const minute =
       parseMinuteValue(
-
         value?.minute ??
         value?.display ??
-        value?.value ??
-        value?.text
-
+        value?.value
       );
 
 
@@ -1603,15 +1439,9 @@ function parseMinuteValue(value) {
 
 
   if (!text) {
-
     return null;
-
   }
 
-
-  // ----------------------------------------------------------
-  // 35'
-  // ----------------------------------------------------------
 
   const apostrophe =
     text.match(
@@ -1619,9 +1449,7 @@ function parseMinuteValue(value) {
     );
 
 
-  if (
-    apostrophe
-  ) {
+  if (apostrophe) {
 
     return Number(
       apostrophe[1]
@@ -1630,9 +1458,20 @@ function parseMinuteValue(value) {
   }
 
 
-  // ----------------------------------------------------------
-  // 45+2
-  // ----------------------------------------------------------
+  const clock =
+    text.match(
+      /^(\d{1,3}):(\d{1,2})/
+    );
+
+
+  if (clock) {
+
+    return Number(
+      clock[1]
+    );
+
+  }
+
 
   const added =
     text.match(
@@ -1640,9 +1479,7 @@ function parseMinuteValue(value) {
     );
 
 
-  if (
-    added
-  ) {
+  if (added) {
 
     return (
       Number(added[1]) +
@@ -1652,40 +1489,13 @@ function parseMinuteValue(value) {
   }
 
 
-  // ----------------------------------------------------------
-  // 35:12
-  // ----------------------------------------------------------
-
-  const clock =
-    text.match(
-      /^(\d{1,3}):(\d{1,2})/
-    );
-
-
-  if (
-    clock
-  ) {
-
-    return Number(
-      clock[1]
-    );
-
-  }
-
-
-  // ----------------------------------------------------------
-  // 35
-  // ----------------------------------------------------------
-
   const plain =
     text.match(
       /^(\d{1,3})$/
     );
 
 
-  if (
-    plain
-  ) {
+  if (plain) {
 
     return Number(
       plain[1]
@@ -1700,51 +1510,10 @@ function parseMinuteValue(value) {
 
 
 // ============================================================
-// OFFICIAL FIRST HALF FINISHED
-// ============================================================
-//
-// Official HT can be:
-//
-// HT
-// HALFTIME
-// HALF TIME
-// 1H FINISHED
 // FIRST HALF FINISHED
-// END OF FIRST HALF
-// END OF 1H
-// 1H END
-//
-// Also:
-//
-// period = 2H
-//
-// because some V27 versions switch period to 2H immediately
-// after the official first-half whistle.
-//
 // ============================================================
 
 function isFirstHalfFinished(m) {
-
-  const period =
-    String(
-      m?.period || ""
-    )
-    .toUpperCase()
-    .trim();
-
-
-  if (
-    period === "2H" ||
-    period === "SECOND" ||
-    period === "SECOND HALF" ||
-    period === "2ND HALF" ||
-    period.includes("2H")
-  ) {
-
-    return true;
-
-  }
-
 
   const values = [
 
@@ -1830,22 +1599,218 @@ function hasHalfTimeValue(value) {
   return (
 
     text === "HT" ||
-
     text === "HALFTIME" ||
-
     text === "HALF TIME" ||
-
     text === "HALF-TIME" ||
-
     text === "1H FINISHED" ||
-
     text === "FIRST HALF FINISHED" ||
-
     text === "END OF FIRST HALF" ||
-
     text === "END OF 1H" ||
-
     text === "1H END"
+
+  );
+
+}
+
+
+// ============================================================
+// SECOND HALF
+// ============================================================
+
+function isSecondHalf(m) {
+
+  const values = [
+
+    m?.period,
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state,
+    m?.phase
+
+  ];
+
+
+  for (
+    const value of values
+  ) {
+
+    if (
+      hasSecondHalfValue(value)
+    ) {
+
+      return true;
+
+    }
+
+  }
+
+
+  const nestedValues = [
+
+    m?.status?.type,
+    m?.status?.name,
+    m?.status?.short,
+    m?.status?.long,
+
+    m?.match_status?.type,
+    m?.match_status?.name,
+    m?.match_status?.short,
+    m?.match_status?.long,
+
+    m?.state?.type,
+    m?.state?.name,
+    m?.state?.short,
+    m?.state?.long
+
+  ];
+
+
+  for (
+    const value of nestedValues
+  ) {
+
+    if (
+      hasSecondHalfValue(value)
+    ) {
+
+      return true;
+
+    }
+
+  }
+
+
+  return false;
+
+}
+
+
+// ============================================================
+// SECOND HALF VALUE
+// ============================================================
+
+function hasSecondHalfValue(value) {
+
+  const text =
+    String(
+      value || ""
+    )
+    .toUpperCase()
+    .trim();
+
+
+  return (
+
+    text === "2H" ||
+    text === "2ND HALF" ||
+    text === "SECOND HALF" ||
+    text === "SECOND HALF STARTED" ||
+    text === "LIVE 2H" ||
+    text.includes("2H")
+
+  );
+
+}
+
+
+// ============================================================
+// FULL TIME
+// ============================================================
+
+function isFullTime(m) {
+
+  const values = [
+
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state,
+    m?.phase,
+    m?.period
+
+  ];
+
+
+  for (
+    const value of values
+  ) {
+
+    if (
+      hasFullTimeValue(value)
+    ) {
+
+      return true;
+
+    }
+
+  }
+
+
+  const nestedValues = [
+
+    m?.status?.type,
+    m?.status?.name,
+    m?.status?.short,
+    m?.status?.long,
+
+    m?.match_status?.type,
+    m?.match_status?.name,
+    m?.match_status?.short,
+    m?.match_status?.long,
+
+    m?.state?.type,
+    m?.state?.name,
+    m?.state?.short,
+    m?.state?.long
+
+  ];
+
+
+  for (
+    const value of nestedValues
+  ) {
+
+    if (
+      hasFullTimeValue(value)
+    ) {
+
+      return true;
+
+    }
+
+  }
+
+
+  return false;
+
+}
+
+
+// ============================================================
+// FULL TIME VALUE
+// ============================================================
+
+function hasFullTimeValue(value) {
+
+  const text =
+    String(
+      value || ""
+    )
+    .toUpperCase()
+    .trim();
+
+
+  return (
+
+    text === "FT" ||
+    text === "FULL TIME" ||
+    text === "FULL-TIME" ||
+    text === "FINISHED" ||
+    text === "MATCH FINISHED" ||
+    text === "GAME FINISHED" ||
+    text === "ENDED" ||
+    text === "END"
 
   );
 
@@ -1872,18 +1837,14 @@ async function createHunterEntry(
 
 
   if (!id) {
-
     return;
-
   }
 
 
   if (
     trackingMap.has(id)
   ) {
-
     return;
-
   }
 
 
@@ -1892,12 +1853,10 @@ async function createHunterEntry(
       m?.score?.home ?? 0
     );
 
-
   const away =
     Number(
       m?.score?.away ?? 0
     );
-
 
   const minute =
     Number(
@@ -1938,10 +1897,6 @@ async function createHunterEntry(
   const timestamp =
     now.toISOString();
 
-
-  // ==========================================================
-  // ATOMIC ONE ENTRY PER MATCH
-  // ==========================================================
 
   const insert =
     await env.DB
@@ -2070,8 +2025,11 @@ async function createHunterEntry(
       entry_away_score:
         away,
 
-      updated_at:
-        timestamp
+      ht_detected_at:
+        null,
+
+      ht_minute:
+        null
 
     }
   );
@@ -2132,9 +2090,7 @@ function isHunterCandidate(
 
 
   if (!firstHalf) {
-
     return false;
-
   }
 
 
@@ -2142,9 +2098,7 @@ function isHunterCandidate(
     home !== 0 ||
     away !== 0
   ) {
-
     return false;
-
   }
 
 
@@ -2152,18 +2106,14 @@ function isHunterCandidate(
     minute < HUNTER_FROM ||
     minute > HUNTER_TO
   ) {
-
     return false;
-
   }
 
 
   if (
     score < HUNTER_MIN_SCORE
   ) {
-
     return false;
-
   }
 
 
@@ -2187,9 +2137,7 @@ function getHunterScore(m) {
   if (
     score === null
   ) {
-
     return 0;
-
   }
 
 
@@ -2290,9 +2238,7 @@ async function buildStats(env) {
           10
         ) = ?
       `)
-      .bind(
-        today
-      )
+      .bind(today)
       .first();
 
 
@@ -2976,9 +2922,7 @@ async function sendDailyReport(
 
 
   if (already) {
-
     return;
-
   }
 
 
@@ -3129,9 +3073,7 @@ async function sendTelegram(
 
 
   if (!text) {
-
     return;
-
   }
 
 
@@ -3141,7 +3083,6 @@ async function sendTelegram(
       `https://api.telegram.org/bot${token}/sendMessage`,
 
       {
-
         method:
           "POST",
 
@@ -3300,49 +3241,12 @@ ${existing.entry_minute}'
 📊 HUNTER SCORE:
 ${existing.hunter_score}/100
 
-⏱ HT + 10 МИНУТИ
+⏱ КРАЙ НА 1H + 10 МИН.
 
 Резултат:
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
 
 RESULT: NO GOAL`;
-
-}
-
-
-// ============================================================
-// PARSE DATE
-// ============================================================
-
-function parseDate(value) {
-
-  if (
-    !value
-  ) {
-
-    return null;
-
-  }
-
-
-  const d =
-    new Date(
-      value
-    );
-
-
-  if (
-    Number.isNaN(
-      d.getTime()
-    )
-  ) {
-
-    return null;
-
-  }
-
-
-  return d;
 
 }
 
@@ -3580,4 +3484,4 @@ function json(
 
   );
 
-       }
+  }
