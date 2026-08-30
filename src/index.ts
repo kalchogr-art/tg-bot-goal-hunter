@@ -1,13 +1,17 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V3
+// GOAL WATCH — HUNTER TRACKER V4
 // LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
 // V27 SERVICE BINDING
 //
 // FIXES:
 // 1. REAL GOAL MINUTE FROM V27
 // 2. DELAYED FEED DOES NOT CHANGE GOAL MINUTE
-// 3. 0:0 NO GOAL ONLY AT OFFICIAL HALF TIME
-// 4. SESSION START 12:15
+// 3. ONLY GOAL AFTER ENTRY IS ACCEPTED
+// 4. 0:0 NO GOAL ONLY AT OFFICIAL HALF TIME
+// 5. SESSION START 12:15
+// 6. LOW CPU — ONE ACTIVE SIGNAL QUERY
+// 7. SAFE TRACKING MAP
+// 8. DAILY + ALL-TIME STATS
 // ============================================================
 
 const HUNTER_MIN_SCORE = 60;
@@ -180,7 +184,7 @@ export default {
       success: true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V3",
+        "GOAL WATCH — HUNTER TRACKER V4",
 
       status:
         "ONLINE",
@@ -372,7 +376,7 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD ACTIVE SIGNALS
+  // LOAD ACTIVE SIGNALS — ONE DB QUERY
   // ==========================================================
 
   const result =
@@ -660,14 +664,14 @@ async function processTrackingMatch(
     );
 
 
+  const entryMinute =
+    Number(
+      existing.entry_minute || 0
+    );
+
+
   // ==========================================================
-  // FIX 1 + FIX 2
-  //
-  // Вече има гол.
-  //
-  // Не използваме currentMinute автоматично.
-  // Първо търсим реалната минута на гола във V27.
-  // Ако V27 не я подава, чак тогава fallback към currentMinute.
+  // GOAL DETECTED
   // ==========================================================
 
   if (
@@ -680,13 +684,8 @@ async function processTrackingMatch(
         m,
         entryHome,
         entryAway,
+        entryMinute,
         currentMinute
-      );
-
-
-    const entryMinute =
-      Number(
-        existing.entry_minute || 0
       );
 
 
@@ -757,15 +756,7 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // FIX 3
-  //
-  // 0:0 се приключва само ако V27 потвърди официален HT.
-  //
-  // НЕ използваме:
-  // minute >= 45
-  //
-  // защото това може да се задейства по време на добавеното
-  // време или при забавен feed.
+  // OFFICIAL HALF TIME ONLY
   // ==========================================================
 
   if (
@@ -827,24 +818,28 @@ async function processTrackingMatch(
 // REAL GOAL MINUTE
 // ============================================================
 //
-// V27 μπορεί да подава гола в различни структури.
+// IMPORTANT:
 //
-// Търсим първо:
-// - goals
-// - events
-// - incidents
-// - score events
+// Търсим само гол, който е настъпил СЛЕД ENTRY.
 //
-// Ако намерим гол с валидна минута → използваме нея.
+// Това предотвратява следния проблем:
 //
-// Само ако няма такава информация → fallback към текущата
-// минута от feed-а.
+// ENTRY 33'
+// Мачът вече е имал гол на 20'
+// Feed-ът закъснява
+// V27 връща цялата история на головете
+//
+// Старият код можеше да избере 20'.
+//
+// Този код игнорира всичко <= ENTRY.
+//
 // ============================================================
 
 function getRealGoalMinute(
   m,
   entryHome,
   entryAway,
+  entryMinute,
   currentMinute
 ) {
 
@@ -913,7 +908,7 @@ function getRealGoalMinute(
   }
 
 
-  let bestMinute = null;
+  const validGoals = [];
 
 
   for (
@@ -955,15 +950,7 @@ function getRealGoalMinute(
 
 
     if (
-      minute <= 0
-    ) {
-
-      continue;
-
-    }
-
-
-    if (
+      minute <= 0 ||
       minute > 130
     ) {
 
@@ -972,35 +959,61 @@ function getRealGoalMinute(
     }
 
 
+    // ========================================================
+    // CRITICAL FIX:
+    // GOAL MUST BE AFTER ENTRY
+    // ========================================================
+
     if (
-      bestMinute === null ||
-      minute < bestMinute
+      minute <= entryMinute
     ) {
 
-      bestMinute =
-        minute;
+      continue;
 
     }
+
+
+    validGoals.push(
+      minute
+    );
 
   }
 
 
   if (
-    bestMinute !== null
+    validGoals.length > 0
   ) {
 
-    return bestMinute;
+    validGoals.sort(
+      (a, b) => a - b
+    );
+
+
+    return validGoals[0];
 
   }
 
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // FALLBACK
-  // ----------------------------------------------------------
+  // ==========================================================
+  //
+  // Ако V27 не предоставя никаква event/goal информация,
+  // използваме текущата минута само като fallback.
+  //
+  // Никога не връщаме минута преди ENTRY.
+  //
 
-  return currentMinute > 0
-    ? currentMinute
-    : null;
+  if (
+    currentMinute > entryMinute
+  ) {
+
+    return currentMinute;
+
+  }
+
+
+  return null;
 
 }
 
@@ -1021,7 +1034,8 @@ function isGoalEvent(event) {
     event?.name,
     event?.description,
     event?.action,
-    event?.incident
+    event?.incident,
+    event?.event
 
   ];
 
@@ -1052,7 +1066,7 @@ function isGoalEvent(event) {
 
 
   // ----------------------------------------------------------
-  // Some feeds use a flag
+  // FLAGS
   // ----------------------------------------------------------
 
   if (
@@ -1082,10 +1096,9 @@ function extractEventMinute(event) {
     event?.minute,
     event?.minute_display,
     event?.minuteDisplay,
-    event?.time,
-    event?.time_minute,
     event?.match_minute,
-    event?.incident_minute
+    event?.incident_minute,
+    event?.time_minute
 
   ];
 
@@ -1112,7 +1125,30 @@ function extractEventMinute(event) {
 
 
   // ----------------------------------------------------------
-  // Nested time object
+  // TIME
+  // ----------------------------------------------------------
+
+  const timeValue =
+    event?.time;
+
+
+  const directTime =
+    parseMinuteValue(
+      timeValue
+    );
+
+
+  if (
+    directTime !== null
+  ) {
+
+    return directTime;
+
+  }
+
+
+  // ----------------------------------------------------------
+  // NESTED OBJECTS
   // ----------------------------------------------------------
 
   const nested = [
@@ -1200,7 +1236,10 @@ function parseMinuteValue(value) {
     return null;
 
 
+  // ----------------------------------------------------------
   // 26'
+  // ----------------------------------------------------------
+
   const apostrophe =
     text.match(
       /^(\d{1,3})\s*['′]/
@@ -1218,7 +1257,10 @@ function parseMinuteValue(value) {
   }
 
 
+  // ----------------------------------------------------------
   // 26:34
+  // ----------------------------------------------------------
+
   const clock =
     text.match(
       /^(\d{1,3}):(\d{1,2})/
@@ -1236,7 +1278,32 @@ function parseMinuteValue(value) {
   }
 
 
+  // ----------------------------------------------------------
+  // 26+2
+  // ----------------------------------------------------------
+
+  const added =
+    text.match(
+      /^(\d{1,3})\s*\+\s*(\d{1,2})/
+    );
+
+
+  if (
+    added
+  ) {
+
+    return (
+      Number(added[1]) +
+      Number(added[2])
+    );
+
+  }
+
+
+  // ----------------------------------------------------------
   // 26
+  // ----------------------------------------------------------
+
   const plain =
     text.match(
       /^(\d{1,3})$/
@@ -1266,9 +1333,11 @@ function parseMinuteValue(value) {
 function isFirstHalfFinished(m) {
 
   // ==========================================================
-  // IMPORTANT:
-  // Само официален HT статус.
-  // Не използваме minute >= 45.
+  // ONLY OFFICIAL HT STATUS
+  //
+  // НЕ използваме:
+  // minute >= 45
+  // minute_display >= 45
   // ==========================================================
 
   const values = [
@@ -1278,8 +1347,7 @@ function isFirstHalfFinished(m) {
     m?.match_status,
     m?.state,
     m?.phase,
-    m?.period,
-    m?.minute_display
+    m?.period
 
   ];
 
@@ -3183,4 +3251,4 @@ function json(
 
   );
 
-}
+      }
