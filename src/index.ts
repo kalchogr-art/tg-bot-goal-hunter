@@ -15,6 +15,7 @@
 // 9. LOW CPU
 // 10. DAILY + ALL-TIME STATS
 // 11. ATOMIC ONE-ENTRY PER MATCH_ID
+// 12. FIX: V27 1H detection via AC=12
 //
 // IMPORTANT:
 //
@@ -23,39 +24,7 @@
 // After GOAL or NO GOAL:
 // SAME match_id = PERMANENTLY BLOCKED
 //
-// ------------------------------------------------------------
-//
-// HT LOGIC:
-//
-// Official HT 0:0
-//       |
-//       +---- save HT time
-//       |
-//       +---- wait 10 minutes
-//       |
-//       +---- if still no GOAL -> NO GOAL
-//
-// FT 0:0
-//       |
-//       +---- immediate NO GOAL
-//
-// ------------------------------------------------------------
-//
-// RECOVERY:
-//
-// If TRACKING match disappears from current V27 feed:
-//
-//     getMatchFromV27ById()
-//             |
-//             +---- if found -> process normally
-//             |
-//             +---- if not found -> recoverMissingTracking()
-//
-// Recovery NEVER means:
-//     "missing = NO GOAL immediately"
-//
 // ============================================================
-
 
 const HUNTER_MIN_SCORE = 60;
 
@@ -69,8 +38,7 @@ const SESSION_START_HOUR = 12;
 
 const SESSION_START_MINUTE = 15;
 
-// NEW:
-// official HT + 10 minutes
+// Official HT + 10 minutes
 const HT_NO_GOAL_DELAY_MINUTES = 10;
 
 
@@ -390,7 +358,9 @@ async function processTracker(env) {
           method: "GET",
           headers: {
             "Accept":
-              "application/json"
+              "application/json",
+            "Cache-Control":
+              "no-cache"
           }
         }
       )
@@ -615,13 +585,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // RECOVERY
-  //
-  // IMPORTANT:
-  //
-  // TRACKING records that disappeared from V27 are NOT
-  // automatically converted to NO GOAL.
-  //
-  // We try to recover each missing match.
   // ==========================================================
 
   await recoverMissingTracking(
@@ -723,10 +686,6 @@ async function processTrackingMatch(
       );
 
 
-    // --------------------------------------------------------
-    // DO NOT GUESS
-    // --------------------------------------------------------
-
     if (
       goalMinute === null
     ) {
@@ -736,8 +695,6 @@ async function processTrackingMatch(
         id
       );
 
-      // IMPORTANT:
-      // Do not process HT/FT until the goal event is resolved.
       return;
 
     }
@@ -807,8 +764,6 @@ async function processTrackingMatch(
 
   // ==========================================================
   // OFFICIAL FT
-  //
-  // FT 0:0 -> IMMEDIATE NO GOAL
   // ==========================================================
 
   if (
@@ -832,12 +787,6 @@ async function processTrackingMatch(
 
   // ==========================================================
   // OFFICIAL HT
-  //
-  // HT 0:0 -> SAVE HT TIME ONLY
-  //
-  // NO GOAL IS NOT SENT HERE.
-  //
-  // +10 MINUTES WILL BE CHECKED LATER.
   // ==========================================================
 
   if (
@@ -852,16 +801,13 @@ async function processTrackingMatch(
       now
     );
 
-    // Do not immediately NO GOAL.
     return;
 
   }
 
 
   // ==========================================================
-  // ALREADY AT HT
-  //
-  // Check whether HT + 10 minutes has passed.
+  // HT + 10 MINUTES
   // ==========================================================
 
   await checkHalfTimeTimeout(
@@ -885,7 +831,6 @@ async function registerHalfTime(
   now
 ) {
 
-  // Already recorded.
   if (
     existing.ht_detected === 1 ||
     existing.ht_detected === true ||
@@ -998,8 +943,7 @@ async function checkHalfTimeTimeout(
 
 
   // ==========================================================
-  // Before declaring NO GOAL, inspect V27 one more time
-  // for a real goal event.
+  // CHECK V27 ONE MORE TIME FOR GOAL
   // ==========================================================
 
   const entryHome =
@@ -1107,8 +1051,7 @@ async function checkHalfTimeTimeout(
 
     }
 
-    // Score changed but real event unavailable.
-    // Never fake the minute.
+
     return;
 
   }
@@ -1193,13 +1136,6 @@ async function finalizeNoGoal(
 // ============================================================
 // RECOVERY
 // ============================================================
-//
-// Finds TRACKING records that are no longer in the current
-// V27 feed.
-//
-// We attempt to recover them individually.
-//
-// ============================================================
 
 async function recoverMissingTracking(
   env,
@@ -1273,15 +1209,6 @@ async function recoverMissingTracking(
       }
 
 
-      // ------------------------------------------------------
-      // Match still not available.
-      //
-      // If HT was already recorded, we can independently
-      // check HT + 10.
-      //
-      // If HT was NOT recorded, we DO NOT guess.
-      // ------------------------------------------------------
-
       await recoverFromStoredState(
         env,
         item.signal,
@@ -1307,13 +1234,6 @@ async function recoverMissingTracking(
 
 // ============================================================
 // GET MATCH FROM V27 BY ID
-// ============================================================
-//
-// This uses the V27 service binding again.
-//
-// V27 is asked for the full feed and the requested match is
-// selected by ID.
-//
 // ============================================================
 
 async function getMatchFromV27ById(
@@ -1395,20 +1315,6 @@ async function getMatchFromV27ById(
 // ============================================================
 // RECOVERY FROM STORED STATE
 // ============================================================
-//
-// If the match disappeared completely:
-//
-// - if HT was recorded
-// - and HT + 10 minutes passed
-// - and there is no evidence of a score change
-//
-// -> NO GOAL
-//
-// If HT was never recorded:
-//
-// -> DO NOT GUESS
-//
-// ============================================================
 
 async function recoverFromStoredState(
   env,
@@ -1464,13 +1370,6 @@ async function recoverFromStoredState(
 
   }
 
-
-  // ----------------------------------------------------------
-  // We cannot prove a goal from a disappeared feed.
-  //
-  // If no goal was recorded, the stored state is still 0:0.
-  // Therefore after HT + 10 we finalize NO GOAL.
-  // ----------------------------------------------------------
 
   const update =
     await env.DB
@@ -1938,8 +1837,23 @@ function parseMinuteValue(value) {
 // ============================================================
 // FIRST HALF FINISHED
 // ============================================================
+//
+// V27 FIX:
+//
+// AC = 12  -> 1H
+// AC = 13  -> 2H
+//
+// Tracker previously relied only on m.period.
+// That could cause V27 to show a valid 1H match while
+// Tracker rejected it.
+//
+// ============================================================
 
 function isFirstHalfFinished(m) {
+
+  // ----------------------------------------------------------
+  // V27 status fields
+  // ----------------------------------------------------------
 
   const values = [
 
@@ -1967,6 +1881,10 @@ function isFirstHalfFinished(m) {
 
   }
 
+
+  // ----------------------------------------------------------
+  // Nested status fields
+  // ----------------------------------------------------------
 
   const nestedValues = [
 
@@ -1999,6 +1917,32 @@ function isFirstHalfFinished(m) {
       return true;
 
     }
+
+  }
+
+
+  // ----------------------------------------------------------
+  // V27 AC FIX
+  //
+  // AC = 12 means first-half finished / HT state.
+  //
+  // ----------------------------------------------------------
+
+  const ac =
+    Number(
+      m?.ac ??
+      m?.AC ??
+      m?.status?.ac ??
+      m?.status?.AC ??
+      0
+    );
+
+
+  if (
+    ac === 12
+  ) {
+
+    return true;
 
   }
 
@@ -2106,6 +2050,11 @@ function isFullTime(m) {
 
   }
 
+
+  // ----------------------------------------------------------
+  // V27 AC = 13 means second half.
+  // We do NOT treat AC 13 as FT.
+  // ----------------------------------------------------------
 
   return false;
 
@@ -2388,6 +2337,21 @@ async function createHunterEntry(
 // ============================================================
 // HUNTER FILTER
 // ============================================================
+//
+// IMPORTANT FIX:
+//
+// V27 може да няма m.period.
+//
+// Затова:
+// 1. първо проверяваме period
+// 2. ако няма валиден period -> проверяваме AC
+//
+// AC:
+// 12 = FIRST HALF / HT
+// 13 = SECOND HALF
+//
+// ENTRY се допуска само при 1H.
+// ============================================================
 
 function isHunterCandidate(
   m,
@@ -2398,13 +2362,6 @@ function isHunterCandidate(
     Number(
       m?.minute ?? 0
     );
-
-
-  const period =
-    String(
-      m?.period || ""
-    )
-    .toUpperCase();
 
 
   const home =
@@ -2419,43 +2376,142 @@ function isHunterCandidate(
     );
 
 
+  // ==========================================================
+  // FIRST HALF DETECTION — V27
+  // ==========================================================
+
   const firstHalf =
-    period === "1H" ||
-    period === "FIRST" ||
-    period === "FIRST HALF" ||
-    period === "1ST HALF" ||
-    period.includes("1H");
+    isV27FirstHalf(m);
 
 
   if (!firstHalf) {
+
     return false;
+
   }
 
+
+  // ==========================================================
+  // 0:0 ONLY
+  // ==========================================================
 
   if (
     home !== 0 ||
     away !== 0
   ) {
+
     return false;
+
   }
 
+
+  // ==========================================================
+  // MINUTE 10 - 42
+  // ==========================================================
 
   if (
     minute < HUNTER_FROM ||
     minute > HUNTER_TO
   ) {
+
     return false;
+
   }
 
+
+  // ==========================================================
+  // SCORE >= 60
+  // ==========================================================
 
   if (
     score < HUNTER_MIN_SCORE
   ) {
+
     return false;
+
   }
 
 
   return true;
+
+}
+
+
+// ============================================================
+// V27 FIRST HALF
+// ============================================================
+//
+// PRIMARY:
+//
+// AC = 12 -> 1H
+//
+// FALLBACK:
+//
+// period / status text
+//
+// AC = 13 is explicitly NOT first half.
+// ============================================================
+
+function isV27FirstHalf(m) {
+
+  const ac =
+    Number(
+      m?.ac ??
+      m?.AC ??
+      m?.status?.ac ??
+      m?.status?.AC ??
+      0
+    );
+
+
+  // ----------------------------------------------------------
+  // V27 primary state
+  // ----------------------------------------------------------
+
+  if (
+    ac === 12
+  ) {
+
+    return true;
+
+  }
+
+
+  if (
+    ac === 13
+  ) {
+
+    return false;
+
+  }
+
+
+  // ----------------------------------------------------------
+  // Existing V27 period fallback
+  // ----------------------------------------------------------
+
+  const period =
+    String(
+      m?.period || ""
+    )
+    .toUpperCase()
+    .trim();
+
+
+  if (
+    period === "1H" ||
+    period === "FIRST" ||
+    period === "FIRST HALF" ||
+    period === "1ST HALF" ||
+    period.includes("1H")
+  ) {
+
+    return true;
+
+  }
+
+
+  return false;
 
 }
 
@@ -2475,7 +2531,9 @@ function getHunterScore(m) {
   if (
     score === null
   ) {
+
     return 0;
+
   }
 
 
@@ -2696,8 +2754,7 @@ async function buildStats(env) {
       : null;
 
 
-  let message =
-`📊 HUNTER STATISTICS — TODAY
+  return `📊 HUNTER STATISTICS — TODAY
 
 📅 ${today}
 
@@ -2739,9 +2796,6 @@ ${
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
-
-
-  return message;
 
 }
 
@@ -3335,4 +3389,4 @@ function json(
 
   );
 
-}
+        }
