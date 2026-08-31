@@ -16,6 +16,7 @@
 // 10. PREVENT DUPLICATE ENTRY FOR SAME MATCH_ID
 // 11. GET /entries FOR CLOUDBET BET WORKER
 // 12. MINUTE-BASED HUNTER SCORE THRESHOLDS
+// 13. TELEGRAM REPLY THREAD FOR GOAL / NO GOAL
 //
 // HUNTER CONDITIONS:
 //
@@ -588,7 +589,8 @@ async function processTracker(env) {
           entry_minute,
           hunter_score,
           entry_home_score,
-          entry_away_score
+          entry_away_score,
+          telegram_message_id
         FROM hunter_signals
         WHERE status = 'TRACKING'
       `)
@@ -959,7 +961,8 @@ async function processTrackingMatch(
       formatNoGoalMessage(
         existing,
         m
-      )
+      ),
+      existing.telegram_message_id
     );
 
 
@@ -1019,7 +1022,8 @@ async function processTrackingMatch(
       formatNoGoalMessage(
         existing,
         m
-      )
+      ),
+      existing.telegram_message_id
     );
 
 
@@ -1104,7 +1108,8 @@ async function processTrackingMatch(
         m,
         goalMinute,
         afterMinutes
-      )
+      ),
+      existing.telegram_message_id
     );
 
 
@@ -1991,49 +1996,103 @@ async function createHunterEntry(
   }
 
 
+  const insertedId =
+    insert?.meta?.last_row_id ||
+    null;
+
+
+  // ==========================================================
+  // ADD TO TRACKING MAP IMMEDIATELY
+  // ==========================================================
+
+  const signal = {
+
+    id:
+      insertedId,
+
+    match_id:
+      id,
+
+    match_name:
+      matchName,
+
+    league,
+
+    entry_time:
+      now.toISOString(),
+
+    entry_minute:
+      minute,
+
+    hunter_score:
+      hunterScore,
+
+    entry_home_score:
+      home,
+
+    entry_away_score:
+      away,
+
+    telegram_message_id:
+      null
+
+  };
+
+
   trackingMap.set(
     id,
-    {
+    signal
+  );
 
-      id:
-        insert?.meta?.last_row_id ||
-        null,
 
-      match_id:
-        id,
+  // ==========================================================
+  // SEND ENTRY
+  //
+  // sendTelegram returns Telegram message_id.
+  // We save it so GOAL / NO GOAL can reply to this ENTRY.
+  // ==========================================================
 
-      match_name:
-        matchName,
-
-      league,
-
-      entry_time:
-        now.toISOString(),
-
-      entry_minute:
-        minute,
-
-      hunter_score:
+  const telegramMessageId =
+    await sendTelegram(
+      env,
+      formatEntryMessage(
+        m,
         hunterScore,
-
-      entry_home_score:
-        home,
-
-      entry_away_score:
-        away
-
-    }
-  );
+        local
+      )
+    );
 
 
-  await sendTelegram(
-    env,
-    formatEntryMessage(
-      m,
-      hunterScore,
-      local
-    )
-  );
+  // ==========================================================
+  // SAVE TELEGRAM MESSAGE ID
+  // ==========================================================
+
+  if (
+    telegramMessageId !== null &&
+    telegramMessageId !== undefined
+  ) {
+
+    await env.DB
+      .prepare(`
+        UPDATE hunter_signals
+        SET
+          telegram_message_id = ?,
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'TRACKING'
+      `)
+      .bind(
+        telegramMessageId,
+        now.toISOString(),
+        insertedId
+      )
+      .run();
+
+
+    signal.telegram_message_id =
+      telegramMessageId;
+
+  }
 
 }
 
@@ -2158,7 +2217,8 @@ async function finalizeMissingTracking(
             0
         }
       }
-    )
+    ),
+    signal?.telegram_message_id
   );
 
 }
@@ -2622,9 +2682,6 @@ async function getMonthlyStats(
 
 // ============================================================
 // MONTHLY HISTORY
-//
-// Gets every month represented in hunter_signals.
-// Current month is always included.
 // ============================================================
 
 async function getMonthlyHistory(
@@ -3640,11 +3697,31 @@ NEXT GOAL HUNTER
 
 // ============================================================
 // TELEGRAM
+//
+// IMPORTANT:
+//
+// sendTelegram() now returns Telegram message_id.
+//
+// If replyToMessageId is provided, the message is sent as
+// a reply to that Telegram message.
+//
+// This is what connects:
+//
+// 🎯 HUNTER ENTRY
+//       ↓
+// 🟢 GOAL HIT
+//
+// or:
+//
+// 🎯 HUNTER ENTRY
+//       ↓
+// 🔴 NO GOAL
 // ============================================================
 
 async function sendTelegram(
   env,
-  message
+  message,
+  replyToMessageId = null
 ) {
 
   const token =
@@ -3662,7 +3739,37 @@ async function sendTelegram(
 
 
   if (!text)
-    return;
+    return null;
+
+
+  const body = {
+
+    chat_id:
+      chatId,
+
+    text
+
+  };
+
+
+  // ==========================================================
+  // REPLY TO ENTRY
+  // ==========================================================
+
+  if (
+    replyToMessageId !== null &&
+    replyToMessageId !== undefined &&
+    String(replyToMessageId) !== ""
+  ) {
+
+    body.reply_parameters = {
+
+      message_id:
+        Number(replyToMessageId)
+
+    };
+
+  }
 
 
   const response =
@@ -3681,37 +3788,67 @@ async function sendTelegram(
         },
 
         body:
-          JSON.stringify({
-
-            chat_id:
-              chatId,
-
-            text
-
-          })
+          JSON.stringify(body)
 
       }
 
     );
 
 
+  const responseText =
+    await response.text();
+
+
   if (!response.ok) {
-
-    const errorText =
-      await response.text();
-
 
     throw new Error(
       "Telegram HTTP " +
       response.status +
       " | " +
-      errorText.substring(
+      responseText.substring(
         0,
         500
       )
     );
 
   }
+
+
+  // ==========================================================
+  // TELEGRAM RESPONSE
+  // ==========================================================
+
+  try {
+
+    const result =
+      JSON.parse(
+        responseText
+      );
+
+
+    if (
+      result?.ok === true &&
+      result?.result?.message_id !== undefined
+    ) {
+
+      return Number(
+        result.result.message_id
+      );
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      "TELEGRAM RESPONSE PARSE ERROR",
+      error?.message ||
+      String(error)
+    );
+
+  }
+
+
+  return null;
 
 }
 
@@ -4094,4 +4231,4 @@ function json(
 
   );
 
-      }
+    }
