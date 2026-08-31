@@ -13,12 +13,14 @@
 // 7. SAFE TRACKING MAP
 // 8. DAILY + ALL-TIME STATS
 // 9. PREVENT DUPLICATE ENTRY FOR SAME MATCH_ID
+// 10. GET /entries FOR CLOUDBET BET WORKER
 //
 // IMPORTANT:
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // After GOAL HIT or NO GOAL, the same match_id is permanently
 // blocked from creating another Hunter ENTRY.
 // ============================================================
+
 
 const HUNTER_MIN_SCORE = 60;
 const HUNTER_FROM = 10;
@@ -31,21 +33,25 @@ const SESSION_START_MINUTE = 15;
 
 
 // ============================================================
-// MAIN
+// MAIN WORKER
 // ============================================================
 
 export default {
 
   async fetch(request, env) {
 
-    const url = new URL(request.url);
+    const url =
+      new URL(request.url);
 
 
     // ========================================================
     // DEBUG PROXY BINDING
     // ========================================================
 
-    if (url.pathname === "/debug-proxy-binding") {
+    if (
+      request.method === "GET" &&
+      url.pathname === "/debug-proxy-binding"
+    ) {
 
       try {
 
@@ -69,6 +75,7 @@ export default {
             headers: {
               "Content-Type":
                 "application/json; charset=utf-8",
+
               "Cache-Control":
                 "no-store"
             }
@@ -101,15 +108,234 @@ export default {
 
 
     // ========================================================
+    // HUNTER ENTRIES API
+    //
+    // CLOUDBET BET WORKER -> HUNTER TRACKER
+    //
+    // READ ONLY
+    //
+    // This endpoint exposes ONLY active Hunter signals.
+    // It does NOT create, update or finalize signals.
+    // ========================================================
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/entries"
+    ) {
+
+      try {
+
+        if (!env.DB) {
+
+          return json({
+            success: false,
+            error: "DB binding missing"
+          }, 500);
+
+        }
+
+
+        const result =
+          await env.DB
+            .prepare(`
+              SELECT
+                id,
+                match_id,
+                match_name,
+                league,
+                entry_time,
+                entry_minute,
+                hunter_score,
+                goal_pressure,
+                danger_index,
+                attack_score,
+                entry_home_score,
+                entry_away_score,
+                status,
+                result,
+                created_at,
+                updated_at
+              FROM hunter_signals
+              WHERE status = 'TRACKING'
+              ORDER BY created_at DESC
+            `)
+            .all();
+
+
+        const rows =
+          result?.results || [];
+
+
+        const entries =
+          rows.map(row => {
+
+            return {
+
+              // ------------------------------------------------
+              // Signal identification
+              // ------------------------------------------------
+
+              type:
+                "HUNTER_ENTRY",
+
+              signal:
+                "HUNTER_ENTRY",
+
+              action:
+                "ENTRY",
+
+              status:
+                "TRACKING",
+
+
+              // ------------------------------------------------
+              // Database identity
+              // ------------------------------------------------
+
+              id:
+                row?.id ?? null,
+
+              match_id:
+                row?.match_id ?? null,
+
+
+              // ------------------------------------------------
+              // Match
+              // ------------------------------------------------
+
+              match_name:
+                row?.match_name ?? "",
+
+              match:
+                row?.match_name ?? "",
+
+              league:
+                row?.league ?? "LIVE",
+
+
+              // ------------------------------------------------
+              // Entry
+              // ------------------------------------------------
+
+              entry_time:
+                row?.entry_time ?? null,
+
+              entry_minute:
+                row?.entry_minute ?? null,
+
+
+              // ------------------------------------------------
+              // Hunter metrics
+              // ------------------------------------------------
+
+              hunter_score:
+                row?.hunter_score ?? null,
+
+              goal_pressure:
+                row?.goal_pressure ?? null,
+
+              danger_index:
+                row?.danger_index ?? null,
+
+              attack_score:
+                row?.attack_score ?? null,
+
+
+              // ------------------------------------------------
+              // Entry score
+              // ------------------------------------------------
+
+              score: {
+
+                home:
+                  row?.entry_home_score ?? 0,
+
+                away:
+                  row?.entry_away_score ?? 0
+
+              },
+
+
+              // ------------------------------------------------
+              // Optional team fields
+              //
+              // Tracker stores match_name rather than separate
+              // home/away columns. Matcher can use match_name
+              // and match_id.
+              // ------------------------------------------------
+
+              home:
+                null,
+
+              away:
+                null
+
+            };
+
+          });
+
+
+        return json({
+
+          success:
+            true,
+
+          worker:
+            "GOAL WATCH — HUNTER TRACKER V5",
+
+          source:
+            "hunter_signals",
+
+          mode:
+            "READ_ONLY",
+
+          count:
+            entries.length,
+
+          entries
+
+        });
+
+      } catch (error) {
+
+        console.error(
+          "ENTRIES API ERROR",
+          error?.message ||
+          String(error)
+        );
+
+
+        return json({
+
+          success:
+            false,
+
+          error:
+            error?.message ||
+            String(error)
+
+        }, 500);
+
+      }
+
+    }
+
+
+    // ========================================================
     // OPTIONS
     // ========================================================
 
-    if (request.method === "OPTIONS") {
+    if (
+      request.method === "OPTIONS"
+    ) {
 
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders()
-      });
+      return new Response(
+        null,
+        {
+          status: 204,
+          headers: corsHeaders()
+        }
+      );
 
     }
 
@@ -118,15 +344,19 @@ export default {
     // TELEGRAM
     // ========================================================
 
-    if (request.method === "POST") {
+    if (
+      request.method === "POST"
+    ) {
 
       try {
 
         const update =
           await request.json();
 
+
         const message =
           update?.message;
+
 
         const text =
           String(
@@ -148,17 +378,28 @@ export default {
             await buildStats(env)
           );
 
+
           return json({
-            success: true,
-            action: "STATS"
+
+            success:
+              true,
+
+            action:
+              "STATS"
+
           });
 
         }
 
 
         return json({
-          success: true,
-          action: "IGNORED"
+
+          success:
+            true,
+
+          action:
+            "IGNORED"
+
         });
 
       } catch (error) {
@@ -169,11 +410,16 @@ export default {
           String(error)
         );
 
+
         return json({
-          success: false,
+
+          success:
+            false,
+
           error:
             error?.message ||
             String(error)
+
         }, 500);
 
       }
@@ -187,7 +433,8 @@ export default {
 
     return json({
 
-      success: true,
+      success:
+        true,
 
       worker:
         "GOAL WATCH — HUNTER TRACKER V5",
@@ -199,7 +446,9 @@ export default {
         "CRON + TELEGRAM",
 
       time:
-        getSofiaTime(new Date()).text
+        getSofiaTime(
+          new Date()
+        ).text
 
     });
 
@@ -210,7 +459,11 @@ export default {
   // CRON
   // ==========================================================
 
-  async scheduled(event, env, ctx) {
+  async scheduled(
+    event,
+    env,
+    ctx
+  ) {
 
     ctx.waitUntil(
 
@@ -241,6 +494,7 @@ async function processTracker(env) {
   const now =
     new Date();
 
+
   const local =
     getSofiaTime(now);
 
@@ -254,15 +508,18 @@ async function processTracker(env) {
       "V27 Service Binding missing"
     );
 
+
   if (!env.DB)
     throw new Error(
       "DB binding missing"
     );
 
+
   if (!env.TELEGRAM_BOT_TOKEN)
     throw new Error(
       "TELEGRAM_BOT_TOKEN missing"
     );
+
 
   if (!env.TELEGRAM_CHAT_ID)
     throw new Error(
@@ -333,6 +590,7 @@ async function processTracker(env) {
         "https://v27.internal/",
         {
           method: "GET",
+
           headers: {
             "Accept":
               "application/json"
@@ -348,11 +606,15 @@ async function processTracker(env) {
     const text =
       await response.text();
 
+
     throw new Error(
       "V27 HTTP " +
       response.status +
       " | " +
-      text.substring(0, 300)
+      text.substring(
+        0,
+        300
+      )
     );
 
   }
@@ -439,17 +701,9 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // FIX #9
-  // LOAD FINISHED MATCHES — ONE DB QUERY
+  // LOAD FINISHED MATCHES
   //
   // Every match which already has GOAL or NO GOAL is blocked.
-  //
-  // This prevents:
-  //
-  // ENTRY 19'
-  // GOAL 27'
-  // ENTRY 30'  <-- BLOCKED
-  //
   // ==========================================================
 
   const finishedResult =
@@ -566,10 +820,7 @@ async function processTracker(env) {
 
 
     // --------------------------------------------------------
-    // FIX #9:
     // MATCH ALREADY FINISHED
-    //
-    // NEVER CREATE ANOTHER ENTRY.
     // --------------------------------------------------------
 
     if (
@@ -1485,8 +1736,6 @@ async function createHunterEntry(
 
   // ==========================================================
   // SECOND SAFETY CHECK
-  //
-  // Prevents duplicate tracking in memory.
   // ==========================================================
 
   if (
@@ -1791,6 +2040,7 @@ async function finalizeMissingTracking(
           home:
             signal?.entry_home_score ??
             0,
+
           away:
             signal?.entry_away_score ??
             0
@@ -1942,8 +2192,10 @@ async function buildStats(env) {
   const now =
     new Date();
 
+
   const local =
     getSofiaTime(now);
+
 
   const today =
     local.date;
@@ -3259,7 +3511,10 @@ function json(
         "Content-Type":
           "application/json; charset=utf-8",
 
-        ...corsHeaders()
+        ...corsHeaders(),
+
+        "Cache-Control":
+          "no-store"
 
       }
 
@@ -3267,4 +3522,4 @@ function json(
 
   );
 
-    }
+}
