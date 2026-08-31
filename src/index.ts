@@ -1,5 +1,5 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V5
+// GOAL WATCH — HUNTER TRACKER V6
 // LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
 // V27 SERVICE BINDING
 //
@@ -7,20 +7,20 @@
 // 1. REAL GOAL MINUTE FROM V27
 // 2. DELAYED FEED DOES NOT CHANGE GOAL MINUTE
 // 3. ONLY GOAL AFTER ENTRY IS ACCEPTED
-// 4. 0:0 NO GOAL ONLY AT OFFICIAL HALF TIME
-// 5. SESSION START 12:15
-// 6. LOW CPU — ONE ACTIVE SIGNAL QUERY
-// 7. SAFE TRACKING MAP
-// 8. DAILY + ALL-TIME STATS
-// 9. PREVENT DUPLICATE ENTRY FOR SAME MATCH_ID
-// 10. GET /entries FOR CLOUDBET BET WORKER
+// 4. 0:0 NO GOAL AT OFFICIAL HALF TIME
+// 5. 2H = HALF TIME PASSED EVEN IF V27 DOES NOT RETURN "HT"
+// 6. SESSION START 12:15
+// 7. LOW CPU — ONE ACTIVE SIGNAL QUERY
+// 8. SAFE TRACKING MAP
+// 9. DAILY + ALL-TIME STATS
+// 10. PREVENT DUPLICATE ENTRY FOR SAME MATCH_ID
+// 11. GET /entries FOR CLOUDBET BET WORKER
 //
 // IMPORTANT:
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // After GOAL HIT or NO GOAL, the same match_id is permanently
 // blocked from creating another Hunter ENTRY.
 // ============================================================
-
 
 const HUNTER_MIN_SCORE = 60;
 const HUNTER_FROM = 10;
@@ -40,8 +40,7 @@ export default {
 
   async fetch(request, env) {
 
-    const url =
-      new URL(request.url);
+    const url = new URL(request.url);
 
 
     // ========================================================
@@ -75,7 +74,6 @@ export default {
             headers: {
               "Content-Type":
                 "application/json; charset=utf-8",
-
               "Cache-Control":
                 "no-store"
             }
@@ -109,13 +107,6 @@ export default {
 
     // ========================================================
     // HUNTER ENTRIES API
-    //
-    // CLOUDBET BET WORKER -> HUNTER TRACKER
-    //
-    // READ ONLY
-    //
-    // This endpoint exposes ONLY active Hunter signals.
-    // It does NOT create, update or finalize signals.
     // ========================================================
 
     if (
@@ -133,7 +124,6 @@ export default {
           }, 500);
 
         }
-
 
         const result =
           await env.DB
@@ -161,47 +151,24 @@ export default {
             `)
             .all();
 
-
         const rows =
           result?.results || [];
-
 
         const entries =
           rows.map(row => {
 
             return {
 
-              // ------------------------------------------------
-              // Signal identification
-              // ------------------------------------------------
-
-              type:
-                "HUNTER_ENTRY",
-
-              signal:
-                "HUNTER_ENTRY",
-
-              action:
-                "ENTRY",
-
-              status:
-                "TRACKING",
-
-
-              // ------------------------------------------------
-              // Database identity
-              // ------------------------------------------------
+              type: "HUNTER_ENTRY",
+              signal: "HUNTER_ENTRY",
+              action: "ENTRY",
+              status: "TRACKING",
 
               id:
                 row?.id ?? null,
 
               match_id:
                 row?.match_id ?? null,
-
-
-              // ------------------------------------------------
-              // Match
-              // ------------------------------------------------
 
               match_name:
                 row?.match_name ?? "",
@@ -212,21 +179,11 @@ export default {
               league:
                 row?.league ?? "LIVE",
 
-
-              // ------------------------------------------------
-              // Entry
-              // ------------------------------------------------
-
               entry_time:
                 row?.entry_time ?? null,
 
               entry_minute:
                 row?.entry_minute ?? null,
-
-
-              // ------------------------------------------------
-              // Hunter metrics
-              // ------------------------------------------------
 
               hunter_score:
                 row?.hunter_score ?? null,
@@ -240,11 +197,6 @@ export default {
               attack_score:
                 row?.attack_score ?? null,
 
-
-              // ------------------------------------------------
-              // Entry score
-              // ------------------------------------------------
-
               score: {
 
                 home:
@@ -255,33 +207,19 @@ export default {
 
               },
 
-
-              // ------------------------------------------------
-              // Optional team fields
-              //
-              // Tracker stores match_name rather than separate
-              // home/away columns. Matcher can use match_name
-              // and match_id.
-              // ------------------------------------------------
-
-              home:
-                null,
-
-              away:
-                null
+              home: null,
+              away: null
 
             };
 
           });
 
-
         return json({
 
-          success:
-            true,
+          success: true,
 
           worker:
-            "GOAL WATCH — HUNTER TRACKER V5",
+            "GOAL WATCH — HUNTER TRACKER V6",
 
           source:
             "hunter_signals",
@@ -304,11 +242,9 @@ export default {
           String(error)
         );
 
-
         return json({
 
-          success:
-            false,
+          success: false,
 
           error:
             error?.message ||
@@ -353,10 +289,8 @@ export default {
         const update =
           await request.json();
 
-
         const message =
           update?.message;
-
 
         const text =
           String(
@@ -378,27 +312,21 @@ export default {
             await buildStats(env)
           );
 
-
           return json({
 
-            success:
-              true,
+            success: true,
 
-            action:
-              "STATS"
+            action: "STATS"
 
           });
 
         }
 
-
         return json({
 
-          success:
-            true,
+          success: true,
 
-          action:
-            "IGNORED"
+          action: "IGNORED"
 
         });
 
@@ -410,11 +338,9 @@ export default {
           String(error)
         );
 
-
         return json({
 
-          success:
-            false,
+          success: false,
 
           error:
             error?.message ||
@@ -433,11 +359,10 @@ export default {
 
     return json({
 
-      success:
-        true,
+      success: true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V5",
+        "GOAL WATCH — HUNTER TRACKER V6",
 
       status:
         "ONLINE",
@@ -494,7 +419,6 @@ async function processTracker(env) {
   const now =
     new Date();
 
-
   const local =
     getSofiaTime(now);
 
@@ -508,18 +432,15 @@ async function processTracker(env) {
       "V27 Service Binding missing"
     );
 
-
   if (!env.DB)
     throw new Error(
       "DB binding missing"
     );
 
-
   if (!env.TELEGRAM_BOT_TOKEN)
     throw new Error(
       "TELEGRAM_BOT_TOKEN missing"
     );
-
 
   if (!env.TELEGRAM_CHAT_ID)
     throw new Error(
@@ -606,7 +527,6 @@ async function processTracker(env) {
     const text =
       await response.text();
 
-
     throw new Error(
       "V27 HTTP " +
       response.status +
@@ -687,7 +607,6 @@ async function processTracker(env) {
         signal?.match_id || ""
       );
 
-
     if (id) {
 
       trackingMap.set(
@@ -702,8 +621,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // LOAD FINISHED MATCHES
-  //
-  // Every match which already has GOAL or NO GOAL is blocked.
   // ==========================================================
 
   const finishedResult =
@@ -729,7 +646,6 @@ async function processTracker(env) {
       String(
         row?.match_id || ""
       );
-
 
     if (id) {
 
@@ -757,7 +673,6 @@ async function processTracker(env) {
         match?.id || ""
       );
 
-
     if (id) {
 
       currentIds.add(id);
@@ -779,7 +694,6 @@ async function processTracker(env) {
       String(
         match?.id || ""
       );
-
 
     if (!id)
       continue;
@@ -890,16 +804,13 @@ async function processTracker(env) {
         signal?.match_id || ""
       );
 
-
     if (!id)
       continue;
-
 
     if (
       currentIds.has(id)
     )
       continue;
-
 
     try {
 
@@ -941,7 +852,6 @@ async function processTrackingMatch(
     String(
       m?.id || ""
     );
-
 
   if (!id)
     return;
@@ -992,7 +902,145 @@ async function processTrackingMatch(
 
 
   // ==========================================================
+  // CRITICAL FIX
+  //
+  // IF V27 HAS MOVED TO SECOND HALF:
+  //
+  // The Hunter signal was created during FIRST HALF.
+  // Therefore the first-half opportunity is finished.
+  //
+  // IMPORTANT:
+  // This check MUST happen BEFORE goal detection.
+  //
+  // Example:
+  // ENTRY 35'
+  // V27 next poll = 60', period = 2H, score = 1:0
+  //
+  // The goal at 60' MUST NOT be GOAL HIT.
+  // The signal becomes NO GOAL because the first half
+  // ended at 45'+ and the goal happened in the second half.
+  // ==========================================================
+
+  if (
+    isSecondHalfStarted(m)
+  ) {
+
+    const update =
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            status = 'NO_GOAL',
+            result = 'NO GOAL',
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          now.toISOString(),
+          existing.id
+        )
+        .run();
+
+
+    const changes =
+      Number(
+        update?.meta?.changes || 0
+      );
+
+
+    if (
+      changes < 1
+    ) {
+
+      return;
+
+    }
+
+
+    trackingMap.delete(id);
+
+
+    await sendTelegram(
+      env,
+      formatNoGoalMessage(
+        existing,
+        m
+      )
+    );
+
+
+    return;
+
+  }
+
+
+  // ==========================================================
+  // OFFICIAL HALF TIME
+  //
+  // Still support feeds which explicitly return HT.
+  // ==========================================================
+
+  if (
+    home === 0 &&
+    away === 0 &&
+    isFirstHalfFinished(m)
+  ) {
+
+    const update =
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            status = 'NO_GOAL',
+            result = 'NO GOAL',
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          now.toISOString(),
+          existing.id
+        )
+        .run();
+
+
+    const changes =
+      Number(
+        update?.meta?.changes || 0
+      );
+
+
+    if (
+      changes < 1
+    ) {
+
+      return;
+
+    }
+
+
+    trackingMap.delete(id);
+
+
+    await sendTelegram(
+      env,
+      formatNoGoalMessage(
+        existing,
+        m
+      )
+    );
+
+
+    return;
+
+  }
+
+
+  // ==========================================================
   // GOAL DETECTED
+  //
+  // At this point we know the match is still in FIRST HALF.
   // ==========================================================
 
   if (
@@ -1075,62 +1123,151 @@ async function processTrackingMatch(
 
   }
 
+}
 
-  // ==========================================================
-  // OFFICIAL HALF TIME ONLY
-  // ==========================================================
 
-  if (
-    home === 0 &&
-    away === 0 &&
-    isFirstHalfFinished(m)
+// ============================================================
+// SECOND HALF DETECTION
+//
+// THIS IS THE MAIN FIX.
+//
+// V27 may not expose "HT" at all.
+// It can go directly:
+//
+// 45' -> 2H -> 46' -> 60'
+//
+// Once any reliable period/status field says SECOND HALF,
+// the first-half Hunter signal is finished.
+// ============================================================
+
+function isSecondHalfStarted(m) {
+
+  const values = [
+
+    m?.period,
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state,
+    m?.phase
+
+  ];
+
+
+  for (
+    const value of values
   ) {
 
-    const update =
-      await env.DB
-        .prepare(`
-          UPDATE hunter_signals
-          SET
-            status = 'NO_GOAL',
-            result = 'NO GOAL',
-            updated_at = ?
-          WHERE id = ?
-            AND status = 'TRACKING'
-        `)
-        .bind(
-          now.toISOString(),
-          existing.id
-        )
-        .run();
-
-
-    const changes =
-      Number(
-        update?.meta?.changes || 0
-      );
-
-
     if (
-      changes < 1
+      hasSecondHalfValue(
+        value
+      )
     ) {
 
-      return;
+      return true;
 
     }
 
+  }
 
-    trackingMap.delete(id);
+
+  const nestedValues = [
+
+    m?.period?.type,
+    m?.period?.name,
+    m?.period?.short,
+    m?.period?.long,
+
+    m?.status?.type,
+    m?.status?.name,
+    m?.status?.short,
+    m?.status?.long,
+
+    m?.match_status?.type,
+    m?.match_status?.name,
+    m?.match_status?.short,
+    m?.match_status?.long,
+
+    m?.state?.type,
+    m?.state?.name,
+    m?.state?.short,
+    m?.state?.long,
+
+    m?.phase?.type,
+    m?.phase?.name,
+    m?.phase?.short,
+    m?.phase?.long
+
+  ];
 
 
-    await sendTelegram(
-      env,
-      formatNoGoalMessage(
-        existing,
-        m
+  for (
+    const value of nestedValues
+  ) {
+
+    if (
+      hasSecondHalfValue(
+        value
       )
-    );
+    ) {
+
+      return true;
+
+    }
 
   }
+
+
+  return false;
+
+}
+
+
+// ============================================================
+// SECOND HALF VALUE
+// ============================================================
+
+function hasSecondHalfValue(value) {
+
+  const text =
+    String(
+      value || ""
+    )
+    .toUpperCase()
+    .trim();
+
+
+  if (!text)
+    return false;
+
+
+  return (
+
+    text === "2H" ||
+
+    text === "2ND HALF" ||
+
+    text === "2ND HALF." ||
+
+    text === "SECOND" ||
+
+    text === "SECOND HALF" ||
+
+    text === "SECOND-HALF" ||
+
+    text === "SECOND_HALF" ||
+
+    text === "2ND_HALF" ||
+
+    text === "2H STARTED" ||
+
+    text === "SECOND HALF STARTED" ||
+
+    text.includes("SECOND HALF") ||
+
+    text.includes("2ND HALF")
+
+  );
 
 }
 
@@ -1291,7 +1428,6 @@ function getRealGoalMinute(
       (a, b) => a - b
     );
 
-
     return validGoals[0];
 
   }
@@ -1299,10 +1435,13 @@ function getRealGoalMinute(
 
   // ==========================================================
   // FALLBACK
+  //
+  // Only valid while we KNOW this is still first half.
   // ==========================================================
 
   if (
-    currentMinute > entryMinute
+    currentMinute > entryMinute &&
+    currentMinute <= 45
   ) {
 
     return currentMinute;
@@ -3522,4 +3661,4 @@ function json(
 
   );
 
-}
+      }
