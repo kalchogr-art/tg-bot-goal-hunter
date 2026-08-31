@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER V6
-// LOW CPU / TELEGRAM / DAILY + ALL-TIME STATS
+// LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
 //
 // FIXES:
@@ -12,7 +12,7 @@
 // 6. SESSION START 12:15
 // 7. LOW CPU — ONE ACTIVE SIGNAL QUERY
 // 8. SAFE TRACKING MAP
-// 9. DAILY + ALL-TIME STATS
+// 9. DAILY + MONTHLY STATS
 // 10. PREVENT DUPLICATE ENTRY FOR SAME MATCH_ID
 // 11. GET /entries FOR CLOUDBET BET WORKER
 // 12. MINUTE-BASED HUNTER SCORE THRESHOLDS
@@ -1266,10 +1266,6 @@ function getRealGoalMinute(
   const candidates = [];
 
 
-  // ----------------------------------------------------------
-  // DIRECT GOALS
-  // ----------------------------------------------------------
-
   if (
     Array.isArray(m?.goals)
   ) {
@@ -1280,10 +1276,6 @@ function getRealGoalMinute(
 
   }
 
-
-  // ----------------------------------------------------------
-  // EVENTS
-  // ----------------------------------------------------------
 
   if (
     Array.isArray(m?.events)
@@ -1296,10 +1288,6 @@ function getRealGoalMinute(
   }
 
 
-  // ----------------------------------------------------------
-  // INCIDENTS
-  // ----------------------------------------------------------
-
   if (
     Array.isArray(m?.incidents)
   ) {
@@ -1310,10 +1298,6 @@ function getRealGoalMinute(
 
   }
 
-
-  // ----------------------------------------------------------
-  // GOAL EVENTS
-  // ----------------------------------------------------------
 
   if (
     Array.isArray(
@@ -1379,10 +1363,6 @@ function getRealGoalMinute(
     }
 
 
-    // ========================================================
-    // GOAL MUST BE AFTER ENTRY
-    // ========================================================
-
     if (
       minute <= entryMinute
     ) {
@@ -1411,10 +1391,6 @@ function getRealGoalMinute(
 
   }
 
-
-  // ==========================================================
-  // FALLBACK
-  // ==========================================================
 
   if (
     currentMinute > entryMinute &&
@@ -1850,10 +1826,6 @@ async function createHunterEntry(
     return;
 
 
-  // ==========================================================
-  // SECOND SAFETY CHECK
-  // ==========================================================
-
   if (
     trackingMap.has(id)
   ) {
@@ -1880,10 +1852,6 @@ async function createHunterEntry(
       m?.minute ?? 0
     );
 
-
-  // ==========================================================
-  // FINAL MINUTE/SCORE SAFETY CHECK
-  // ==========================================================
 
   const requiredScore =
     getRequiredHunterScore(
@@ -2198,15 +2166,6 @@ async function finalizeMissingTracking(
 
 // ============================================================
 // HUNTER FILTER
-//
-// EXACT RULE:
-//
-// 10–29' -> >= 61
-// 30–34' -> >= 65
-// 35–37' -> >= 68
-// 38–39' -> >= 72
-// 40–42' -> >= 75
-// 43'+   -> NO SIGNAL
 // ============================================================
 
 function isHunterCandidate(
@@ -2238,10 +2197,6 @@ function isHunterCandidate(
     );
 
 
-  // ----------------------------------------------------------
-  // FIRST HALF ONLY
-  // ----------------------------------------------------------
-
   const firstHalf =
     period === "1H" ||
     period === "FIRST" ||
@@ -2254,10 +2209,6 @@ function isHunterCandidate(
     return false;
 
 
-  // ----------------------------------------------------------
-  // MUST BE 0:0
-  // ----------------------------------------------------------
-
   if (
     home !== 0 ||
     away !== 0
@@ -2265,19 +2216,11 @@ function isHunterCandidate(
     return false;
 
 
-  // ----------------------------------------------------------
-  // GET REQUIRED SCORE FOR CURRENT MINUTE
-  // ----------------------------------------------------------
-
   const requiredScore =
     getRequiredHunterScore(
       minute
     );
 
-
-  // ----------------------------------------------------------
-  // NO VALID MINUTE = NO SIGNAL
-  // ----------------------------------------------------------
 
   if (
     requiredScore === null
@@ -2287,10 +2230,6 @@ function isHunterCandidate(
 
   }
 
-
-  // ----------------------------------------------------------
-  // SCORE MUST MEET MINIMUM
-  // ----------------------------------------------------------
 
   if (
     score < requiredScore
@@ -2308,8 +2247,6 @@ function isHunterCandidate(
 
 // ============================================================
 // REQUIRED HUNTER SCORE
-//
-// This is the SINGLE source of truth for Hunter thresholds.
 // ============================================================
 
 function getRequiredHunterScore(
@@ -2322,10 +2259,6 @@ function getRequiredHunterScore(
     );
 
 
-  // ----------------------------------------------------------
-  // 10–29'
-  // ----------------------------------------------------------
-
   if (
     m >= 10 &&
     m <= 29
@@ -2335,10 +2268,6 @@ function getRequiredHunterScore(
 
   }
 
-
-  // ----------------------------------------------------------
-  // 30–34'
-  // ----------------------------------------------------------
 
   if (
     m >= 30 &&
@@ -2350,10 +2279,6 @@ function getRequiredHunterScore(
   }
 
 
-  // ----------------------------------------------------------
-  // 35–37'
-  // ----------------------------------------------------------
-
   if (
     m >= 35 &&
     m <= 37
@@ -2363,10 +2288,6 @@ function getRequiredHunterScore(
 
   }
 
-
-  // ----------------------------------------------------------
-  // 38–39'
-  // ----------------------------------------------------------
 
   if (
     m >= 38 &&
@@ -2378,10 +2299,6 @@ function getRequiredHunterScore(
   }
 
 
-  // ----------------------------------------------------------
-  // 40–42'
-  // ----------------------------------------------------------
-
   if (
     m >= 40 &&
     m <= 42
@@ -2391,10 +2308,6 @@ function getRequiredHunterScore(
 
   }
 
-
-  // ----------------------------------------------------------
-  // BEFORE 10' OR AFTER 42'
-  // ----------------------------------------------------------
 
   return null;
 
@@ -2463,6 +2376,662 @@ STATUS: SESSION START`;
 
 
 // ============================================================
+// MONTH NAME
+// ============================================================
+
+function getBulgarianMonthName(
+  month
+) {
+
+  const months = [
+
+    "ЯНУАРИ",
+    "ФЕВРУАРИ",
+    "МАРТ",
+    "АПРИЛ",
+    "МАЙ",
+    "ЮНИ",
+    "ЮЛИ",
+    "АВГУСТ",
+    "СЕПТЕМВРИ",
+    "ОКТОМВРИ",
+    "НОЕМВРИ",
+    "ДЕКЕМВРИ"
+
+  ];
+
+
+  return (
+    months[
+      Number(month) - 1
+    ] ||
+    String(month)
+  );
+
+}
+
+
+// ============================================================
+// MONTH KEY
+// ============================================================
+
+function getMonthKey(
+  dateString
+) {
+
+  const text =
+    String(
+      dateString || ""
+    );
+
+
+  const match =
+    text.match(
+      /^(\d{4})-(\d{2})/
+    );
+
+
+  if (!match)
+    return null;
+
+
+  return (
+    match[1] +
+    "-" +
+    match[2]
+  );
+
+}
+
+
+// ============================================================
+// MONTH LABEL
+// ============================================================
+
+function formatMonthLabel(
+  monthKey
+) {
+
+  const match =
+    String(
+      monthKey || ""
+    ).match(
+      /^(\d{4})-(\d{2})$/
+    );
+
+
+  if (!match)
+    return monthKey;
+
+
+  const year =
+    match[1];
+
+
+  const month =
+    match[2];
+
+
+  return (
+    getBulgarianMonthName(
+      Number(month)
+    ) +
+    " " +
+    year
+  );
+
+}
+
+
+// ============================================================
+// MONTH STATISTICS
+// ============================================================
+
+async function getMonthlyStats(
+  env,
+  monthKey
+) {
+
+  const start =
+    `${monthKey}-01`;
+
+
+  const parts =
+    monthKey
+      .split("-")
+      .map(Number);
+
+
+  const year =
+    parts[0];
+
+
+  const month =
+    parts[1];
+
+
+  const next =
+    month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+
+  const result =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+      `)
+      .bind(
+        start,
+        next
+      )
+      .first();
+
+
+  const total =
+    Number(
+      result?.total || 0
+    );
+
+
+  const goals =
+    Number(
+      result?.goals || 0
+    );
+
+
+  const noGoals =
+    Number(
+      result?.no_goals || 0
+    );
+
+
+  const resolved =
+    goals +
+    noGoals;
+
+
+  const rate =
+    resolved > 0
+      ? goals /
+        resolved *
+        100
+      : 0;
+
+
+  const avg =
+    result?.avg_goal_after !== null &&
+    result?.avg_goal_after !== undefined
+      ? Number(
+          result.avg_goal_after
+        )
+      : null;
+
+
+  return {
+
+    monthKey,
+
+    total,
+
+    goals,
+
+    noGoals,
+
+    resolved,
+
+    rate,
+
+    avg
+
+  };
+
+}
+
+
+// ============================================================
+// MONTHLY HISTORY
+//
+// Gets every month represented in hunter_signals.
+// Current month is always included.
+// ============================================================
+
+async function getMonthlyHistory(
+  env,
+  currentMonth
+) {
+
+  const result =
+    await env.DB
+      .prepare(`
+        SELECT DISTINCT
+          substr(created_at, 1, 7) AS month_key
+        FROM hunter_signals
+        WHERE created_at IS NOT NULL
+          AND substr(created_at, 1, 7) != ''
+        ORDER BY month_key DESC
+      `)
+      .all();
+
+
+  const monthSet =
+    new Set();
+
+
+  for (
+    const row of
+      result?.results || []
+  ) {
+
+    const key =
+      getMonthKey(
+        row?.month_key
+      );
+
+
+    if (key) {
+
+      monthSet.add(key);
+
+    }
+
+  }
+
+
+  // ----------------------------------------------------------
+  // ALWAYS SHOW CURRENT MONTH
+  // ----------------------------------------------------------
+
+  monthSet.add(
+    currentMonth
+  );
+
+
+  const months =
+    Array.from(
+      monthSet
+    )
+    .sort(
+      (a, b) =>
+        b.localeCompare(a)
+    );
+
+
+  const stats = [];
+
+
+  for (
+    const monthKey of months
+  ) {
+
+    stats.push(
+      await getMonthlyStats(
+        env,
+        monthKey
+      )
+    );
+
+  }
+
+
+  return stats;
+
+}
+
+
+// ============================================================
+// MONTH GRAPH
+// ============================================================
+
+function formatMonthGraph(
+  goals,
+  noGoals
+) {
+
+  const total =
+    Number(goals || 0) +
+    Number(noGoals || 0);
+
+
+  if (
+    total <= 0
+  ) {
+
+    return (
+      "🟢 GOAL     —\n" +
+      "🔴 NO GOAL  —"
+    );
+
+  }
+
+
+  const graphLength = 20;
+
+
+  const goalBlocks =
+    Math.round(
+      Number(goals || 0) /
+      total *
+      graphLength
+    );
+
+
+  const noGoalBlocks =
+    Math.max(
+      0,
+      graphLength -
+      goalBlocks
+    );
+
+
+  const goalBar =
+    "█".repeat(
+      goalBlocks
+    ) +
+    "░".repeat(
+      Math.max(
+        0,
+        graphLength -
+        goalBlocks
+      )
+    );
+
+
+  const noGoalBar =
+    "█".repeat(
+      noGoalBlocks
+    ) +
+    "░".repeat(
+      Math.max(
+        0,
+        graphLength -
+        noGoalBlocks
+      )
+    );
+
+
+  const rate =
+    Number(goals || 0) /
+    total *
+    100;
+
+
+  const noGoalRate =
+    Number(noGoals || 0) /
+    total *
+    100;
+
+
+  return (
+`🟢 GOAL     ${goalBar} ${rate.toFixed(1)}%
+🔴 NO GOAL  ${noGoalBar} ${noGoalRate.toFixed(1)}%`
+  );
+
+}
+
+
+// ============================================================
+// MONTHLY REPORT BLOCK
+// ============================================================
+
+function formatMonthlyBlock(
+  stats
+) {
+
+  return (
+`━━━━━━━━━━━━━━━━
+📅 ${formatMonthLabel(stats.monthKey)}
+━━━━━━━━━━━━━━━━
+
+🎯 ENTRY: ${stats.total}
+
+🟢 GOAL HIT: ${stats.goals}
+
+🔴 NO GOAL: ${stats.noGoals}
+
+📈 Успеваемост:
+${stats.rate.toFixed(1)}%
+
+⏱ Средно до гол:
+${
+    stats.avg !== null
+      ? stats.avg.toFixed(1) + " мин."
+      : "—"
+  }
+
+${formatMonthGraph(
+    stats.goals,
+    stats.noGoals
+  )}`
+  );
+
+}
+
+
+// ============================================================
+// CURRENT MONTH DETAIL
+// ============================================================
+
+async function getCurrentMonthDetails(
+  env,
+  monthKey
+) {
+
+  const parts =
+    monthKey
+      .split("-")
+      .map(Number);
+
+
+  const year =
+    parts[0];
+
+
+  const month =
+    parts[1];
+
+
+  const next =
+    month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+
+  // ==========================================================
+  // SCORE
+  // ==========================================================
+
+  const scoreResult =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          CASE
+
+            WHEN hunter_score BETWEEN 60 AND 69
+              THEN '60–69'
+
+            WHEN hunter_score BETWEEN 70 AND 79
+              THEN '70–79'
+
+            WHEN hunter_score BETWEEN 80 AND 89
+              THEN '80–89'
+
+            WHEN hunter_score BETWEEN 90 AND 100
+              THEN '90–100'
+
+          END AS score_group,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+
+          AND hunter_score BETWEEN 60 AND 100
+
+        GROUP BY score_group
+
+        ORDER BY
+          CASE score_group
+            WHEN '60–69' THEN 1
+            WHEN '70–79' THEN 2
+            WHEN '80–89' THEN 3
+            WHEN '90–100' THEN 4
+          END
+      `)
+      .bind(
+        `${monthKey}-01`,
+        next
+      )
+      .all();
+
+
+  // ==========================================================
+  // ENTRY MINUTE
+  // ==========================================================
+
+  const minuteResult =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          CASE
+
+            WHEN entry_minute BETWEEN 10 AND 19
+              THEN '10–19′'
+
+            WHEN entry_minute BETWEEN 20 AND 29
+              THEN '20–29′'
+
+            WHEN entry_minute BETWEEN 30 AND 34
+              THEN '30–34′'
+
+            WHEN entry_minute BETWEEN 35 AND 37
+              THEN '35–37′'
+
+            WHEN entry_minute BETWEEN 38 AND 39
+              THEN '38–39′'
+
+            WHEN entry_minute BETWEEN 40 AND 42
+              THEN '40–42′'
+
+          END AS minute_group,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+
+          AND entry_minute BETWEEN 10 AND 42
+
+        GROUP BY minute_group
+
+        ORDER BY
+          CASE minute_group
+            WHEN '10–19′' THEN 1
+            WHEN '20–29′' THEN 2
+            WHEN '30–34′' THEN 3
+            WHEN '35–37′' THEN 4
+            WHEN '38–39′' THEN 5
+            WHEN '40–42′' THEN 6
+          END
+      `)
+      .bind(
+        `${monthKey}-01`,
+        next
+      )
+      .all();
+
+
+  return {
+
+    scoreRows:
+      scoreResult?.results || [],
+
+    minuteRows:
+      minuteResult?.results || []
+
+  };
+
+}
+
+
+// ============================================================
 // STATS
 // ============================================================
 
@@ -2478,6 +3047,32 @@ async function buildStats(env) {
 
   const today =
     local.date;
+
+
+  const currentMonth =
+    getMonthKey(today);
+
+
+  // ==========================================================
+  // MONTH HISTORY
+  // ==========================================================
+
+  const monthlyHistory =
+    await getMonthlyHistory(
+      env,
+      currentMonth
+    );
+
+
+  // ==========================================================
+  // CURRENT MONTH DETAILS
+  // ==========================================================
+
+  const currentDetails =
+    await getCurrentMonthDetails(
+      env,
+      currentMonth
+    );
 
 
   // ==========================================================
@@ -2570,322 +3165,50 @@ async function buildStats(env) {
 
 
   // ==========================================================
-  // ALL TIME
+  // MESSAGE
   // ==========================================================
-
-  const main =
-    await env.DB
-      .prepare(`
-        SELECT
-
-          COUNT(*) AS total,
-
-          SUM(
-            CASE
-              WHEN result = 'GOAL HIT'
-              THEN 1
-              ELSE 0
-            END
-          ) AS goals,
-
-          SUM(
-            CASE
-              WHEN result = 'NO GOAL'
-              THEN 1
-              ELSE 0
-            END
-          ) AS no_goals,
-
-          AVG(
-            CASE
-              WHEN result = 'GOAL HIT'
-              AND goal_after_minutes IS NOT NULL
-              THEN goal_after_minutes
-            END
-          ) AS avg_goal_after
-
-        FROM hunter_signals
-      `)
-      .first();
-
-
-  // ==========================================================
-  // SCORE
-  // ==========================================================
-
-  const scoreResult =
-    await env.DB
-      .prepare(`
-        SELECT
-
-          CASE
-
-            WHEN hunter_score BETWEEN 60 AND 69
-              THEN '60–69'
-
-            WHEN hunter_score BETWEEN 70 AND 79
-              THEN '70–79'
-
-            WHEN hunter_score BETWEEN 80 AND 89
-              THEN '80–89'
-
-            WHEN hunter_score BETWEEN 90 AND 100
-              THEN '90–100'
-
-          END AS score_group,
-
-          COUNT(*) AS total,
-
-          SUM(
-            CASE
-              WHEN result = 'GOAL HIT'
-              THEN 1
-              ELSE 0
-            END
-          ) AS goals,
-
-          SUM(
-            CASE
-              WHEN result = 'NO GOAL'
-              THEN 1
-              ELSE 0
-            END
-          ) AS no_goals,
-
-          AVG(
-            CASE
-              WHEN result = 'GOAL HIT'
-              AND goal_after_minutes IS NOT NULL
-              THEN goal_after_minutes
-            END
-          ) AS avg_goal_after
-
-        FROM hunter_signals
-
-        WHERE hunter_score BETWEEN 60 AND 100
-
-        GROUP BY score_group
-
-        ORDER BY
-          CASE score_group
-            WHEN '60–69' THEN 1
-            WHEN '70–79' THEN 2
-            WHEN '80–89' THEN 3
-            WHEN '90–100' THEN 4
-          END
-      `)
-      .all();
-
-
-  // ==========================================================
-  // ENTRY MINUTE
-  // ==========================================================
-
-  const minuteResult =
-    await env.DB
-      .prepare(`
-        SELECT
-
-          CASE
-
-            WHEN entry_minute BETWEEN 10 AND 19
-              THEN '10–19′'
-
-            WHEN entry_minute BETWEEN 20 AND 29
-              THEN '20–29′'
-
-            WHEN entry_minute BETWEEN 30 AND 34
-              THEN '30–34′'
-
-            WHEN entry_minute BETWEEN 35 AND 37
-              THEN '35–37′'
-
-            WHEN entry_minute BETWEEN 38 AND 39
-              THEN '38–39′'
-
-            WHEN entry_minute BETWEEN 40 AND 42
-              THEN '40–42′'
-
-          END AS minute_group,
-
-          COUNT(*) AS total,
-
-          SUM(
-            CASE
-              WHEN result = 'GOAL HIT'
-              THEN 1
-              ELSE 0
-            END
-          ) AS goals,
-
-          SUM(
-            CASE
-              WHEN result = 'NO GOAL'
-              THEN 1
-              ELSE 0
-            END
-          ) AS no_goals
-
-        FROM hunter_signals
-
-        WHERE entry_minute BETWEEN 10 AND 42
-
-        GROUP BY minute_group
-
-        ORDER BY
-          CASE minute_group
-            WHEN '10–19′' THEN 1
-            WHEN '20–29′' THEN 2
-            WHEN '30–34′' THEN 3
-            WHEN '35–37′' THEN 4
-            WHEN '38–39′' THEN 5
-            WHEN '40–42′' THEN 6
-          END
-      `)
-      .all();
-
-
-  // ==========================================================
-  // LEAGUE
-  // ==========================================================
-
-  const leagueResult =
-    await env.DB
-      .prepare(`
-        SELECT
-
-          COALESCE(
-            NULLIF(TRIM(league), ''),
-            'UNKNOWN'
-          ) AS league,
-
-          COUNT(*) AS total,
-
-          SUM(
-            CASE
-              WHEN result = 'GOAL HIT'
-              THEN 1
-              ELSE 0
-            END
-          ) AS goals,
-
-          SUM(
-            CASE
-              WHEN result = 'NO GOAL'
-              THEN 1
-              ELSE 0
-            END
-          ) AS no_goals,
-
-          AVG(
-            CASE
-              WHEN result = 'GOAL HIT'
-              AND goal_after_minutes IS NOT NULL
-              THEN goal_after_minutes
-            END
-          ) AS avg_goal_after
-
-        FROM hunter_signals
-
-        GROUP BY league
-
-        ORDER BY total DESC
-      `)
-      .all();
-
-
-  // ==========================================================
-  // MAIN VALUES
-  // ==========================================================
-
-  const total =
-    Number(
-      main?.total || 0
-    );
-
-
-  const goals =
-    Number(
-      main?.goals || 0
-    );
-
-
-  const noGoals =
-    Number(
-      main?.no_goals || 0
-    );
-
-
-  const resolved =
-    goals +
-    noGoals;
-
-
-  const rate =
-    resolved > 0
-      ? goals /
-        resolved *
-        100
-      : 0;
-
-
-  const avg =
-    main?.avg_goal_after !== null &&
-    main?.avg_goal_after !== undefined
-      ? Number(
-          main.avg_goal_after
-        )
-      : null;
-
 
   let message =
-`📊 HUNTER STATISTICS — TODAY
+`📊 HUNTER MONTHLY REPORT
 
-📅 ${today}
+📅 ${formatMonthLabel(
+    currentMonth
+  )}
 
-🎯 ENTRY: ${dailyTotal}
+`;
 
-🟢 GOAL HIT: ${dailyGoals}
 
-🔴 NO GOAL: ${dailyNoGoals}
+  // ==========================================================
+  // ALL MONTHS
+  // ==========================================================
 
-📈 Успеваемост:
-${dailyRate.toFixed(1)}%
+  for (
+    const monthStats of
+      monthlyHistory
+  ) {
 
-⏱ Средно до гол:
-${
-    dailyAvg !== null
-      ? dailyAvg.toFixed(1) + " мин."
-      : "—"
+    message +=
+      formatMonthlyBlock(
+        monthStats
+      ) +
+      "\n\n";
+
   }
 
-━━━━━━━━━━━━━━━━
-📊 HUNTER STATISTICS — ALL TIME
 
-🎯 ENTRY: ${total}
+  // ==========================================================
+  // CURRENT MONTH SCORE
+  // ==========================================================
 
-🟢 GOAL HIT: ${goals}
-
-🔴 NO GOAL: ${noGoals}
-
-📈 Успеваемост:
-${rate.toFixed(1)}%
-
-⏱ Средно до гол:
-${
-    avg !== null
-      ? avg.toFixed(1) + " мин."
-      : "—"
-  }
-
-━━━━━━━━━━━━━━━━
-🎯 ПО HUNTER SCORE
+  message +=
+`━━━━━━━━━━━━━━━━
+🎯 ${formatMonthLabel(currentMonth)} — ПО HUNTER SCORE
 ━━━━━━━━━━━━━━━━
 `;
 
 
   const scoreRows =
-    scoreResult?.results || [];
+    currentDetails.scoreRows;
 
 
   const scoreMap =
@@ -2905,10 +3228,12 @@ ${
 
 
   const scoreGroups = [
+
     "60–69",
     "70–79",
     "80–89",
     "90–100"
+
   ];
 
 
@@ -2971,6 +3296,10 @@ ${
   }
 
 
+  // ==========================================================
+  // AVERAGE GOAL BY SCORE
+  // ==========================================================
+
   message +=
 `
 ━━━━━━━━━━━━━━━━
@@ -3008,16 +3337,20 @@ ${
   }
 
 
+  // ==========================================================
+  // ENTRY MINUTE
+  // ==========================================================
+
   message +=
 `
 ━━━━━━━━━━━━━━━━
-⏱ ПО ENTRY МИНУТА
+⏱ ${formatMonthLabel(currentMonth)} — ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
 `;
 
 
   const minuteRows =
-    minuteResult?.results || [];
+    currentDetails.minuteRows;
 
 
   const minuteMap =
@@ -3037,12 +3370,14 @@ ${
 
 
   const minuteGroups = [
+
     "10–19′",
     "20–29′",
     "30–34′",
     "35–37′",
     "38–39′",
     "40–42′"
+
   ];
 
 
@@ -3105,105 +3440,38 @@ ${
   }
 
 
+  // ==========================================================
+  // DAILY — ALWAYS LAST
+  // ==========================================================
+
   message +=
 `
 ━━━━━━━━━━━━━━━━
-🏆 ПО ЛИГА
+📅 ДНЕШЕН ОТЧЕТ
 ━━━━━━━━━━━━━━━━
-`;
 
+📅 ${today}
 
-  const leagueRows =
-    leagueResult?.results || [];
+🎯 ENTRY: ${dailyTotal}
 
+🟢 GOAL HIT: ${dailyGoals}
 
-  if (
-    leagueRows.length === 0
-  ) {
+🔴 NO GOAL: ${dailyNoGoals}
 
-    message +=
-      "Няма данни.\n";
+📈 Успеваемост:
+${dailyRate.toFixed(1)}%
 
-  } else {
-
-    for (
-      const row of leagueRows
-    ) {
-
-      const league =
-        String(
-          row?.league ||
-          "UNKNOWN"
-        );
-
-
-      const leagueTotal =
-        Number(
-          row?.total || 0
-        );
-
-
-      const leagueGoals =
-        Number(
-          row?.goals || 0
-        );
-
-
-      const leagueNoGoals =
-        Number(
-          row?.no_goals || 0
-        );
-
-
-      const leagueResolved =
-        leagueGoals +
-        leagueNoGoals;
-
-
-      const leagueRate =
-        leagueResolved > 0
-          ? leagueGoals /
-            leagueResolved *
-            100
-          : 0;
-
-
-      const leagueAvg =
-        row?.avg_goal_after !== null &&
-        row?.avg_goal_after !== undefined
-          ? Number(
-              row.avg_goal_after
-            )
-          : null;
-
-
-      message +=
-        `${league}\n` +
-
-        `ENTRY: ${leagueTotal} | ` +
-        `GOAL: ${leagueGoals} | ` +
-        `NO GOAL: ${leagueNoGoals} | ` +
-        `${leagueRate.toFixed(1)}%\n` +
-
-        `⏱ Avg: ` +
-        (
-          leagueAvg !== null
-            ? leagueAvg.toFixed(1) + " мин."
-            : "—"
-        ) +
-
-        `\n\n`;
-
-    }
-
+⏱ Средно до гол:
+${
+    dailyAvg !== null
+      ? dailyAvg.toFixed(1) + " мин."
+      : "—"
   }
 
-
-  message +=
-`━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━
 💾 Данните са от hunter_signals
-📊 Статистиката се изчислява при /stats
-⚡ Cron не изчислява статистики
+📊 Месеците се изчисляват автоматично
+📊 Новият месец започва от 0
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
@@ -3826,4 +4094,4 @@ function json(
 
   );
 
-    }
+      }
