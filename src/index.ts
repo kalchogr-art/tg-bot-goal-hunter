@@ -1,6 +1,6 @@
 // ============================================================
 // GOAL WATCH — HUNTER TRACKER V6
-// LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
+// 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
 //
 // FIXES:
@@ -9,7 +9,7 @@
 // 3. ONLY GOAL AFTER ENTRY IS ACCEPTED
 // 4. 0:0 NO GOAL AT OFFICIAL HALF TIME
 // 5. 2H = HALF TIME PASSED EVEN IF V27 DOES NOT RETURN "HT"
-// 6. SESSION START 12:15
+// 6. 24/7 HUNTER — NO SESSION START
 // 7. LOW CPU — ONE ACTIVE SIGNAL QUERY
 // 8. SAFE TRACKING MAP
 // 9. DAILY + MONTHLY STATS
@@ -37,9 +37,6 @@ const HUNTER_FROM = 10;
 const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
-
-const SESSION_START_HOUR = 12;
-const SESSION_START_MINUTE = 15;
 
 
 // ============================================================
@@ -378,7 +375,7 @@ export default {
         "ONLINE",
 
       mode:
-        "CRON + TELEGRAM",
+        "24/7 CRON + TELEGRAM",
 
       time:
         getSofiaTime(
@@ -459,25 +456,6 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // SESSION START
-  // ==========================================================
-
-  if (
-    local.hour === SESSION_START_HOUR &&
-    local.minute === SESSION_START_MINUTE
-  ) {
-
-    await sendSessionStart(
-      env,
-      local
-    );
-
-    return;
-
-  }
-
-
-  // ==========================================================
   // DAILY REPORT
   // ==========================================================
 
@@ -497,17 +475,12 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // TRACKING WINDOW
+  // 24/7 TRACKING
+  //
+  // NO SESSION START
+  // NO TIME WINDOW
+  // HUNTER RUNS ALL DAY AND ALL NIGHT
   // ==========================================================
-
-  if (
-    local.hour < 12 ||
-    local.hour >= 24
-  ) {
-
-    return;
-
-  }
 
 
   // ==========================================================
@@ -2047,9 +2020,6 @@ async function createHunterEntry(
 
   // ==========================================================
   // SEND ENTRY
-  //
-  // sendTelegram returns Telegram message_id.
-  // We save it so GOAL / NO GOAL can reply to this ENTRY.
   // ==========================================================
 
   const telegramMessageId =
@@ -2409,33 +2379,6 @@ function getHunterScore(m) {
 
 
 // ============================================================
-// SESSION START
-// ============================================================
-
-async function sendSessionStart(
-  env,
-  local
-) {
-
-  const message =
-`🚀 SESSION START
-
-📅 ${local.date}
-
-🕐 ${local.text}
-
-STATUS: SESSION START`;
-
-
-  await sendTelegram(
-    env,
-    message
-  );
-
-}
-
-
-// ============================================================
 // MONTH NAME
 // ============================================================
 
@@ -2725,10 +2668,6 @@ async function getMonthlyHistory(
 
   }
 
-
-  // ----------------------------------------------------------
-  // ALWAYS SHOW CURRENT MONTH
-  // ----------------------------------------------------------
 
   monthSet.add(
     currentMonth
@@ -3110,20 +3049,12 @@ async function buildStats(env) {
     getMonthKey(today);
 
 
-  // ==========================================================
-  // MONTH HISTORY
-  // ==========================================================
-
   const monthlyHistory =
     await getMonthlyHistory(
       env,
       currentMonth
     );
 
-
-  // ==========================================================
-  // CURRENT MONTH DETAILS
-  // ==========================================================
 
   const currentDetails =
     await getCurrentMonthDetails(
@@ -3235,10 +3166,6 @@ async function buildStats(env) {
 `;
 
 
-  // ==========================================================
-  // ALL MONTHS
-  // ==========================================================
-
   for (
     const monthStats of
       monthlyHistory
@@ -3252,10 +3179,6 @@ async function buildStats(env) {
 
   }
 
-
-  // ==========================================================
-  // CURRENT MONTH SCORE
-  // ==========================================================
 
   message +=
 `━━━━━━━━━━━━━━━━
@@ -3353,10 +3276,6 @@ async function buildStats(env) {
   }
 
 
-  // ==========================================================
-  // AVERAGE GOAL BY SCORE
-  // ==========================================================
-
   message +=
 `
 ━━━━━━━━━━━━━━━━
@@ -3393,10 +3312,6 @@ async function buildStats(env) {
 
   }
 
-
-  // ==========================================================
-  // ENTRY MINUTE
-  // ==========================================================
 
   message +=
 `
@@ -3496,10 +3411,6 @@ async function buildStats(env) {
 
   }
 
-
-  // ==========================================================
-  // DAILY — ALWAYS LAST
-  // ==========================================================
 
   message +=
 `
@@ -3697,25 +3608,6 @@ NEXT GOAL HUNTER
 
 // ============================================================
 // TELEGRAM
-//
-// IMPORTANT:
-//
-// sendTelegram() now returns Telegram message_id.
-//
-// If replyToMessageId is provided, the message is sent as
-// a reply to that Telegram message.
-//
-// This is what connects:
-//
-// 🎯 HUNTER ENTRY
-//       ↓
-// 🟢 GOAL HIT
-//
-// or:
-//
-// 🎯 HUNTER ENTRY
-//       ↓
-// 🔴 NO GOAL
 // ============================================================
 
 async function sendTelegram(
@@ -3751,10 +3643,6 @@ async function sendTelegram(
 
   };
 
-
-  // ==========================================================
-  // REPLY TO ENTRY
-  // ==========================================================
 
   if (
     replyToMessageId !== null &&
@@ -3813,10 +3701,6 @@ async function sendTelegram(
 
   }
 
-
-  // ==========================================================
-  // TELEGRAM RESPONSE
-  // ==========================================================
 
   try {
 
@@ -4231,4 +4115,4 @@ function json(
 
   );
 
-    }
+      }
