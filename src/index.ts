@@ -1,7 +1,16 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.2.1
+// GOAL WATCH — HUNTER TRACKER V6.2.2
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
+//
+// V6.2.2:
+//
+// TEST MODE CHANGE:
+//
+// 1. HUNTER WINDOW = 10–42'
+// 2. HUNTER SCORE = >60 (61+)
+// 3. SAME SCORE THRESHOLD FOR ALL MINUTES
+// 4. FIXED TELEGRAM /stats SQL BUG
 //
 // V6.2.1 FIX:
 //
@@ -10,8 +19,6 @@
 // IMPORTANT:
 // If V27 skips a feed cycle and the next visible update is already
 // 2H with a changed score, the goal must be detected FIRST.
-// Otherwise the old order could incorrectly mark the signal
-// NO_GOAL before checking the changed score.
 //
 // V6.2 OPTIMIZATIONS:
 //
@@ -38,16 +45,12 @@
 // 9. DAILY + MONTHLY STATS
 // 10. PREVENT DUPLICATE ENTRY FOR SAME MATCH_ID
 // 11. GET /entries FOR CLOUDBET BET WORKER
-// 12. MINUTE-BASED HUNTER SCORE THRESHOLDS
+// 12. TEST HUNTER SCORE THRESHOLD
 // 13. TELEGRAM REPLY THREAD FOR GOAL / NO GOAL
 //
 // HUNTER CONDITIONS:
 //
-// 10–29' -> minimum 61
-// 30–34' -> minimum 65
-// 35–37' -> minimum 68
-// 38–39' -> minimum 72
-// 40–42' -> minimum 75
+// 10–42' -> score > 60
 // 43'+   -> NO HUNTER SIGNAL
 //
 // IMPORTANT:
@@ -63,6 +66,10 @@
 
 const HUNTER_FROM = 10;
 const HUNTER_TO = 42;
+
+// TEST THRESHOLD:
+// "над 60" = 61+
+const HUNTER_MIN_SCORE = 61;
 
 const TIME_ZONE = "Europe/Sofia";
 
@@ -306,7 +313,7 @@ export default {
             true,
 
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.2.1",
+            "GOAL WATCH — HUNTER TRACKER V6.2.2",
 
           source:
             "hunter_signals",
@@ -457,7 +464,7 @@ export default {
         true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6.2.1",
+        "GOAL WATCH — HUNTER TRACKER V6.2.2",
 
       status:
         "ONLINE",
@@ -930,21 +937,6 @@ async function processTrackingMatch(
 
   // ==========================================================
   // GOAL DETECTED — MUST BE CHECKED FIRST
-  //
-  // IMPORTANT V6.2.1:
-  //
-  // V27 may skip a feed cycle.
-  //
-  // Example:
-  //
-  // ENTRY 38' -> 0:0
-  //        ↓
-  // feed skipped
-  //        ↓
-  // next feed -> 2H -> 1:0
-  //
-  // The changed score proves that a goal occurred after ENTRY.
-  // Therefore GOAL must be checked BEFORE SECOND HALF.
   // ==========================================================
 
   if (
@@ -1031,8 +1023,6 @@ async function processTrackingMatch(
 
   // ==========================================================
   // SECOND HALF
-  //
-  // Only checked AFTER GOAL detection.
   // ==========================================================
 
   if (
@@ -2282,6 +2272,15 @@ async function finalizeMissingTracking(
 // ============================================================
 // HUNTER FILTER
 // ============================================================
+//
+// TEST LOGIC:
+//
+// 10–42' AND SCORE > 60
+//
+// Since score is an integer/rounded value:
+// >60 = 61+
+//
+// ============================================================
 
 function isHunterCandidate(
   m,
@@ -2331,14 +2330,13 @@ function isHunterCandidate(
     return false;
 
 
-  const requiredScore =
-    getRequiredHunterScore(
-      minute
-    );
-
+  // ==========================================================
+  // MINUTE WINDOW
+  // ==========================================================
 
   if (
-    requiredScore === null
+    minute < HUNTER_FROM ||
+    minute > HUNTER_TO
   ) {
 
     return false;
@@ -2346,8 +2344,12 @@ function isHunterCandidate(
   }
 
 
+  // ==========================================================
+  // TEST SCORE
+  // ==========================================================
+
   if (
-    score < requiredScore
+    score < HUNTER_MIN_SCORE
   ) {
 
     return false;
@@ -2363,6 +2365,12 @@ function isHunterCandidate(
 // ============================================================
 // REQUIRED HUNTER SCORE
 // ============================================================
+//
+// TEST MODE:
+//
+// ALL MINUTES 10–42 = 61+
+//
+// ============================================================
 
 function getRequiredHunterScore(
   minute
@@ -2375,51 +2383,11 @@ function getRequiredHunterScore(
 
 
   if (
-    m >= 10 &&
-    m <= 29
+    m >= HUNTER_FROM &&
+    m <= HUNTER_TO
   ) {
 
-    return 61;
-
-  }
-
-
-  if (
-    m >= 30 &&
-    m <= 34
-  ) {
-
-    return 65;
-
-  }
-
-
-  if (
-    m >= 35 &&
-    m <= 37
-  ) {
-
-    return 68;
-
-  }
-
-
-  if (
-    m >= 38 &&
-    m <= 39
-  ) {
-
-    return 72;
-
-  }
-
-
-  if (
-    m >= 40 &&
-    m <= 42
-  ) {
-
-    return 75;
+    return HUNTER_MIN_SCORE;
 
   }
 
@@ -3261,7 +3229,7 @@ async function getCurrentMonthDetails(
         WHERE created_at >= ?
           AND created_at < ?
 
-          AND hunter_score BETWEEN 60 AND 100
+          AND hunter_score BETWEEN 61 AND 100
 
         GROUP BY score_group
 
@@ -3298,7 +3266,7 @@ async function getCurrentMonthDetails(
               THEN '20–29′'
 
             WHEN entry_minute BETWEEN 30 AND 34
-              THEN '30–34′
+              THEN '30–34′'
 
             WHEN entry_minute BETWEEN 35 AND 37
               THEN '35–37′'
@@ -4160,7 +4128,7 @@ function formatEntryMessage(
 
 🔥 HUNTER SCORE: ${score}/100
 
-🎯 Условие: ≥ ${requiredScore}
+🎯 Условие: > 60
 
 🕐 ${local.text}
 
@@ -4453,4 +4421,4 @@ function json(
 
   );
 
-}
+  }
