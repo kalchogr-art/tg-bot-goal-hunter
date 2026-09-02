@@ -1,9 +1,17 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6
+// GOAL WATCH — HUNTER TRACKER V6.1
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
 //
-// FIXES:
+// V6.1 FIX:
+// 1. DAILY STATS USE EUROPE/SOFIA CALENDAR DAY
+// 2. DAILY REPORT USES EUROPE/SOFIA CALENDAR DAY
+// 3. MONTHLY STATS USE EUROPE/SOFIA MONTH BOUNDARIES
+// 4. UTC created_at IS PRESERVED
+// 5. DAILY REPORT DOES NOT REQUIRE EXACT 00:00 CRON
+// 6. PREVENT DUPLICATE DAILY REPORT
+//
+// EXISTING FIXES:
 // 1. REAL GOAL MINUTE FROM V27
 // 2. DELAYED FEED DOES NOT CHANGE GOAL MINUTE
 // 3. ONLY GOAL AFTER ENTRY IS ACCEPTED
@@ -33,10 +41,15 @@
 // blocked from creating another Hunter ENTRY.
 // ============================================================
 
+
 const HUNTER_FROM = 10;
 const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
+
+// Daily report retry window after midnight.
+// This protects against Cron not executing exactly at 00:00.
+const DAILY_REPORT_WINDOW_MINUTES = 10;
 
 
 // ============================================================
@@ -47,7 +60,8 @@ export default {
 
   async fetch(request, env) {
 
-    const url = new URL(request.url);
+    const url =
+      new URL(request.url);
 
 
     // ========================================================
@@ -161,15 +175,23 @@ export default {
         const rows =
           result?.results || [];
 
+
         const entries =
           rows.map(row => {
 
             return {
 
-              type: "HUNTER_ENTRY",
-              signal: "HUNTER_ENTRY",
-              action: "ENTRY",
-              status: "TRACKING",
+              type:
+                "HUNTER_ENTRY",
+
+              signal:
+                "HUNTER_ENTRY",
+
+              action:
+                "ENTRY",
+
+              status:
+                "TRACKING",
 
               id:
                 row?.id ?? null,
@@ -214,19 +236,24 @@ export default {
 
               },
 
-              home: null,
-              away: null
+              home:
+                null,
+
+              away:
+                null
 
             };
 
           });
 
+
         return json({
 
-          success: true,
+          success:
+            true,
 
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6",
+            "GOAL WATCH — HUNTER TRACKER V6.1",
 
           source:
             "hunter_signals",
@@ -251,7 +278,8 @@ export default {
 
         return json({
 
-          success: false,
+          success:
+            false,
 
           error:
             error?.message ||
@@ -321,19 +349,24 @@ export default {
 
           return json({
 
-            success: true,
+            success:
+              true,
 
-            action: "STATS"
+            action:
+              "STATS"
 
           });
 
         }
 
+
         return json({
 
-          success: true,
+          success:
+            true,
 
-          action: "IGNORED"
+          action:
+            "IGNORED"
 
         });
 
@@ -347,7 +380,8 @@ export default {
 
         return json({
 
-          success: false,
+          success:
+            false,
 
           error:
             error?.message ||
@@ -366,10 +400,11 @@ export default {
 
     return json({
 
-      success: true,
+      success:
+        true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6",
+        "GOAL WATCH — HUNTER TRACKER V6.1",
 
       status:
         "ONLINE",
@@ -457,11 +492,14 @@ async function processTracker(env) {
 
   // ==========================================================
   // DAILY REPORT
+  //
+  // The report is allowed during the first few minutes
+  // after midnight so Cron does not need to hit exactly 00:00.
   // ==========================================================
 
   if (
     local.hour === 0 &&
-    local.minute === 0
+    local.minute <= DAILY_REPORT_WINDOW_MINUTES
   ) {
 
     await sendDailyReport(
@@ -493,7 +531,8 @@ async function processTracker(env) {
       new Request(
         "https://v27.internal/",
         {
-          method: "GET",
+          method:
+            "GET",
 
           headers: {
             "Accept":
@@ -2487,6 +2526,327 @@ function formatMonthLabel(
 
 
 // ============================================================
+// SOFIA MONTH UTC BOUNDS
+//
+// Converts a Sofia calendar month into UTC ISO boundaries.
+// created_at remains UTC.
+// ============================================================
+
+function getSofiaMonthUtcBounds(
+  monthKey
+) {
+
+  const match =
+    String(
+      monthKey || ""
+    ).match(
+      /^(\d{4})-(\d{2})$/
+    );
+
+
+  if (!match)
+    return null;
+
+
+  const year =
+    Number(
+      match[1]
+    );
+
+
+  const month =
+    Number(
+      match[2]
+    );
+
+
+  if (
+    !year ||
+    !month ||
+    month < 1 ||
+    month > 12
+  ) {
+
+    return null;
+
+  }
+
+
+  const startDate =
+    `${year}-${String(month).padStart(2, "0")}-01`;
+
+
+  const next =
+    month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+
+  const startBounds =
+    getSofiaDayUtcBounds(
+      startDate
+    );
+
+
+  const endBounds =
+    getSofiaDayUtcBounds(
+      next
+    );
+
+
+  if (
+    !startBounds ||
+    !endBounds
+  ) {
+
+    return null;
+
+  }
+
+
+  return {
+
+    start:
+      startBounds.start,
+
+    end:
+      endBounds.start
+
+  };
+
+}
+
+
+// ============================================================
+// SOFIA DAY UTC BOUNDS
+//
+// IMPORTANT:
+//
+// Input:
+//   2026-09-02
+//
+// Means:
+//   2026-09-02 00:00:00 Europe/Sofia
+//
+// Returns UTC ISO boundaries.
+//
+// Example for summer time:
+//
+// Sofia:
+//   2026-09-02 00:00
+//
+// UTC:
+//   2026-09-01 21:00
+//
+// Therefore a match at:
+//
+//   2026-09-02 00:30 Sofia
+//
+// stored as:
+//
+//   2026-09-01T21:30:00.000Z
+//
+// is correctly counted for 02.09.
+// ============================================================
+
+function getSofiaDayUtcBounds(
+  dateString
+) {
+
+  const match =
+    String(
+      dateString || ""
+    ).match(
+      /^(\d{4})-(\d{2})-(\d{2})$/
+    );
+
+
+  if (!match)
+    return null;
+
+
+  const year =
+    Number(
+      match[1]
+    );
+
+
+  const month =
+    Number(
+      match[2]
+    );
+
+
+  const day =
+    Number(
+      match[3]
+    );
+
+
+  if (
+    !year ||
+    !month ||
+    !day
+  ) {
+
+    return null;
+
+  }
+
+
+  // ----------------------------------------------------------
+  // Calculate the UTC offset for a Sofia local midnight.
+  // ----------------------------------------------------------
+
+  const getOffsetMinutes =
+    utcMillis => {
+
+      const formatter =
+        new Intl.DateTimeFormat(
+          "en-US",
+          {
+            timeZone:
+              TIME_ZONE,
+
+            year:
+              "numeric",
+
+            month:
+              "2-digit",
+
+            day:
+              "2-digit",
+
+            hour:
+              "2-digit",
+
+            minute:
+              "2-digit",
+
+            second:
+              "2-digit",
+
+            hourCycle:
+              "h23"
+          }
+        );
+
+
+      const parts =
+        formatter.formatToParts(
+          new Date(
+            utcMillis
+          )
+        );
+
+
+      const get =
+        type => {
+
+          const part =
+            parts.find(
+              p =>
+                p.type === type
+            );
+
+          return Number(
+            part?.value
+          );
+
+        };
+
+
+      const localAsUtc =
+        Date.UTC(
+
+          get("year"),
+
+          get("month") - 1,
+
+          get("day"),
+
+          get("hour"),
+
+          get("minute"),
+
+          get("second")
+
+        );
+
+
+      return (
+        localAsUtc -
+        utcMillis
+      ) /
+      60000;
+
+    };
+
+
+  // ----------------------------------------------------------
+  // Start of requested Sofia day.
+  // ----------------------------------------------------------
+
+  const localMidnightGuess =
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    );
+
+
+  const startOffset =
+    getOffsetMinutes(
+      localMidnightGuess
+    );
+
+
+  const startMillis =
+    localMidnightGuess -
+    startOffset * 60000;
+
+
+  // ----------------------------------------------------------
+  // Start of next Sofia day.
+  // ----------------------------------------------------------
+
+  const nextLocalMidnightGuess =
+    Date.UTC(
+      year,
+      month - 1,
+      day + 1
+    );
+
+
+  const endOffset =
+    getOffsetMinutes(
+      nextLocalMidnightGuess
+    );
+
+
+  const endMillis =
+    nextLocalMidnightGuess -
+    endOffset * 60000;
+
+
+  return {
+
+    start:
+      new Date(
+        startMillis
+      ).toISOString(),
+
+    end:
+      new Date(
+        endMillis
+      ).toISOString()
+
+  };
+
+}
+
+
+// ============================================================
 // MONTH STATISTICS
 // ============================================================
 
@@ -2495,28 +2855,39 @@ async function getMonthlyStats(
   monthKey
 ) {
 
-  const start =
-    `${monthKey}-01`;
+  const bounds =
+    getSofiaMonthUtcBounds(
+      monthKey
+    );
 
 
-  const parts =
-    monthKey
-      .split("-")
-      .map(Number);
+  if (!bounds) {
 
+    return {
 
-  const year =
-    parts[0];
+      monthKey,
 
+      total:
+        0,
 
-  const month =
-    parts[1];
+      goals:
+        0,
 
+      noGoals:
+        0,
 
-  const next =
-    month === 12
-      ? `${year + 1}-01-01`
-      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+      resolved:
+        0,
+
+      rate:
+        0,
+
+      avg:
+        null
+
+    };
+
+  }
 
 
   const result =
@@ -2556,8 +2927,8 @@ async function getMonthlyStats(
           AND created_at < ?
       `)
       .bind(
-        start,
-        next
+        bounds.start,
+        bounds.end
       )
       .first();
 
@@ -2732,7 +3103,8 @@ function formatMonthGraph(
   }
 
 
-  const graphLength = 20;
+  const graphLength =
+    20;
 
 
   const goalBlocks =
@@ -2844,24 +3216,25 @@ async function getCurrentMonthDetails(
   monthKey
 ) {
 
-  const parts =
-    monthKey
-      .split("-")
-      .map(Number);
+  const bounds =
+    getSofiaMonthUtcBounds(
+      monthKey
+    );
 
 
-  const year =
-    parts[0];
+  if (!bounds) {
 
+    return {
 
-  const month =
-    parts[1];
+      scoreRows:
+        [],
 
+      minuteRows:
+        []
 
-  const next =
-    month === 12
-      ? `${year + 1}-01-01`
-      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+    };
+
+  }
 
 
   // ==========================================================
@@ -2933,8 +3306,8 @@ async function getCurrentMonthDetails(
           END
       `)
       .bind(
-        `${monthKey}-01`,
-        next
+        bounds.start,
+        bounds.end
       )
       .all();
 
@@ -3008,8 +3381,8 @@ async function getCurrentMonthDetails(
           END
       `)
       .bind(
-        `${monthKey}-01`,
-        next
+        bounds.start,
+        bounds.end
       )
       .all();
 
@@ -3046,7 +3419,9 @@ async function buildStats(env) {
 
 
   const currentMonth =
-    getMonthKey(today);
+    getMonthKey(
+      today
+    );
 
 
   const monthlyHistory =
@@ -3065,51 +3440,64 @@ async function buildStats(env) {
 
   // ==========================================================
   // DAILY
+  //
+  // IMPORTANT:
+  // Do NOT use substr(created_at, 1, 10).
+  //
+  // created_at is UTC.
+  // today is Europe/Sofia.
+  // We convert Sofia midnight -> UTC.
   // ==========================================================
 
+  const dailyBounds =
+    getSofiaDayUtcBounds(
+      today
+    );
+
+
   const daily =
-    await env.DB
-      .prepare(`
-        SELECT
+    dailyBounds
+      ? await env.DB
+          .prepare(`
+            SELECT
 
-          COUNT(*) AS total,
+              COUNT(*) AS total,
 
-          SUM(
-            CASE
-              WHEN result = 'GOAL HIT'
-              THEN 1
-              ELSE 0
-            END
-          ) AS goals,
+              SUM(
+                CASE
+                  WHEN result = 'GOAL HIT'
+                  THEN 1
+                  ELSE 0
+                END
+              ) AS goals,
 
-          SUM(
-            CASE
-              WHEN result = 'NO GOAL'
-              THEN 1
-              ELSE 0
-            END
-          ) AS no_goals,
+              SUM(
+                CASE
+                  WHEN result = 'NO GOAL'
+                  THEN 1
+                  ELSE 0
+                END
+              ) AS no_goals,
 
-          AVG(
-            CASE
-              WHEN result = 'GOAL HIT'
-              AND goal_after_minutes IS NOT NULL
-              THEN goal_after_minutes
-            END
-          ) AS avg_goal_after
+              AVG(
+                CASE
+                  WHEN result = 'GOAL HIT'
+                  AND goal_after_minutes IS NOT NULL
+                  THEN goal_after_minutes
+                END
+              ) AS avg_goal_after
 
-        FROM hunter_signals
+            FROM hunter_signals
 
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
-      `)
-      .bind(
-        today
-      )
-      .first();
+            WHERE created_at >= ?
+              AND created_at < ?
+          `)
+          .bind(
+            dailyBounds.start,
+            dailyBounds.end
+          )
+          .first()
+      : null;
 
 
   const dailyTotal =
@@ -3438,8 +3826,8 @@ ${
 
 ━━━━━━━━━━━━━━━━
 💾 Данните са от hunter_signals
-📊 Месеците се изчисляват автоматично
-📊 Новият месец започва от 0
+🕐 Daily timezone: Europe/Sofia
+📊 Месеците се изчисляват по Europe/Sofia
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
@@ -3465,6 +3853,10 @@ async function sendDailyReport(
     );
 
 
+  // ==========================================================
+  // DUPLICATE PROTECTION
+  // ==========================================================
+
   const already =
     await env.DB
       .prepare(`
@@ -3481,6 +3873,26 @@ async function sendDailyReport(
 
   if (already)
     return;
+
+
+  // ==========================================================
+  // EUROPE/SOFIA DAY BOUNDARIES
+  // ==========================================================
+
+  const reportBounds =
+    getSofiaDayUtcBounds(
+      reportDate
+    );
+
+
+  if (!reportBounds) {
+
+    throw new Error(
+      "Could not calculate Sofia UTC bounds for " +
+      reportDate
+    );
+
+  }
 
 
   const stats =
@@ -3508,14 +3920,12 @@ async function sendDailyReport(
 
         FROM hunter_signals
 
-        WHERE substr(
-          created_at,
-          1,
-          10
-        ) = ?
+        WHERE created_at >= ?
+          AND created_at < ?
       `)
       .bind(
-        reportDate
+        reportBounds.start,
+        reportBounds.end
       )
       .first();
 
@@ -3565,6 +3975,8 @@ async function sendDailyReport(
 📈 Успеваемост:
 ${rate.toFixed(1)}%
 
+━━━━━━━━━━━━━━━━
+🕐 Timezone: Europe/Sofia
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
@@ -3653,7 +4065,9 @@ async function sendTelegram(
     body.reply_parameters = {
 
       message_id:
-        Number(replyToMessageId)
+        Number(
+          replyToMessageId
+        )
 
     };
 
@@ -4115,4 +4529,4 @@ function json(
 
   );
 
-      }
+    }
