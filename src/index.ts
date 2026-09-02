@@ -1,10 +1,19 @@
-
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.2
+// GOAL WATCH — HUNTER TRACKER V6.2.1
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
 //
-// V6.2 OPTIMIZED:
+// V6.2.1 FIX:
+//
+// 1. GOAL DETECTION NOW RUNS BEFORE SECOND-HALF NO_GOAL
+//
+// IMPORTANT:
+// If V27 skips a feed cycle and the next visible update is already
+// 2H with a changed score, the goal must be detected FIRST.
+// Otherwise the old order could incorrectly mark the signal
+// NO_GOAL before checking the changed score.
+//
+// V6.2 OPTIMIZATIONS:
 //
 // 1. EUROPE/SOFIA CALENDAR DAY FOR DAILY STATS
 // 2. EUROPE/SOFIA CALENDAR MONTH FOR MONTHLY STATS
@@ -297,7 +306,7 @@ export default {
             true,
 
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.2",
+            "GOAL WATCH — HUNTER TRACKER V6.2.1",
 
           source:
             "hunter_signals",
@@ -448,7 +457,7 @@ export default {
         true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6.2",
+        "GOAL WATCH — HUNTER TRACKER V6.2.1",
 
       status:
         "ONLINE",
@@ -539,9 +548,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // DAILY REPORT
-  //
-  // Report is allowed during the first few minutes after
-  // midnight. IMPORTANT: tracker continues afterwards.
   // ==========================================================
 
   if (
@@ -635,8 +641,6 @@ async function processTracker(env) {
 
   // ==========================================================
   // LOAD ACTIVE TRACKING SIGNALS
-  //
-  // ONE D1 QUERY
   // ==========================================================
 
   const result =
@@ -925,7 +929,110 @@ async function processTrackingMatch(
 
 
   // ==========================================================
+  // GOAL DETECTED — MUST BE CHECKED FIRST
+  //
+  // IMPORTANT V6.2.1:
+  //
+  // V27 may skip a feed cycle.
+  //
+  // Example:
+  //
+  // ENTRY 38' -> 0:0
+  //        ↓
+  // feed skipped
+  //        ↓
+  // next feed -> 2H -> 1:0
+  //
+  // The changed score proves that a goal occurred after ENTRY.
+  // Therefore GOAL must be checked BEFORE SECOND HALF.
+  // ==========================================================
+
+  if (
+    home > entryHome ||
+    away > entryAway
+  ) {
+
+    const goalMinute =
+      getRealGoalMinute(
+        m,
+        entryHome,
+        entryAway,
+        entryMinute,
+        currentMinute
+      );
+
+
+    const afterMinutes =
+      goalMinute !== null
+        ? Math.max(
+            0,
+            goalMinute -
+            entryMinute
+          )
+        : null;
+
+
+    const update =
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            status = 'GOAL',
+            goal_minute = ?,
+            goal_after_minutes = ?,
+            result = 'GOAL HIT',
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          goalMinute,
+          afterMinutes,
+          now.toISOString(),
+          existing.id
+        )
+        .run();
+
+
+    const changes =
+      Number(
+        update?.meta?.changes || 0
+      );
+
+
+    if (
+      changes < 1
+    ) {
+
+      return;
+
+    }
+
+
+    trackingMap.delete(id);
+
+
+    await sendTelegram(
+      env,
+      formatGoalMessage(
+        existing,
+        m,
+        goalMinute,
+        afterMinutes
+      ),
+      existing.telegram_message_id
+    );
+
+
+    return;
+
+  }
+
+
+  // ==========================================================
   // SECOND HALF
+  //
+  // Only checked AFTER GOAL detection.
   // ==========================================================
 
   if (
@@ -1034,92 +1141,6 @@ async function processTrackingMatch(
       formatNoGoalMessage(
         existing,
         m
-      ),
-      existing.telegram_message_id
-    );
-
-
-    return;
-
-  }
-
-
-  // ==========================================================
-  // GOAL DETECTED
-  // ==========================================================
-
-  if (
-    home > entryHome ||
-    away > entryAway
-  ) {
-
-    const goalMinute =
-      getRealGoalMinute(
-        m,
-        entryHome,
-        entryAway,
-        entryMinute,
-        currentMinute
-      );
-
-
-    const afterMinutes =
-      goalMinute !== null
-        ? Math.max(
-            0,
-            goalMinute -
-            entryMinute
-          )
-        : null;
-
-
-    const update =
-      await env.DB
-        .prepare(`
-          UPDATE hunter_signals
-          SET
-            status = 'GOAL',
-            goal_minute = ?,
-            goal_after_minutes = ?,
-            result = 'GOAL HIT',
-            updated_at = ?
-          WHERE id = ?
-            AND status = 'TRACKING'
-        `)
-        .bind(
-          goalMinute,
-          afterMinutes,
-          now.toISOString(),
-          existing.id
-        )
-        .run();
-
-
-    const changes =
-      Number(
-        update?.meta?.changes || 0
-      );
-
-
-    if (
-      changes < 1
-    ) {
-
-      return;
-
-    }
-
-
-    trackingMap.delete(id);
-
-
-    await sendTelegram(
-      env,
-      formatGoalMessage(
-        existing,
-        m,
-        goalMinute,
-        afterMinutes
       ),
       existing.telegram_message_id
     );
@@ -1926,11 +1947,6 @@ async function createHunterEntry(
 
   // ==========================================================
   // ATOMIC LIFETIME DUPLICATE PROTECTION
-  //
-  // If this match_id has EVER existed in hunter_signals,
-  // no second Hunter entry is allowed.
-  //
-  // This replaces the expensive full finished-match query.
   // ==========================================================
 
   const insert =
@@ -2931,8 +2947,6 @@ async function getMonthlyStats(
 
 // ============================================================
 // MONTHLY HISTORY
-//
-// Converts UTC created_at into Europe/Sofia month keys.
 // ============================================================
 
 async function getMonthlyHistory(
@@ -3284,7 +3298,7 @@ async function getCurrentMonthDetails(
               THEN '20–29′'
 
             WHEN entry_minute BETWEEN 30 AND 34
-              THEN '30–34′'
+              THEN '30–34′
 
             WHEN entry_minute BETWEEN 35 AND 37
               THEN '35–37′'
@@ -4439,4 +4453,4 @@ function json(
 
   );
 
-          }
+}
