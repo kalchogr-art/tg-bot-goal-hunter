@@ -843,6 +843,29 @@ async function fetchEndpoint(
 // =====================================================
 // MAIN FEED PARSER
 // =====================================================
+//
+// IMPORTANT FIX:
+//
+// Flashscore може да върне един и същ
+// match ID (AA) повече от веднъж.
+//
+// Старото поведение беше:
+//
+//   първият запис печели
+//
+// Това може да запази стар score:
+//
+//   0:0
+//
+// когато по-късният запис вече е:
+//
+//   1:0
+//
+// Новото поведение:
+//
+//   последният запис печели
+//
+// =====================================================
 
 function parse(text) {
 
@@ -895,19 +918,25 @@ function parse(text) {
   if (current)
     result.push(current);
 
-  const seen =
-    new Set();
+  // =================================================
+  // KEEP LATEST RECORD PER MATCH
+  // =================================================
 
-  return result.filter(
-    m => {
+  const latest =
+    new Map();
 
-      if (seen.has(m.id))
-        return false;
+  for (
+    const match of result
+  ) {
 
-      seen.add(m.id);
+    latest.set(
+      match.id,
+      match
+    );
+  }
 
-      return true;
-    }
+  return Array.from(
+    latest.values()
   );
 }
 
@@ -975,7 +1004,9 @@ function parseStatistics(text) {
     const value =
       field.slice(i + 1);
 
+    // =================================================
     // SECTION
+    // =================================================
 
     if (key === "SE") {
 
@@ -1003,7 +1034,9 @@ function parseStatistics(text) {
       continue;
     }
 
+    // =================================================
     // STAT NAME
+    // =================================================
 
     if (key === "SG") {
 
@@ -1019,7 +1052,9 @@ function parseStatistics(text) {
       continue;
     }
 
+    // =================================================
     // HOME
+    // =================================================
 
     if (key === "SH") {
 
@@ -1029,7 +1064,9 @@ function parseStatistics(text) {
       continue;
     }
 
+    // =================================================
     // AWAY
+    // =================================================
 
     if (key === "SI") {
 
@@ -1096,7 +1133,9 @@ function parseStatistics(text) {
     }
   }
 
+  // =================================================
   // DEFAULT STATS
+  // =================================================
 
   const names = [
 
@@ -2301,4 +2340,4 @@ function json(
       }
     }
   );
-            }
+}
