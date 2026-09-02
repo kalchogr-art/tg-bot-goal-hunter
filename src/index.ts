@@ -1,17 +1,23 @@
+
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.1
+// GOAL WATCH — HUNTER TRACKER V6.2
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
 //
-// V6.1 FIX:
-// 1. DAILY STATS USE EUROPE/SOFIA CALENDAR DAY
-// 2. DAILY REPORT USES EUROPE/SOFIA CALENDAR DAY
-// 3. MONTHLY STATS USE EUROPE/SOFIA MONTH BOUNDARIES
-// 4. UTC created_at IS PRESERVED
-// 5. DAILY REPORT DOES NOT REQUIRE EXACT 00:00 CRON
-// 6. PREVENT DUPLICATE DAILY REPORT
+// V6.2 OPTIMIZED:
+//
+// 1. EUROPE/SOFIA CALENDAR DAY FOR DAILY STATS
+// 2. EUROPE/SOFIA CALENDAR MONTH FOR MONTHLY STATS
+// 3. UTC created_at IS PRESERVED
+// 4. DAILY REPORT DOES NOT REQUIRE EXACT 00:00 CRON
+// 5. DAILY REPORT DOES NOT STOP TRACKER
+// 6. DUPLICATE MATCH PROTECTION WITHOUT FULL FINISHED-MATCH QUERY
+// 7. ATOMIC LIFETIME MATCH_ID PROTECTION
+// 8. CACHED EUROPE/SOFIA FORMATTER
+// 9. LOW D1 READ LOAD
 //
 // EXISTING FIXES:
+//
 // 1. REAL GOAL MINUTE FROM V27
 // 2. DELAYED FEED DOES NOT CHANGE GOAL MINUTE
 // 3. ONLY GOAL AFTER ENTRY IS ACCEPTED
@@ -36,9 +42,13 @@
 // 43'+   -> NO HUNTER SIGNAL
 //
 // IMPORTANT:
+//
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // After GOAL HIT or NO GOAL, the same match_id is permanently
 // blocked from creating another Hunter ENTRY.
+//
+// created_at / updated_at / entry_time are stored as UTC ISO.
+// Statistics are calculated according to Europe/Sofia.
 // ============================================================
 
 
@@ -47,9 +57,30 @@ const HUNTER_TO = 42;
 
 const TIME_ZONE = "Europe/Sofia";
 
-// Daily report retry window after midnight.
-// This protects against Cron not executing exactly at 00:00.
 const DAILY_REPORT_WINDOW_MINUTES = 10;
+
+
+// ============================================================
+// CACHED SOFIA FORMATTER
+// ============================================================
+
+const SOFIA_FORMATTER =
+  new Intl.DateTimeFormat(
+    "en-GB",
+    {
+      timeZone: TIME_ZONE,
+
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+
+      hourCycle: "h23"
+    }
+  );
 
 
 // ============================================================
@@ -84,17 +115,23 @@ export default {
           await response.text();
 
         return new Response(
-          JSON.stringify({
-            success: true,
-            binding: "V27",
-            status: response.status,
-            response: text
-          }, null, 2),
+          JSON.stringify(
+            {
+              success: true,
+              binding: "V27",
+              status: response.status,
+              response: text
+            },
+            null,
+            2
+          ),
           {
             status: 200,
+
             headers: {
               "Content-Type":
                 "application/json; charset=utf-8",
+
               "Cache-Control":
                 "no-store"
             }
@@ -104,16 +141,22 @@ export default {
       } catch (error) {
 
         return new Response(
-          JSON.stringify({
-            success: false,
-            binding: "V27",
-            error:
-              error instanceof Error
-                ? error.message
-                : String(error)
-          }, null, 2),
+          JSON.stringify(
+            {
+              success: false,
+              binding: "V27",
+
+              error:
+                error instanceof Error
+                  ? error.message
+                  : String(error)
+            },
+            null,
+            2
+          ),
           {
             status: 500,
+
             headers: {
               "Content-Type":
                 "application/json; charset=utf-8"
@@ -139,12 +182,16 @@ export default {
 
         if (!env.DB) {
 
-          return json({
-            success: false,
-            error: "DB binding missing"
-          }, 500);
+          return json(
+            {
+              success: false,
+              error: "DB binding missing"
+            },
+            500
+          );
 
         }
+
 
         const result =
           await env.DB
@@ -172,79 +219,76 @@ export default {
             `)
             .all();
 
+
         const rows =
           result?.results || [];
 
 
         const entries =
-          rows.map(row => {
+          rows.map(row => ({
 
-            return {
+            type:
+              "HUNTER_ENTRY",
 
-              type:
-                "HUNTER_ENTRY",
+            signal:
+              "HUNTER_ENTRY",
 
-              signal:
-                "HUNTER_ENTRY",
+            action:
+              "ENTRY",
 
-              action:
-                "ENTRY",
+            status:
+              "TRACKING",
 
-              status:
-                "TRACKING",
+            id:
+              row?.id ?? null,
 
-              id:
-                row?.id ?? null,
+            match_id:
+              row?.match_id ?? null,
 
-              match_id:
-                row?.match_id ?? null,
+            match_name:
+              row?.match_name ?? "",
 
-              match_name:
-                row?.match_name ?? "",
+            match:
+              row?.match_name ?? "",
 
-              match:
-                row?.match_name ?? "",
+            league:
+              row?.league ?? "LIVE",
 
-              league:
-                row?.league ?? "LIVE",
+            entry_time:
+              row?.entry_time ?? null,
 
-              entry_time:
-                row?.entry_time ?? null,
+            entry_minute:
+              row?.entry_minute ?? null,
 
-              entry_minute:
-                row?.entry_minute ?? null,
+            hunter_score:
+              row?.hunter_score ?? null,
 
-              hunter_score:
-                row?.hunter_score ?? null,
+            goal_pressure:
+              row?.goal_pressure ?? null,
 
-              goal_pressure:
-                row?.goal_pressure ?? null,
+            danger_index:
+              row?.danger_index ?? null,
 
-              danger_index:
-                row?.danger_index ?? null,
+            attack_score:
+              row?.attack_score ?? null,
 
-              attack_score:
-                row?.attack_score ?? null,
-
-              score: {
-
-                home:
-                  row?.entry_home_score ?? 0,
-
-                away:
-                  row?.entry_away_score ?? 0
-
-              },
+            score: {
 
               home:
-                null,
+                row?.entry_home_score ?? 0,
 
               away:
-                null
+                row?.entry_away_score ?? 0
 
-            };
+            },
 
-          });
+            home:
+              null,
+
+            away:
+              null
+
+          }));
 
 
         return json({
@@ -253,7 +297,7 @@ export default {
             true,
 
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.1",
+            "GOAL WATCH — HUNTER TRACKER V6.2",
 
           source:
             "hunter_signals",
@@ -404,7 +448,7 @@ export default {
         true,
 
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6.1",
+        "GOAL WATCH — HUNTER TRACKER V6.2",
 
       status:
         "ONLINE",
@@ -461,6 +505,9 @@ async function processTracker(env) {
   const now =
     new Date();
 
+  const nowIso =
+    now.toISOString();
+
   const local =
     getSofiaTime(now);
 
@@ -493,8 +540,8 @@ async function processTracker(env) {
   // ==========================================================
   // DAILY REPORT
   //
-  // The report is allowed during the first few minutes
-  // after midnight so Cron does not need to hit exactly 00:00.
+  // Report is allowed during the first few minutes after
+  // midnight. IMPORTANT: tracker continues afterwards.
   // ==========================================================
 
   if (
@@ -502,23 +549,24 @@ async function processTracker(env) {
     local.minute <= DAILY_REPORT_WINDOW_MINUTES
   ) {
 
-    await sendDailyReport(
-      env,
-      local
-    );
+    try {
 
-    return;
+      await sendDailyReport(
+        env,
+        local
+      );
+
+    } catch (error) {
+
+      console.error(
+        "DAILY REPORT ERROR",
+        error?.message ||
+        String(error)
+      );
+
+    }
 
   }
-
-
-  // ==========================================================
-  // 24/7 TRACKING
-  //
-  // NO SESSION START
-  // NO TIME WINDOW
-  // HUNTER RUNS ALL DAY AND ALL NIGHT
-  // ==========================================================
 
 
   // ==========================================================
@@ -586,7 +634,9 @@ async function processTracker(env) {
 
 
   // ==========================================================
-  // LOAD ACTIVE SIGNALS — ONE DB QUERY
+  // LOAD ACTIVE TRACKING SIGNALS
+  //
+  // ONE D1 QUERY
   // ==========================================================
 
   const result =
@@ -630,51 +680,14 @@ async function processTracker(env) {
         signal?.match_id || ""
       );
 
-    if (id) {
-
-      trackingMap.set(
-        id,
-        signal
-      );
-
-    }
-
-  }
+    if (!id)
+      continue;
 
 
-  // ==========================================================
-  // LOAD FINISHED MATCHES
-  // ==========================================================
-
-  const finishedResult =
-    await env.DB
-      .prepare(`
-        SELECT DISTINCT match_id
-        FROM hunter_signals
-        WHERE status IN ('GOAL', 'NO_GOAL')
-      `)
-      .all();
-
-
-  const finishedMatchIds =
-    new Set();
-
-
-  for (
-    const row of
-      finishedResult?.results || []
-  ) {
-
-    const id =
-      String(
-        row?.match_id || ""
-      );
-
-    if (id) {
-
-      finishedMatchIds.add(id);
-
-    }
+    trackingMap.set(
+      id,
+      signal
+    );
 
   }
 
@@ -736,7 +749,6 @@ async function processTracker(env) {
           env,
           match,
           now,
-          local,
           trackingMap
         );
 
@@ -750,19 +762,6 @@ async function processTracker(env) {
         );
 
       }
-
-      continue;
-
-    }
-
-
-    // --------------------------------------------------------
-    // MATCH ALREADY FINISHED
-    // --------------------------------------------------------
-
-    if (
-      finishedMatchIds.has(id)
-    ) {
 
       continue;
 
@@ -830,10 +829,12 @@ async function processTracker(env) {
     if (!id)
       continue;
 
+
     if (
       currentIds.has(id)
     )
       continue;
+
 
     try {
 
@@ -867,7 +868,6 @@ async function processTrackingMatch(
   env,
   m,
   now,
-  local,
   trackingMap
 ) {
 
@@ -1526,13 +1526,9 @@ function extractEventMinute(event) {
   }
 
 
-  const timeValue =
-    event?.time;
-
-
   const directTime =
     parseMinuteValue(
-      timeValue
+      event?.time
     );
 
 
@@ -1852,18 +1848,6 @@ async function createHunterEntry(
   }
 
 
-  const home =
-    Number(
-      m?.score?.home ?? 0
-    );
-
-
-  const away =
-    Number(
-      m?.score?.away ?? 0
-    );
-
-
   const minute =
     Number(
       m?.minute ?? 0
@@ -1892,6 +1876,18 @@ async function createHunterEntry(
     return;
 
   }
+
+
+  const home =
+    Number(
+      m?.score?.home ?? 0
+    );
+
+
+  const away =
+    Number(
+      m?.score?.away ?? 0
+    );
 
 
   const matchName =
@@ -1924,6 +1920,19 @@ async function createHunterEntry(
     );
 
 
+  const nowIso =
+    now.toISOString();
+
+
+  // ==========================================================
+  // ATOMIC LIFETIME DUPLICATE PROTECTION
+  //
+  // If this match_id has EVER existed in hunter_signals,
+  // no second Hunter entry is allowed.
+  //
+  // This replaces the expensive full finished-match query.
+  // ==========================================================
+
   const insert =
     await env.DB
       .prepare(`
@@ -1952,7 +1961,7 @@ async function createHunterEntry(
 
         )
 
-        VALUES (
+        SELECT
 
           ?, ?, ?,
 
@@ -1967,6 +1976,12 @@ async function createHunterEntry(
 
           ?, ?
 
+        WHERE NOT EXISTS (
+
+          SELECT 1
+          FROM hunter_signals
+          WHERE match_id = ?
+
         )
       `)
       .bind(
@@ -1975,7 +1990,7 @@ async function createHunterEntry(
         matchName,
         league,
 
-        now.toISOString(),
+        nowIso,
         minute,
 
         hunterScore,
@@ -1986,8 +2001,10 @@ async function createHunterEntry(
         home,
         away,
 
-        now.toISOString(),
-        now.toISOString()
+        nowIso,
+        nowIso,
+
+        id
 
       )
       .run();
@@ -2031,13 +2048,22 @@ async function createHunterEntry(
     league,
 
     entry_time:
-      now.toISOString(),
+      nowIso,
 
     entry_minute:
       minute,
 
     hunter_score:
       hunterScore,
+
+    goal_pressure:
+      goalPressure,
+
+    danger_index:
+      dangerIndex,
+
+    attack_score:
+      attackScore,
 
     entry_home_score:
       home,
@@ -2092,7 +2118,7 @@ async function createHunterEntry(
       `)
       .bind(
         telegramMessageId,
-        now.toISOString(),
+        nowIso,
         insertedId
       )
       .run();
@@ -2178,6 +2204,10 @@ async function finalizeMissingTracking(
   }
 
 
+  const nowIso =
+    now.toISOString();
+
+
   const update =
     await env.DB
       .prepare(`
@@ -2190,7 +2220,7 @@ async function finalizeMissingTracking(
           AND status = 'TRACKING'
       `)
       .bind(
-        now.toISOString(),
+        nowIso,
         signal.id
       )
       .run();
@@ -2461,14 +2491,10 @@ function getMonthKey(
   dateString
 ) {
 
-  const text =
+  const match =
     String(
       dateString || ""
-    );
-
-
-  const match =
-    text.match(
+    ).match(
       /^(\d{4})-(\d{2})/
     );
 
@@ -2506,20 +2532,14 @@ function formatMonthLabel(
     return monthKey;
 
 
-  const year =
-    match[1];
-
-
-  const month =
-    match[2];
-
-
   return (
     getBulgarianMonthName(
-      Number(month)
+      Number(
+        match[2]
+      )
     ) +
     " " +
-    year
+    match[1]
   );
 
 }
@@ -2527,9 +2547,6 @@ function formatMonthLabel(
 
 // ============================================================
 // SOFIA MONTH UTC BOUNDS
-//
-// Converts a Sofia calendar month into UTC ISO boundaries.
-// created_at remains UTC.
 // ============================================================
 
 function getSofiaMonthUtcBounds(
@@ -2576,27 +2593,27 @@ function getSofiaMonthUtcBounds(
     `${year}-${String(month).padStart(2, "0")}-01`;
 
 
-  const next =
+  const nextDate =
     month === 12
       ? `${year + 1}-01-01`
       : `${year}-${String(month + 1).padStart(2, "0")}-01`;
 
 
-  const startBounds =
+  const start =
     getSofiaDayUtcBounds(
       startDate
     );
 
 
-  const endBounds =
+  const end =
     getSofiaDayUtcBounds(
-      next
+      nextDate
     );
 
 
   if (
-    !startBounds ||
-    !endBounds
+    !start ||
+    !end
   ) {
 
     return null;
@@ -2607,10 +2624,10 @@ function getSofiaMonthUtcBounds(
   return {
 
     start:
-      startBounds.start,
+      start.start,
 
     end:
-      endBounds.start
+      end.start
 
   };
 
@@ -2619,34 +2636,6 @@ function getSofiaMonthUtcBounds(
 
 // ============================================================
 // SOFIA DAY UTC BOUNDS
-//
-// IMPORTANT:
-//
-// Input:
-//   2026-09-02
-//
-// Means:
-//   2026-09-02 00:00:00 Europe/Sofia
-//
-// Returns UTC ISO boundaries.
-//
-// Example for summer time:
-//
-// Sofia:
-//   2026-09-02 00:00
-//
-// UTC:
-//   2026-09-01 21:00
-//
-// Therefore a match at:
-//
-//   2026-09-02 00:30 Sofia
-//
-// stored as:
-//
-//   2026-09-01T21:30:00.000Z
-//
-// is correctly counted for 02.09.
 // ============================================================
 
 function getSofiaDayUtcBounds(
@@ -2694,46 +2683,11 @@ function getSofiaDayUtcBounds(
   }
 
 
-  // ----------------------------------------------------------
-  // Calculate the UTC offset for a Sofia local midnight.
-  // ----------------------------------------------------------
-
   const getOffsetMinutes =
     utcMillis => {
 
-      const formatter =
-        new Intl.DateTimeFormat(
-          "en-US",
-          {
-            timeZone:
-              TIME_ZONE,
-
-            year:
-              "numeric",
-
-            month:
-              "2-digit",
-
-            day:
-              "2-digit",
-
-            hour:
-              "2-digit",
-
-            minute:
-              "2-digit",
-
-            second:
-              "2-digit",
-
-            hourCycle:
-              "h23"
-          }
-        );
-
-
       const parts =
-        formatter.formatToParts(
+        SOFIA_FORMATTER.formatToParts(
           new Date(
             utcMillis
           )
@@ -2783,10 +2737,6 @@ function getSofiaDayUtcBounds(
     };
 
 
-  // ----------------------------------------------------------
-  // Start of requested Sofia day.
-  // ----------------------------------------------------------
-
   const localMidnightGuess =
     Date.UTC(
       year,
@@ -2805,10 +2755,6 @@ function getSofiaDayUtcBounds(
     localMidnightGuess -
     startOffset * 60000;
 
-
-  // ----------------------------------------------------------
-  // Start of next Sofia day.
-  // ----------------------------------------------------------
 
   const nextLocalMidnightGuess =
     Date.UTC(
@@ -2867,23 +2813,12 @@ async function getMonthlyStats(
 
       monthKey,
 
-      total:
-        0,
-
-      goals:
-        0,
-
-      noGoals:
-        0,
-
-      resolved:
-        0,
-
-      rate:
-        0,
-
-      avg:
-        null
+      total: 0,
+      goals: 0,
+      noGoals: 0,
+      resolved: 0,
+      rate: 0,
+      avg: null
 
     };
 
@@ -2996,6 +2931,8 @@ async function getMonthlyStats(
 
 // ============================================================
 // MONTHLY HISTORY
+//
+// Converts UTC created_at into Europe/Sofia month keys.
 // ============================================================
 
 async function getMonthlyHistory(
@@ -3006,12 +2943,9 @@ async function getMonthlyHistory(
   const result =
     await env.DB
       .prepare(`
-        SELECT DISTINCT
-          substr(created_at, 1, 7) AS month_key
+        SELECT created_at
         FROM hunter_signals
         WHERE created_at IS NOT NULL
-          AND substr(created_at, 1, 7) != ''
-        ORDER BY month_key DESC
       `)
       .all();
 
@@ -3025,9 +2959,32 @@ async function getMonthlyHistory(
       result?.results || []
   ) {
 
+    const createdAt =
+      new Date(
+        row?.created_at
+      );
+
+
+    if (
+      Number.isNaN(
+        createdAt.getTime()
+      )
+    ) {
+
+      continue;
+
+    }
+
+
+    const local =
+      getSofiaTime(
+        createdAt
+      );
+
+
     const key =
       getMonthKey(
-        row?.month_key
+        local.date
       );
 
 
@@ -3226,11 +3183,8 @@ async function getCurrentMonthDetails(
 
     return {
 
-      scoreRows:
-        [],
-
-      minuteRows:
-        []
+      scoreRows: [],
+      minuteRows: []
 
     };
 
@@ -3409,14 +3363,11 @@ async function buildStats(env) {
   const now =
     new Date();
 
-
   const local =
     getSofiaTime(now);
 
-
   const today =
     local.date;
-
 
   const currentMonth =
     getMonthKey(
@@ -3440,13 +3391,6 @@ async function buildStats(env) {
 
   // ==========================================================
   // DAILY
-  //
-  // IMPORTANT:
-  // Do NOT use substr(created_at, 1, 10).
-  //
-  // created_at is UTC.
-  // today is Europe/Sofia.
-  // We convert Sofia midnight -> UTC.
   // ==========================================================
 
   const dailyBounds =
@@ -3575,16 +3519,13 @@ async function buildStats(env) {
 `;
 
 
-  const scoreRows =
-    currentDetails.scoreRows;
-
-
   const scoreMap =
     new Map();
 
 
   for (
-    const row of scoreRows
+    const row of
+      currentDetails.scoreRows
   ) {
 
     scoreMap.set(
@@ -3709,16 +3650,13 @@ async function buildStats(env) {
 `;
 
 
-  const minuteRows =
-    currentDetails.minuteRows;
-
-
   const minuteMap =
     new Map();
 
 
   for (
-    const row of minuteRows
+    const row of
+      currentDetails.minuteRows
   ) {
 
     minuteMap.set(
@@ -4300,37 +4238,9 @@ RESULT: NO GOAL`;
 function getSofiaTime(date) {
 
   const parts =
-    new Intl.DateTimeFormat(
-      "en-GB",
-      {
-
-        timeZone:
-          TIME_ZONE,
-
-        year:
-          "numeric",
-
-        month:
-          "2-digit",
-
-        day:
-          "2-digit",
-
-        hour:
-          "2-digit",
-
-        minute:
-          "2-digit",
-
-        second:
-          "2-digit",
-
-        hourCycle:
-          "h23"
-
-      }
-    )
-    .formatToParts(date);
+    SOFIA_FORMATTER.formatToParts(
+      date
+    );
 
 
   const get =
@@ -4529,4 +4439,4 @@ function json(
 
   );
 
-    }
+          }
