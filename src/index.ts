@@ -1,18 +1,19 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.4
+// GOAL WATCH — HUNTER TRACKER V6.5.1
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
 //
-// V6.4:
+// V6.5:
 //
-// 1. MONTHLY LEAGUE RANKING
-// 2. TOP 10 STRONGEST LEAGUES + BOTTOM 10 WEAKEST LEAGUES
-// 3. MINIMUM 5 RESOLVED SIGNALS PER LEAGUE FOR RANKING
-// 4. "LIVE" / EMPTY LEAGUE VALUES ARE EXCLUDED
-// 5. MONTHLY STATS BY ENTRY HOUR (EUROPE/SOFIA)
-// 6. DAILY REPORT INCLUDES ENTRY-MINUTE BREAKDOWN
-// 7. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE > 60 (61+)
-// 8. EXISTING TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
+// 1. MONTHLY HOUR × ENTRY-MINUTE MATRIX
+// 2. MONTHLY LEAGUE RANKING
+// 3. TOP 10 STRONGEST LEAGUES + BOTTOM 10 WEAKEST LEAGUES
+// 4. MINIMUM 5 RESOLVED SIGNALS PER LEAGUE FOR RANKING
+// 5. "LIVE" / EMPTY LEAGUE VALUES ARE EXCLUDED
+// 6. MONTHLY STATS BY ENTRY HOUR (EUROPE/SOFIA)
+// 7. DAILY REPORT INCLUDES ENTRY-MINUTE BREAKDOWN
+// 8. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE > 60 (61+)
+// 9. EXISTING TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
 //
 // V6.2.2:
 //
@@ -216,7 +217,7 @@ export default {
 
         return json({
           success: true,
-          worker: "GOAL WATCH — HUNTER TRACKER V6.4",
+          worker: "GOAL WATCH — HUNTER TRACKER V6.5.1",
           source: "hunter_signals",
           mode: "READ_ONLY",
           count: entries.length,
@@ -274,9 +275,18 @@ export default {
             await buildStats(env)
           );
 
+          await sendTelegram(
+            env,
+            await buildHourMinuteStatsMessage(
+              env
+            )
+          );
+
           return json({
             success: true,
-            action: "STATS"
+            action: "STATS",
+            hour_minute_matrix:
+              true
           });
         }
 
@@ -303,7 +313,7 @@ export default {
 
     return json({
       success: true,
-      worker: "GOAL WATCH — HUNTER TRACKER V6.4",
+      worker: "GOAL WATCH — HUNTER TRACKER V6.5.1",
       status: "ONLINE",
       mode: "24/7 CRON + TELEGRAM",
       time:
@@ -2241,6 +2251,7 @@ async function getCurrentMonthDetails(
       scoreRows: [],
       minuteRows: [],
       hourRows: [],
+      hourMinuteRows: [],
       leagueRows: []
     };
   }
@@ -2388,6 +2399,7 @@ async function getCurrentMonthDetails(
       .prepare(`
         SELECT
           created_at,
+          entry_minute,
           result
         FROM hunter_signals
         WHERE created_at >= ?
@@ -2401,6 +2413,11 @@ async function getCurrentMonthDetails(
 
   const hourRows =
     buildHourRows(
+      hourSource?.results || []
+    );
+
+  const hourMinuteRows =
+    buildHourMinuteRows(
       hourSource?.results || []
     );
 
@@ -2503,6 +2520,8 @@ async function getCurrentMonthDetails(
 
     hourRows,
 
+    hourMinuteRows,
+
     leagueRows
   };
 }
@@ -2585,6 +2604,145 @@ function buildHourRows(rows) {
   return ENTRY_HOUR_GROUPS.map(
     g => map.get(g.label)
   );
+}
+
+
+function buildHourMinuteRows(rows) {
+
+  const matrix =
+    new Map();
+
+  for (
+    const hourGroup of
+      ENTRY_HOUR_GROUPS
+  ) {
+
+    for (
+      const minuteGroup of
+        ENTRY_MINUTE_GROUPS
+    ) {
+
+      const key =
+        hourGroup.label +
+        "|" +
+        minuteGroup.label;
+
+      matrix.set(
+        key,
+        {
+          hour_group:
+            hourGroup.label,
+
+          minute_group:
+            minuteGroup.label,
+
+          total: 0,
+          goals: 0,
+          no_goals: 0
+        }
+      );
+    }
+  }
+
+  for (const row of rows) {
+
+    const date =
+      new Date(
+        row?.created_at || ""
+      );
+
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      continue;
+    }
+
+    const local =
+      getSofiaTime(
+        date
+      );
+
+    const hour =
+      Number(
+        local.hour
+      );
+
+    const entryMinute =
+      Number(
+        row?.entry_minute
+      );
+
+    const hourGroup =
+      ENTRY_HOUR_GROUPS.find(
+        g =>
+          hour >= g.min &&
+          hour <= g.max
+      );
+
+    const minuteGroup =
+      ENTRY_MINUTE_GROUPS.find(
+        g =>
+          entryMinute >= g.min &&
+          entryMinute <= g.max
+      );
+
+    if (
+      !hourGroup ||
+      !minuteGroup
+    ) {
+      continue;
+    }
+
+    const key =
+      hourGroup.label +
+      "|" +
+      minuteGroup.label;
+
+    const item =
+      matrix.get(key);
+
+    if (!item)
+      continue;
+
+    item.total++;
+
+    if (
+      row?.result === "GOAL HIT"
+    ) {
+      item.goals++;
+    } else if (
+      row?.result === "NO GOAL"
+    ) {
+      item.no_goals++;
+    }
+  }
+
+  const result = [];
+
+  for (
+    const hourGroup of
+      ENTRY_HOUR_GROUPS
+  ) {
+
+    for (
+      const minuteGroup of
+        ENTRY_MINUTE_GROUPS
+    ) {
+
+      const key =
+        hourGroup.label +
+        "|" +
+        minuteGroup.label;
+
+      result.push(
+        matrix.get(key)
+      );
+    }
+  }
+
+  return result;
 }
 
 
@@ -3046,6 +3204,7 @@ async function buildStats(env) {
       `${rate.toFixed(1)}%\n`;
   }
 
+
   const leagueRows =
     Array.isArray(
       currentDetails.leagueRows
@@ -3199,6 +3358,121 @@ ${formatMinuteStats(
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
+
+  return message;
+}
+
+
+// ============================================================
+// HOUR × ENTRY MINUTE — SEPARATE /stats MESSAGE
+// ============================================================
+
+async function buildHourMinuteStatsMessage(
+  env
+) {
+
+  const now =
+    new Date();
+
+  const local =
+    getSofiaTime(now);
+
+  const currentMonth =
+    getMonthKey(
+      local.date
+    );
+
+  const details =
+    await getCurrentMonthDetails(
+      env,
+      currentMonth
+    );
+
+  const rows =
+    Array.isArray(
+      details?.hourMinuteRows
+    )
+      ? details.hourMinuteRows
+      : [];
+
+  let message =
+`🧭 ${formatMonthLabel(currentMonth)} — ЧАС × ENTRY МИНУТА
+
+`;
+
+  for (
+    const hourGroup of
+      ENTRY_HOUR_GROUPS
+  ) {
+
+    message +=
+      `━━━━━━━━━━━━━━━━
+🕐 ${hourGroup.label}
+━━━━━━━━━━━━━━━━
+`;
+
+    for (
+      const minuteGroup of
+        ENTRY_MINUTE_GROUPS
+    ) {
+
+      const row =
+        rows.find(
+          r =>
+            r?.hour_group ===
+              hourGroup.label &&
+            r?.minute_group ===
+              minuteGroup.label
+        );
+
+      const total =
+        Number(
+          row?.total || 0
+        );
+
+      const goals =
+        Number(
+          row?.goals || 0
+        );
+
+      const noGoals =
+        Number(
+          row?.no_goals || 0
+        );
+
+      const resolved =
+        goals +
+        noGoals;
+
+      const rate =
+        resolved > 0
+          ? goals /
+            resolved *
+            100
+          : 0;
+
+      if (total === 0) {
+
+        message +=
+          `${minuteGroup.label}: 0 ENTRY\n`;
+
+      } else {
+
+        message +=
+          `${minuteGroup.label}: ` +
+          `${total} ENTRY | ` +
+          `${goals} GOAL | ` +
+          `${noGoals} NO GOAL | ` +
+          `${rate.toFixed(1)}%\n`;
+      }
+    }
+
+    message += "\n";
+  }
+
+  message +=
+`💾 hunter_signals
+🕐 Europe/Sofia`;
 
   return message;
 }
@@ -3394,80 +3668,202 @@ async function sendTelegram(
   if (!text)
     return null;
 
-  const body = {
-    chat_id: chatId,
-    text
-  };
+  // Telegram sendMessage allows max 4096 characters.
+  // Keep a small safety margin and split long /stats reports
+  // on line boundaries.
+  const chunks =
+    splitTelegramMessage(
+      text,
+      3900
+    );
 
-  if (
-    replyToMessageId !== null &&
-    replyToMessageId !== undefined &&
-    String(replyToMessageId) !== ""
+  let firstMessageId =
+    null;
+
+  for (
+    let i = 0;
+    i < chunks.length;
+    i++
   ) {
 
-    body.reply_parameters = {
-      message_id:
-        Number(
-          replyToMessageId
-        )
+    const body = {
+      chat_id: chatId,
+      text: chunks[i]
     };
-  }
-
-  const response =
-    await fetch(
-      `https://api.telegram.org/bot${token}/sendMessage`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
-        body:
-          JSON.stringify(body)
-      }
-    );
-
-  const responseText =
-    await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      "Telegram HTTP " +
-      response.status +
-      " | " +
-      responseText.substring(
-        0,
-        500
-      )
-    );
-  }
-
-  try {
-
-    const result =
-      JSON.parse(
-        responseText
-      );
 
     if (
-      result?.ok === true &&
-      result?.result?.message_id !== undefined
+      i === 0 &&
+      replyToMessageId !== null &&
+      replyToMessageId !== undefined &&
+      String(replyToMessageId) !== ""
     ) {
-      return Number(
-        result.result.message_id
+
+      body.reply_parameters = {
+        message_id:
+          Number(
+            replyToMessageId
+          )
+      };
+    }
+
+    const response =
+      await fetch(
+        `https://api.telegram.org/bot${token}/sendMessage`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+          body:
+            JSON.stringify(body)
+        }
+      );
+
+    const responseText =
+      await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        "Telegram HTTP " +
+        response.status +
+        " | " +
+        responseText.substring(
+          0,
+          500
+        )
       );
     }
 
-  } catch (error) {
+    try {
 
-    console.error(
-      "TELEGRAM RESPONSE PARSE ERROR",
-      error?.message ||
-      String(error)
+      const result =
+        JSON.parse(
+          responseText
+        );
+
+      if (
+        result?.ok === true &&
+        result?.result?.message_id !== undefined
+      ) {
+
+        const messageId =
+          Number(
+            result.result.message_id
+          );
+
+        if (
+          firstMessageId === null
+        ) {
+          firstMessageId =
+            messageId;
+        }
+      }
+
+    } catch (error) {
+
+      console.error(
+        "TELEGRAM RESPONSE PARSE ERROR",
+        error?.message ||
+        String(error)
+      );
+    }
+  }
+
+  return firstMessageId;
+}
+
+
+function splitTelegramMessage(
+  text,
+  maxLength = 3900
+) {
+
+  const source =
+    String(
+      text || ""
+    );
+
+  if (
+    source.length <=
+    maxLength
+  ) {
+    return [source];
+  }
+
+  const lines =
+    source.split("\n");
+
+  const chunks = [];
+
+  let current = "";
+
+  for (const line of lines) {
+
+    const candidate =
+      current
+        ? current +
+          "\n" +
+          line
+        : line;
+
+    if (
+      candidate.length <=
+      maxLength
+    ) {
+      current =
+        candidate;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(
+        current
+      );
+      current = "";
+    }
+
+    if (
+      line.length <=
+      maxLength
+    ) {
+      current =
+        line;
+      continue;
+    }
+
+    let remaining =
+      line;
+
+    while (
+      remaining.length >
+      maxLength
+    ) {
+
+      chunks.push(
+        remaining.slice(
+          0,
+          maxLength
+        )
+      );
+
+      remaining =
+        remaining.slice(
+          maxLength
+        );
+    }
+
+    current =
+      remaining;
+  }
+
+  if (current) {
+    chunks.push(
+      current
     );
   }
 
-  return null;
+  return chunks;
 }
 
 
