@@ -515,6 +515,12 @@ export default {
           match:
             `${r.AE || ""} - ${r.AF || ""}`,
 
+          // LEAGUE
+
+          league:
+            match.league ||
+            "LIVE",
+
           // TIME
 
           minute,
@@ -705,7 +711,7 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v27",
+          "flashscore_only_v27_leagues",
 
         success:
           true,
@@ -777,7 +783,7 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v27",
+          "flashscore_only_v27_leagues",
 
         success:
           false,
@@ -844,27 +850,15 @@ async function fetchEndpoint(
 // MAIN FEED PARSER
 // =====================================================
 //
-// IMPORTANT FIX:
+// LEAGUE FIX:
 //
-// Flashscore може да върне един и същ
-// match ID (AA) повече от веднъж.
+// Flashscore tournament/league name is carried in ZA.
 //
-// Старото поведение беше:
+// ZA appears before the AA match records belonging to that
+// competition. We preserve the most recent ZA value and attach
+// it to every following AA match until the next ZA.
 //
-//   първият запис печели
-//
-// Това може да запази стар score:
-//
-//   0:0
-//
-// когато по-късният запис вече е:
-//
-//   1:0
-//
-// Новото поведение:
-//
-//   последният запис печели
-//
+// Existing "latest record per match ID" behavior is preserved.
 // =====================================================
 
 function parse(text) {
@@ -872,6 +866,9 @@ function parse(text) {
   const result = [];
 
   let current = null;
+
+  let currentLeague =
+    "";
 
   for (
     const field of text.split("¬")
@@ -891,6 +888,20 @@ function parse(text) {
     const value =
       field.slice(i + 1);
 
+    // =================================================
+    // LEAGUE / TOURNAMENT CONTEXT
+    // =================================================
+
+    if (key === "ZA") {
+
+      currentLeague =
+        cleanLeagueName(
+          value
+        );
+
+      continue;
+    }
+
     if (key === "AA") {
 
       if (current)
@@ -900,6 +911,9 @@ function parse(text) {
 
         id:
           value,
+
+        league:
+          currentLeague,
 
         raw:
           {}
@@ -938,6 +952,20 @@ function parse(text) {
   return Array.from(
     latest.values()
   );
+}
+
+
+// =====================================================
+// CLEAN LEAGUE NAME
+// =====================================================
+
+function cleanLeagueName(value) {
+
+  return String(
+    value || ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 
@@ -1004,10 +1032,6 @@ function parseStatistics(text) {
     const value =
       field.slice(i + 1);
 
-    // =================================================
-    // SECTION
-    // =================================================
-
     if (key === "SE") {
 
       const v =
@@ -1034,10 +1058,6 @@ function parseStatistics(text) {
       continue;
     }
 
-    // =================================================
-    // STAT NAME
-    // =================================================
-
     if (key === "SG") {
 
       currentStat =
@@ -1052,10 +1072,6 @@ function parseStatistics(text) {
       continue;
     }
 
-    // =================================================
-    // HOME
-    // =================================================
-
     if (key === "SH") {
 
       home =
@@ -1063,10 +1079,6 @@ function parseStatistics(text) {
 
       continue;
     }
-
-    // =================================================
-    // AWAY
-    // =================================================
 
     if (key === "SI") {
 
@@ -1132,10 +1144,6 @@ function parseStatistics(text) {
       continue;
     }
   }
-
-  // =================================================
-  // DEFAULT STATS
-  // =================================================
 
   const names = [
 
@@ -1350,10 +1358,6 @@ function getMinuteInfo(r) {
   const BD =
     toNumber(r.BD);
 
-  // =================================================
-  // 2ND HALF
-  // =================================================
-
   if (
     AC === "13" &&
     valid(AO)
@@ -1409,10 +1413,6 @@ function getMinuteInfo(r) {
     };
   }
 
-  // =================================================
-  // 1ST HALF
-  // =================================================
-
   if (
     AC === "12" &&
     valid(AO)
@@ -1461,10 +1461,6 @@ function getMinuteInfo(r) {
       }
     };
   }
-
-  // =================================================
-  // FALLBACK
-  // =================================================
 
   if (
     valid(BC)
@@ -1817,10 +1813,6 @@ function calculateGoalSignal(data) {
 
   const reasons = [];
 
-  // =================================================
-  // 1H WINDOW
-  // =================================================
-
   if (
     period === "1H" &&
     minute >= 15 &&
@@ -1833,10 +1825,6 @@ function calculateGoalSignal(data) {
       "prime_1H_window"
     );
   }
-
-  // =================================================
-  // 2H WINDOW
-  // =================================================
 
   if (
     period === "2H" &&
@@ -1851,10 +1839,6 @@ function calculateGoalSignal(data) {
     );
   }
 
-  // =================================================
-  // 0:0
-  // =================================================
-
   if (
     home === 0 &&
     away === 0
@@ -1866,10 +1850,6 @@ function calculateGoalSignal(data) {
       "score_0_0"
     );
   }
-
-  // =================================================
-  // SHOTS
-  // =================================================
 
   if (shots >= 6) {
 
@@ -1898,10 +1878,6 @@ function calculateGoalSignal(data) {
     );
   }
 
-  // =================================================
-  // SOT
-  // =================================================
-
   if (sot >= 2) {
 
     score += 10;
@@ -1928,10 +1904,6 @@ function calculateGoalSignal(data) {
       "sot_6_plus"
     );
   }
-
-  // =================================================
-  // CORNERS
-  // =================================================
 
   if (corners >= 3) {
 
@@ -1960,10 +1932,6 @@ function calculateGoalSignal(data) {
     );
   }
 
-  // =================================================
-  // BIG CHANCES
-  // =================================================
-
   if (bigChances >= 1) {
 
     score += 10;
@@ -1982,10 +1950,6 @@ function calculateGoalSignal(data) {
     );
   }
 
-  // =================================================
-  // BOX TOUCHES
-  // =================================================
-
   if (boxTouches >= 15) {
 
     score += 8;
@@ -2003,10 +1967,6 @@ function calculateGoalSignal(data) {
       "box_touches_25_plus"
     );
   }
-
-  // =================================================
-  // POSSESSION
-  // =================================================
 
   if (
     valid(possessionHome) &&
@@ -2038,10 +1998,6 @@ function calculateGoalSignal(data) {
     }
   }
 
-  // =================================================
-  // XG
-  // =================================================
-
   if (valid(xg)) {
 
     if (xg >= 0.50) {
@@ -2072,10 +2028,6 @@ function calculateGoalSignal(data) {
     }
   }
 
-  // =================================================
-  // XGOT
-  // =================================================
-
   if (valid(xgot)) {
 
     if (xgot >= 0.50) {
@@ -2096,10 +2048,6 @@ function calculateGoalSignal(data) {
       );
     }
   }
-
-  // =================================================
-  // DEAD GAME PENALTY
-  // =================================================
 
   if (
     minute >= 20 &&
@@ -2128,10 +2076,6 @@ function calculateGoalSignal(data) {
     );
   }
 
-  // =================================================
-  // LATE 0:0
-  // =================================================
-
   if (
     period === "2H" &&
     minute >= 70 &&
@@ -2146,10 +2090,6 @@ function calculateGoalSignal(data) {
     );
   }
 
-  // =================================================
-  // NORMALIZE
-  // =================================================
-
   score =
     Math.max(
       0,
@@ -2158,10 +2098,6 @@ function calculateGoalSignal(data) {
         Math.round(score)
       )
     );
-
-  // =================================================
-  // HUNTER DYNAMIC RULE
-  // =================================================
 
   const hunterMinScore =
     getHunterMinScore(
@@ -2172,10 +2108,6 @@ function calculateGoalSignal(data) {
   const hunterEligible =
     hunterMinScore !== null &&
     score >= hunterMinScore;
-
-  // =================================================
-  // SIGNAL
-  // =================================================
 
   let signal =
     "LOW";
@@ -2201,10 +2133,6 @@ function calculateGoalSignal(data) {
       "WATCH";
   }
 
-  // =================================================
-  // TARGET
-  // =================================================
-
   let target =
     "NONE";
 
@@ -2215,10 +2143,6 @@ function calculateGoalSignal(data) {
     target =
       "NEXT_GOAL";
   }
-
-  // =================================================
-  // RESULT
-  // =================================================
 
   return {
 
