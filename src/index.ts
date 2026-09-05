@@ -1,19 +1,18 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.5
+// GOAL WATCH — HUNTER TRACKER V6.4
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 SERVICE BINDING
 //
-// V6.5:
+// V6.4:
 //
-// 1. MONTHLY HOUR × ENTRY-MINUTE MATRIX
-// 2. MONTHLY LEAGUE RANKING
-// 3. TOP 10 STRONGEST LEAGUES + BOTTOM 10 WEAKEST LEAGUES
-// 4. MINIMUM 5 RESOLVED SIGNALS PER LEAGUE FOR RANKING
-// 5. "LIVE" / EMPTY LEAGUE VALUES ARE EXCLUDED
-// 6. MONTHLY STATS BY ENTRY HOUR (EUROPE/SOFIA)
-// 7. DAILY REPORT INCLUDES ENTRY-MINUTE BREAKDOWN
-// 8. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE > 60 (61+)
-// 9. EXISTING TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
+// 1. MONTHLY LEAGUE RANKING
+// 2. TOP 10 STRONGEST LEAGUES + BOTTOM 10 WEAKEST LEAGUES
+// 3. MINIMUM 5 RESOLVED SIGNALS PER LEAGUE FOR RANKING
+// 4. "LIVE" / EMPTY LEAGUE VALUES ARE EXCLUDED
+// 5. MONTHLY STATS BY ENTRY HOUR (EUROPE/SOFIA)
+// 6. DAILY REPORT INCLUDES ENTRY-MINUTE BREAKDOWN
+// 7. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE > 60 (61+)
+// 8. EXISTING TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
 //
 // V6.2.2:
 //
@@ -217,7 +216,7 @@ export default {
 
         return json({
           success: true,
-          worker: "GOAL WATCH — HUNTER TRACKER V6.5",
+          worker: "GOAL WATCH — HUNTER TRACKER V6.4",
           source: "hunter_signals",
           mode: "READ_ONLY",
           count: entries.length,
@@ -304,7 +303,7 @@ export default {
 
     return json({
       success: true,
-      worker: "GOAL WATCH — HUNTER TRACKER V6.5",
+      worker: "GOAL WATCH — HUNTER TRACKER V6.4",
       status: "ONLINE",
       mode: "24/7 CRON + TELEGRAM",
       time:
@@ -2242,7 +2241,6 @@ async function getCurrentMonthDetails(
       scoreRows: [],
       minuteRows: [],
       hourRows: [],
-      hourMinuteRows: [],
       leagueRows: []
     };
   }
@@ -2390,7 +2388,6 @@ async function getCurrentMonthDetails(
       .prepare(`
         SELECT
           created_at,
-          entry_minute,
           result
         FROM hunter_signals
         WHERE created_at >= ?
@@ -2404,11 +2401,6 @@ async function getCurrentMonthDetails(
 
   const hourRows =
     buildHourRows(
-      hourSource?.results || []
-    );
-
-  const hourMinuteRows =
-    buildHourMinuteRows(
       hourSource?.results || []
     );
 
@@ -2511,8 +2503,6 @@ async function getCurrentMonthDetails(
 
     hourRows,
 
-    hourMinuteRows,
-
     leagueRows
   };
 }
@@ -2595,145 +2585,6 @@ function buildHourRows(rows) {
   return ENTRY_HOUR_GROUPS.map(
     g => map.get(g.label)
   );
-}
-
-
-function buildHourMinuteRows(rows) {
-
-  const matrix =
-    new Map();
-
-  for (
-    const hourGroup of
-      ENTRY_HOUR_GROUPS
-  ) {
-
-    for (
-      const minuteGroup of
-        ENTRY_MINUTE_GROUPS
-    ) {
-
-      const key =
-        hourGroup.label +
-        "|" +
-        minuteGroup.label;
-
-      matrix.set(
-        key,
-        {
-          hour_group:
-            hourGroup.label,
-
-          minute_group:
-            minuteGroup.label,
-
-          total: 0,
-          goals: 0,
-          no_goals: 0
-        }
-      );
-    }
-  }
-
-  for (const row of rows) {
-
-    const date =
-      new Date(
-        row?.created_at || ""
-      );
-
-    if (
-      Number.isNaN(
-        date.getTime()
-      )
-    ) {
-      continue;
-    }
-
-    const local =
-      getSofiaTime(
-        date
-      );
-
-    const hour =
-      Number(
-        local.hour
-      );
-
-    const entryMinute =
-      Number(
-        row?.entry_minute
-      );
-
-    const hourGroup =
-      ENTRY_HOUR_GROUPS.find(
-        g =>
-          hour >= g.min &&
-          hour <= g.max
-      );
-
-    const minuteGroup =
-      ENTRY_MINUTE_GROUPS.find(
-        g =>
-          entryMinute >= g.min &&
-          entryMinute <= g.max
-      );
-
-    if (
-      !hourGroup ||
-      !minuteGroup
-    ) {
-      continue;
-    }
-
-    const key =
-      hourGroup.label +
-      "|" +
-      minuteGroup.label;
-
-    const item =
-      matrix.get(key);
-
-    if (!item)
-      continue;
-
-    item.total++;
-
-    if (
-      row?.result === "GOAL HIT"
-    ) {
-      item.goals++;
-    } else if (
-      row?.result === "NO GOAL"
-    ) {
-      item.no_goals++;
-    }
-  }
-
-  const result = [];
-
-  for (
-    const hourGroup of
-      ENTRY_HOUR_GROUPS
-  ) {
-
-    for (
-      const minuteGroup of
-        ENTRY_MINUTE_GROUPS
-    ) {
-
-      const key =
-        hourGroup.label +
-        "|" +
-        minuteGroup.label;
-
-      result.push(
-        matrix.get(key)
-      );
-    }
-  }
-
-  return result;
 }
 
 
@@ -3193,77 +3044,6 @@ async function buildStats(env) {
       `${goals} GOAL | ` +
       `${noGoals} NO GOAL | ` +
       `${rate.toFixed(1)}%\n`;
-  }
-
-  message +=
-`
-━━━━━━━━━━━━━━━━
-🧭 ${formatMonthLabel(currentMonth)} — ЧАС × ENTRY МИНУТА
-━━━━━━━━━━━━━━━━
-`;
-
-  const hourMinuteRows =
-    Array.isArray(
-      currentDetails.hourMinuteRows
-    )
-      ? currentDetails.hourMinuteRows
-      : [];
-
-  for (
-    const hourGroup of
-      ENTRY_HOUR_GROUPS
-  ) {
-
-    message +=
-      `\n🕐 ${hourGroup.label}\n`;
-
-    for (
-      const minuteGroup of
-        ENTRY_MINUTE_GROUPS
-    ) {
-
-      const row =
-        hourMinuteRows.find(
-          r =>
-            r?.hour_group ===
-              hourGroup.label &&
-            r?.minute_group ===
-              minuteGroup.label
-        );
-
-      const total =
-        Number(
-          row?.total || 0
-        );
-
-      const goals =
-        Number(
-          row?.goals || 0
-        );
-
-      const noGoals =
-        Number(
-          row?.no_goals || 0
-        );
-
-      const resolved =
-        goals +
-        noGoals;
-
-      const rate =
-        resolved > 0
-          ? goals /
-            resolved *
-            100
-          : 0;
-
-      message +=
-        `${minuteGroup.label}: ` +
-        `${total} ENTRY | ` +
-        `${goals} GOAL | ` +
-        `${noGoals} NO GOAL | ` +
-        `${rate.toFixed(1)}%\n`;
-    }
   }
 
   const leagueRows =
