@@ -100,6 +100,43 @@ export default {
       const output = [];
 
       // =================================================
+      // FIX: ONE TIME SNAPSHOT FOR THE WHOLE FEED
+      // =================================================
+      //
+      // All matches from this Flashscore feed are evaluated
+      // against the SAME unix second. This prevents matches
+      // processed later from gaining 1-3 artificial minutes.
+      // =================================================
+
+      const snapshotUnix =
+        Math.floor(
+          Date.now() / 1000
+        );
+
+      // =================================================
+      // FIX: FETCH STATISTICS IN PARALLEL BATCHES
+      // =================================================
+      //
+      // Old behavior:
+      // match 1 -> await -> match 2 -> await -> ...
+      //
+      // New behavior:
+      // 10 matches in parallel, then the next 10.
+      //
+      // Hunter logic is NOT changed.
+      // =================================================
+
+      const STATISTICS_BATCH_SIZE =
+        10;
+
+      const statisticsById =
+        await fetchStatisticsInBatches(
+          liveMatches,
+          headers,
+          STATISTICS_BATCH_SIZE
+        );
+
+      // =================================================
       // PROCESS LIVE MATCHES
       // =================================================
 
@@ -113,7 +150,10 @@ export default {
         // =================================================
 
         const timeInfo =
-          getMinuteInfo(r);
+          getMinuteInfo(
+            r,
+            snapshotUnix
+          );
 
         const minute =
           timeInfo.minute;
@@ -149,10 +189,12 @@ export default {
         // =================================================
 
         const statistics =
-          await fetchEndpoint(
-            `https://www.flashscore.com/x/feed/df_st_1_${match.id}`,
-            headers
-          );
+          statisticsById.get(
+            match.id
+          ) || {
+            status: 0,
+            text: ""
+          };
 
         const parsed =
           parseStatistics(
@@ -711,7 +753,7 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v27_leagues",
+          "flashscore_only_v27_leagues_batch10_snapshot",
 
         success:
           true,
@@ -770,7 +812,13 @@ export default {
             zeroZeroMatches.length,
 
           signals_found:
-            signals.length
+            signals.length,
+
+          statistics_batch_size:
+            STATISTICS_BATCH_SIZE,
+
+          snapshot_unix:
+            snapshotUnix
         },
 
         matches:
@@ -783,7 +831,7 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v27_leagues",
+          "flashscore_only_v27_leagues_batch10_snapshot",
 
         success:
           false,
@@ -843,6 +891,84 @@ async function fetchEndpoint(
         ""
     };
   }
+}
+
+
+// =====================================================
+// FETCH STATISTICS IN PARALLEL BATCHES
+// =====================================================
+//
+// Keeps concurrency controlled. A batch size of 10 avoids
+// the old sequential 1-by-1 delay without firing every live
+// request at once.
+//
+// Returns:
+// Map<matchId, { status, text }>
+//
+// =====================================================
+
+async function fetchStatisticsInBatches(
+  matches,
+  headers,
+  batchSize = 10
+) {
+
+  const result =
+    new Map();
+
+  const safeBatchSize =
+    Math.max(
+      1,
+      Math.floor(
+        Number(batchSize) || 10
+      )
+    );
+
+  for (
+    let i = 0;
+    i < matches.length;
+    i += safeBatchSize
+  ) {
+
+    const batch =
+      matches.slice(
+        i,
+        i + safeBatchSize
+      );
+
+    const responses =
+      await Promise.all(
+        batch.map(
+          async match => {
+
+            const statistics =
+              await fetchEndpoint(
+                `https://www.flashscore.com/x/feed/df_st_1_${match.id}`,
+                headers
+              );
+
+            return {
+              id:
+                match.id,
+
+              statistics
+            };
+          }
+        )
+      );
+
+    for (
+      const item of responses
+    ) {
+
+      result.set(
+        item.id,
+        item.statistics
+      );
+    }
+  }
+
+  return result;
 }
 
 
@@ -1336,12 +1462,17 @@ function parseStatValue(value) {
 // TIME ENGINE
 // =====================================================
 
-function getMinuteInfo(r) {
+function getMinuteInfo(
+  r,
+  snapshotUnix = null
+) {
 
   const now =
-    Math.floor(
-      Date.now() / 1000
-    );
+    valid(snapshotUnix)
+      ? snapshotUnix
+      : Math.floor(
+          Date.now() / 1000
+        );
 
   const AC =
     r.AC;
