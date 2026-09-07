@@ -1,18 +1,20 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.6.0
+// GOAL WATCH — HUNTER TRACKER V6.7.0
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
-// V27 + MATCHER + CLOUDBET SERVICE BINDINGS
+// V27 + MATCHER SERVICE BINDINGS
 //
-// V6.6.0:
+// V6.7.0:
 //
 // 1. REAL CLOUDBET ODDS AT HUNTER ENTRY
-// 2. MATCHER V7.2 FAST_HUNTER
+// 2. MATCHER V7.3.1 FAST_HUNTER
 // 3. ONLY CONFIDENT_MATCH + secure_match=true
 // 4. EXACT MARKET: 1H TOTAL GOALS OVER 0.5
-// 5. ODDS FAILURE NEVER BLOCKS HUNTER ENTRY
-// 6. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE 61+
-// 7. TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
-// 8. DAILY / MONTHLY / LEAGUE / HOUR STATS PRESERVED
+// 5. ODDS READ DIRECTLY FROM MATCHER result.odds
+// 6. ENTRY ODDS SAVED IN D1
+// 7. ODDS FAILURE NEVER BLOCKS HUNTER ENTRY
+// 8. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE 61+
+// 9. TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
+// 10. DAILY / MONTHLY / LEAGUE / HOUR STATS PRESERVED
 //
 // IMPORTANT:
 //
@@ -77,7 +79,7 @@ export default {
     const url = new URL(request.url);
 
 
-    // ========================================================    
+    // ========================================================
     // DEBUG V27
     // ========================================================
 
@@ -200,64 +202,6 @@ export default {
 
 
     // ========================================================
-    // DEBUG CLOUDBET
-    // ========================================================
-
-    if (
-      request.method === "GET" &&
-      url.pathname === "/debug-cloudbet-binding"
-    ) {
-
-      try {
-
-        if (!env.CLOUDBET) {
-          throw new Error(
-            "CLOUDBET Service Binding missing"
-          );
-        }
-
-        const response =
-          await env.CLOUDBET.fetch(
-            new Request(
-              "https://cloudbet.internal/live",
-              {
-                method: "GET",
-                headers: {
-                  "Accept":
-                    "application/json"
-                }
-              }
-            )
-          );
-
-        const text =
-          await response.text();
-
-        return json({
-          success: true,
-          binding: "CLOUDBET",
-          status: response.status,
-          response:
-            text.substring(
-              0,
-              5000
-            )
-        });
-
-      } catch (error) {
-
-        return json({
-          success: false,
-          binding: "CLOUDBET",
-          error:
-            error?.message ||
-            String(error)
-        }, 500);
-      }
-    }
-
-
-    // ========================================================
     // ENTRIES
     // ========================================================
 
@@ -294,6 +238,12 @@ export default {
                 attack_score,
                 entry_home_score,
                 entry_away_score,
+                cloudbet_event_id,
+                entry_odds,
+                cloudbet_max_stake,
+                cloudbet_match,
+                odds_available,
+                matcher_score,
                 status,
                 result,
                 created_at,
@@ -328,6 +278,14 @@ export default {
               home: row?.entry_home_score ?? 0,
               away: row?.entry_away_score ?? 0
             },
+            cloudbet: {
+              event_id: row?.cloudbet_event_id ?? null,
+              match: row?.cloudbet_match ?? null,
+              entry_odds: numberOrNull(row?.entry_odds),
+              max_stake: numberOrNull(row?.cloudbet_max_stake),
+              odds_available: Number(row?.odds_available || 0) === 1,
+              matcher_score: numberOrNull(row?.matcher_score)
+            },
             home: null,
             away: null
           }));
@@ -335,7 +293,7 @@ export default {
         return json({
           success: true,
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.6.0",
+            "GOAL WATCH — HUNTER TRACKER V6.7.0",
           source:
             "hunter_signals",
           mode:
@@ -453,17 +411,15 @@ export default {
     return json({
       success: true,
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6.6.0",
+        "GOAL WATCH — HUNTER TRACKER V6.7.0",
       status: "ONLINE",
       mode:
-        "24/7 CRON + TELEGRAM + CLOUDBET ODDS",
+        "24/7 CRON + TELEGRAM + MATCHER CLOUDBET ODDS + D1 ODDS",
       bindings: {
         V27:
           Boolean(env.V27),
         MATCHER:
           Boolean(env.MATCHER),
-        CLOUDBET:
-          Boolean(env.CLOUDBET),
         DB:
           Boolean(env.DB)
       },
@@ -474,6 +430,14 @@ export default {
           HUNTER_TO,
         min_score:
           HUNTER_MIN_SCORE
+      },
+      odds: {
+        source:
+          "MATCHER V7.3.1",
+        market:
+          "1H Over 0.5",
+        saved_to_d1:
+          true
       },
       time:
         getSofiaTime(
@@ -534,8 +498,8 @@ async function processTracker(env) {
     );
 
 
-  // MATCHER and CLOUDBET intentionally
-  // are NOT mandatory for Hunter itself.
+  // MATCHER intentionally is NOT mandatory
+  // for Hunter itself.
   // Missing odds must never stop tracking.
 
   if (
@@ -1649,12 +1613,14 @@ function hasHalfTimeValue(
 
 // ============================================================
 // CLOUDBET ODDS — HUNTER ENTRY
-// MATCHER V7.2 FAST_HUNTER
+// MATCHER V7.3.1 FAST_HUNTER
 //
-// IMPORTANT:
-// This entire section is BEST EFFORT.
-// Any Matcher / Cloudbet failure returns null.
-// Hunter ENTRY itself continues normally.
+// Matcher already reads Cloudbet directly.
+// Tracker only consumes secure match + exact odds.
+//
+// BEST EFFORT:
+// Any failure returns null.
+// Hunter ENTRY is NEVER blocked.
 // ============================================================
 
 async function getCloudbetOddsForHunter(
@@ -1674,20 +1640,6 @@ async function getCloudbetOddsForHunter(
       return null;
     }
 
-
-    if (!env.CLOUDBET) {
-
-      console.log(
-        "CLOUDBET ODDS: CLOUDBET binding missing"
-      );
-
-      return null;
-    }
-
-
-    // --------------------------------------------------------
-    // TEAMS
-    // --------------------------------------------------------
 
     const split =
       splitHunterMatchName(
@@ -1726,17 +1678,12 @@ async function getCloudbetOddsForHunter(
 
       console.log(
         "CLOUDBET ODDS: teams missing",
-        m?.match ||
-        ""
+        m?.match || ""
       );
 
       return null;
     }
 
-
-    // --------------------------------------------------------
-    // FAST HUNTER SIGNAL
-    // --------------------------------------------------------
 
     const hunterSignal = [
       {
@@ -1793,10 +1740,6 @@ async function getCloudbetOddsForHunter(
       );
 
 
-    // --------------------------------------------------------
-    // MATCHER V7.2 FAST_HUNTER
-    // --------------------------------------------------------
-
     const matcherResponse =
       await env.MATCHER.fetch(
         new Request(
@@ -1813,9 +1756,7 @@ async function getCloudbetOddsForHunter(
       );
 
 
-    if (
-      !matcherResponse.ok
-    ) {
+    if (!matcherResponse.ok) {
 
       const text =
         await matcherResponse.text();
@@ -1878,17 +1819,12 @@ async function getCloudbetOddsForHunter(
 
       console.log(
         "CLOUDBET ODDS: no matcher result",
-        m?.match ||
-        ""
+        m?.match || ""
       );
 
       return null;
     }
 
-
-    // --------------------------------------------------------
-    // SECURITY
-    // --------------------------------------------------------
 
     if (
       result?.status !==
@@ -1901,145 +1837,37 @@ async function getCloudbetOddsForHunter(
 
       console.log(
         "CLOUDBET ODDS: no secure match",
-        m?.match ||
-        "",
-        result?.classification ||
-        "",
-        result?.reason ||
-        ""
+        m?.match || "",
+        result?.classification || "",
+        result?.reason || ""
       );
 
       return null;
     }
 
 
-    // --------------------------------------------------------
-    // EVENT ID
-    // --------------------------------------------------------
-
-    const eventId =
-      String(
-        result?.cloudbet?.event_id ??
-        result?.cloudbet?.id ??
-        ""
-      ).trim();
-
-
-    if (!eventId) {
-
-      console.log(
-        "CLOUDBET ODDS: event_id missing",
-        m?.match ||
-        ""
-      );
-
-      return null;
-    }
-
-
-    // --------------------------------------------------------
-    // EXACT CLOUDBET EVENT
-    // --------------------------------------------------------
-
-    const eventResponse =
-      await env.CLOUDBET.fetch(
-        new Request(
-          "https://cloudbet.internal/event?id=" +
-          encodeURIComponent(
-            eventId
-          ),
-          {
-            method: "GET",
-            headers: {
-              "Accept":
-                "application/json"
-            }
-          }
-        )
-      );
+    const odds =
+      result?.odds;
 
 
     if (
-      !eventResponse.ok
+      !odds ||
+      odds?.available !== true
     ) {
 
-      const text =
-        await eventResponse.text();
-
       console.log(
-        "CLOUDBET ODDS: event HTTP",
-        eventResponse.status,
-        eventId,
-        text.substring(
-          0,
-          300
-        )
+        "CLOUDBET ODDS: odds unavailable",
+        m?.match || ""
       );
 
       return null;
     }
 
-
-    let eventData =
-      await eventResponse.json();
-
-
-    // --------------------------------------------------------
-    // COMMON WRAPPERS
-    // --------------------------------------------------------
-
-    if (
-      eventData?.event &&
-      typeof eventData.event ===
-        "object"
-    ) {
-
-      eventData =
-        eventData.event;
-    }
-
-
-    if (
-      eventData?.data?.event &&
-      typeof eventData.data.event ===
-        "object"
-    ) {
-
-      eventData =
-        eventData.data.event;
-    }
-
-
-    // --------------------------------------------------------
-    // EXACT MARKET
-    // --------------------------------------------------------
-
-    const selection =
-      findFirstHalfOver05Selection(
-        eventData
-      );
-
-
-    if (!selection) {
-
-      console.log(
-        "CLOUDBET ODDS: exact 1H O0.5 missing",
-        eventId,
-        m?.match ||
-        ""
-      );
-
-      return null;
-    }
-
-
-    // --------------------------------------------------------
-    // PRICE
-    // --------------------------------------------------------
 
     const price =
       numberOrNull(
-        selection?.price
+        odds?.price ??
+        odds?.raw_price
       );
 
 
@@ -2050,7 +1878,6 @@ async function getCloudbetOddsForHunter(
 
       console.log(
         "CLOUDBET ODDS: invalid price",
-        eventId,
         price
       );
 
@@ -2058,13 +1885,10 @@ async function getCloudbetOddsForHunter(
     }
 
 
-    // --------------------------------------------------------
-    // STATUS
-    // --------------------------------------------------------
-
     const selectionStatus =
       String(
-        selection?.status ??
+        odds?.selection_status ??
+        odds?.status ??
         ""
       )
         .trim()
@@ -2072,13 +1896,13 @@ async function getCloudbetOddsForHunter(
 
 
     if (
+      selectionStatus &&
       selectionStatus !==
-      "SELECTION_ENABLED"
+        "SELECTION_ENABLED"
     ) {
 
       console.log(
         "CLOUDBET ODDS: selection disabled",
-        eventId,
         selectionStatus
       );
 
@@ -2086,15 +1910,14 @@ async function getCloudbetOddsForHunter(
     }
 
 
-    // --------------------------------------------------------
-    // SUCCESS
-    // --------------------------------------------------------
-
     return {
-      success: true,
+      success:
+        true,
 
       event_id:
-        eventId,
+        result?.cloudbet?.event_id ??
+        result?.cloudbet?.id ??
+        null,
 
       match:
         result?.cloudbet?.match ??
@@ -2107,28 +1930,29 @@ async function getCloudbetOddsForHunter(
       price,
 
       selection_status:
-        selectionStatus,
+        selectionStatus ||
+        "SELECTION_ENABLED",
 
       max_stake:
         numberOrNull(
-          selection?.maxStake ??
-          selection?.max_stake
+          odds?.max_stake ??
+          odds?.maxStake
         ),
 
       min_stake:
         numberOrNull(
-          selection?.minStake ??
-          selection?.min_stake
+          odds?.min_stake ??
+          odds?.minStake
         ),
 
       probability:
         numberOrNull(
-          selection?.probability
+          odds?.probability
         ),
 
       market_url:
-        selection?.marketUrl ??
-        selection?.market_url ??
+        odds?.market_url ??
+        odds?.marketUrl ??
         "soccer.total_goals_period_first_half/over?total=0.5",
 
       matcher_score:
@@ -2151,7 +1975,6 @@ async function getCloudbetOddsForHunter(
         null,
 
       secure_match:
-        result?.security?.secure_match ===
         true
     };
 
@@ -2166,134 +1989,6 @@ async function getCloudbetOddsForHunter(
 
     return null;
   }
-}
-
-
-// ============================================================
-// EXACT CLOUDBET MARKET PARSER
-//
-// TARGET:
-// soccer.total_goals_period_first_half
-// period=1h
-// over
-// total=0.5
-// ============================================================
-
-function findFirstHalfOver05Selection(
-  event
-) {
-
-  if (
-    !event ||
-    typeof event !==
-      "object"
-  ) {
-    return null;
-  }
-
-
-  const markets =
-    event?.markets;
-
-
-  if (
-    !markets ||
-    typeof markets !==
-      "object"
-  ) {
-    return null;
-  }
-
-
-  const market =
-    markets[
-      "soccer.total_goals_period_first_half"
-    ];
-
-
-  if (
-    !market ||
-    typeof market !==
-      "object"
-  ) {
-    return null;
-  }
-
-
-  const submarkets =
-    market?.submarkets;
-
-
-  if (
-    !submarkets ||
-    typeof submarkets !==
-      "object"
-  ) {
-    return null;
-  }
-
-
-  const submarket =
-    submarkets[
-      "period=1h"
-    ];
-
-
-  if (
-    !submarket ||
-    typeof submarket !==
-      "object"
-  ) {
-    return null;
-  }
-
-
-  const selections =
-    Array.isArray(
-      submarket?.selections
-    )
-      ? submarket.selections
-      : [];
-
-
-  for (
-    const selection of
-      selections
-  ) {
-
-    const outcome =
-      String(
-        selection?.outcome ??
-        ""
-      )
-        .toLowerCase()
-        .trim();
-
-
-    const params =
-      String(
-        selection?.params ??
-        ""
-      )
-        .toLowerCase()
-        .replace(
-          /\s+/g,
-          ""
-        )
-        .trim();
-
-
-    if (
-      outcome === "over" &&
-      params === "total=0.5"
-    ) {
-
-      return selection;
-    }
-  }
-
-
-  return null;
 }
 
 
@@ -2653,17 +2348,58 @@ async function createHunterEntry(
   }
 
 
+  // ==========================================================
+  // SAVE ENTRY ODDS TO D1
+  // ==========================================================
+
   if (
     cloudbetOdds?.success ===
       true
   ) {
 
-    console.log(
-      "CLOUDBET ENTRY ODDS OK",
-      id,
-      cloudbetOdds.event_id,
-      cloudbetOdds.price
-    );
+    try {
+
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            cloudbet_event_id = ?,
+            entry_odds = ?,
+            cloudbet_max_stake = ?,
+            cloudbet_match = ?,
+            odds_available = 1,
+            matcher_score = ?,
+            updated_at = ?
+          WHERE id = ?
+        `)
+        .bind(
+          cloudbetOdds.event_id ?? null,
+          cloudbetOdds.price ?? null,
+          cloudbetOdds.max_stake ?? null,
+          cloudbetOdds.match ?? null,
+          cloudbetOdds.matcher_score ?? null,
+          nowIso,
+          insertedId
+        )
+        .run();
+
+      console.log(
+        "CLOUDBET ENTRY ODDS SAVED",
+        id,
+        cloudbetOdds.event_id,
+        cloudbetOdds.price
+      );
+
+    } catch (error) {
+
+      // DB odds storage must not block Telegram ENTRY.
+      console.error(
+        "CLOUDBET ODDS DB SAVE ERROR",
+        id,
+        error?.message ||
+        String(error)
+      );
+    }
 
   } else {
 
@@ -5539,7 +5275,7 @@ function splitTelegramMessage(
 
 
 // ============================================================
-// ENTRY MESSAGE — V6.6 CLOUDBET ODDS
+// ENTRY MESSAGE — V6.7 CLOUDBET ODDS
 // ============================================================
 
 function formatEntryMessage(
@@ -5579,10 +5315,6 @@ function formatEntryMessage(
     m?.competition ||
     "LIVE";
 
-
-  // ==========================================================
-  // CLOUDBET BLOCK
-  // ==========================================================
 
   let cloudbetText =
 `💰 CLOUDBET
@@ -5928,4 +5660,4 @@ function json(
       }
     }
   );
-      }
+}
