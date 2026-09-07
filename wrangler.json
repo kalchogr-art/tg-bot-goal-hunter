@@ -16,6 +16,10 @@
     {
       "binding": "V27",
       "service": "goal-watch-proxy"
+    },
+    {
+      "binding": "MATCHER",
+      "service": "cloudbet-match-matcher"
     }
   ],
 
