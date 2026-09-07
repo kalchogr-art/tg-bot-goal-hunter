@@ -1,9 +1,9 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.0
+// GOAL WATCH — HUNTER TRACKER V6.7.1
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER SERVICE BINDINGS
 //
-// V6.7.0:
+// V6.7.1:
 //
 // 1. REAL CLOUDBET ODDS AT HUNTER ENTRY
 // 2. MATCHER V7.3.1 FAST_HUNTER
@@ -293,7 +293,7 @@ export default {
         return json({
           success: true,
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.7.0",
+            "GOAL WATCH — HUNTER TRACKER V6.7.1",
           source:
             "hunter_signals",
           mode:
@@ -411,7 +411,7 @@ export default {
     return json({
       success: true,
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6.7.0",
+        "GOAL WATCH — HUNTER TRACKER V6.7.1",
       status: "ONLINE",
       mode:
         "24/7 CRON + TELEGRAM + MATCHER CLOUDBET ODDS + D1 ODDS",
@@ -1846,44 +1846,18 @@ async function getCloudbetOddsForHunter(
     }
 
 
+    // V6.7.1:
+    // A secure MATCH is valuable even when the target selection
+    // is temporarily disabled. Always preserve the exact event_id.
+    // Entry odds are stored only when they are really available.
     const odds =
-      result?.odds;
+      result?.odds ?? null;
 
-
-    if (
-      !odds ||
-      odds?.available !== true
-    ) {
-
-      console.log(
-        "CLOUDBET ODDS: odds unavailable",
-        m?.match || ""
-      );
-
-      return null;
-    }
-
-
-    const price =
+    const rawPrice =
       numberOrNull(
         odds?.price ??
         odds?.raw_price
       );
-
-
-    if (
-      price === null ||
-      price <= 1
-    ) {
-
-      console.log(
-        "CLOUDBET ODDS: invalid price",
-        price
-      );
-
-      return null;
-    }
-
 
     const selectionStatus =
       String(
@@ -1894,21 +1868,31 @@ async function getCloudbetOddsForHunter(
         .trim()
         .toUpperCase();
 
-
-    if (
-      selectionStatus &&
-      selectionStatus !==
-        "SELECTION_ENABLED"
-    ) {
-
-      console.log(
-        "CLOUDBET ODDS: selection disabled",
-        selectionStatus
+    const oddsAvailable =
+      odds?.available === true &&
+      rawPrice !== null &&
+      rawPrice > 1 &&
+      (
+        !selectionStatus ||
+        selectionStatus ===
+          "SELECTION_ENABLED"
       );
 
-      return null;
-    }
+    const price =
+      oddsAvailable
+        ? rawPrice
+        : null;
 
+    if (!oddsAvailable) {
+      console.log(
+        "CLOUDBET MATCH SAVED; ODDS WAITING",
+        m?.match || "",
+        result?.cloudbet?.event_id ??
+          result?.cloudbet?.id ??
+          null,
+        selectionStatus || "NO_STATUS"
+      );
+    }
 
     return {
       success:
@@ -1929,26 +1913,35 @@ async function getCloudbetOddsForHunter(
 
       price,
 
+      odds_available:
+        oddsAvailable,
+
       selection_status:
         selectionStatus ||
-        "SELECTION_ENABLED",
+        null,
 
       max_stake:
-        numberOrNull(
-          odds?.max_stake ??
-          odds?.maxStake
-        ),
+        oddsAvailable
+          ? numberOrNull(
+              odds?.max_stake ??
+              odds?.maxStake
+            )
+          : null,
 
       min_stake:
-        numberOrNull(
-          odds?.min_stake ??
-          odds?.minStake
-        ),
+        oddsAvailable
+          ? numberOrNull(
+              odds?.min_stake ??
+              odds?.minStake
+            )
+          : null,
 
       probability:
-        numberOrNull(
-          odds?.probability
-        ),
+        oddsAvailable
+          ? numberOrNull(
+              odds?.probability
+            )
+          : null,
 
       market_url:
         odds?.market_url ??
@@ -2367,7 +2360,7 @@ async function createHunterEntry(
             entry_odds = ?,
             cloudbet_max_stake = ?,
             cloudbet_match = ?,
-            odds_available = 1,
+            odds_available = ?,
             matcher_score = ?,
             updated_at = ?
           WHERE id = ?
@@ -2377,6 +2370,7 @@ async function createHunterEntry(
           cloudbetOdds.price ?? null,
           cloudbetOdds.max_stake ?? null,
           cloudbetOdds.match ?? null,
+          cloudbetOdds.odds_available ? 1 : 0,
           cloudbetOdds.matcher_score ?? null,
           nowIso,
           insertedId
