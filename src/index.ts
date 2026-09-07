@@ -1,9 +1,9 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.1
+// GOAL WATCH — HUNTER TRACKER V6.7.2
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER SERVICE BINDINGS
 //
-// V6.7.1:
+// V6.7.2:
 //
 // 1. REAL CLOUDBET ODDS AT HUNTER ENTRY
 // 2. MATCHER V7.3.1 FAST_HUNTER
@@ -257,8 +257,100 @@ export default {
         const rows =
           result?.results || [];
 
+        // V6.7.2:
+        // Enrich /entries with the CURRENT V27 live minute/period.
+        // entry_minute remains the immutable Hunter entry snapshot.
+        // No D1 migration is required.
+        const liveById =
+          new Map();
+
+        try {
+
+          if (env.V27) {
+
+            const liveResponse =
+              await env.V27.fetch(
+                new Request(
+                  "https://v27.internal/",
+                  {
+                    method: "GET",
+                    headers: {
+                      "Accept":
+                        "application/json"
+                    }
+                  }
+                )
+              );
+
+            if (liveResponse.ok) {
+
+              const liveData =
+                await liveResponse.json();
+
+              const liveMatches =
+                Array.isArray(
+                  liveData?.matches
+                )
+                  ? liveData.matches
+                  : [];
+
+              for (
+                const liveMatch of liveMatches
+              ) {
+
+                const liveId =
+                  String(
+                    liveMatch?.id ?? ""
+                  );
+
+                if (liveId) {
+                  liveById.set(
+                    liveId,
+                    liveMatch
+                  );
+                }
+              }
+            }
+          }
+
+        } catch (error) {
+
+          // /entries must remain available even if V27 enrichment
+          // temporarily fails. In that case current_* fields are null.
+          console.error(
+            "ENTRIES V27 ENRICH ERROR",
+            error?.message ||
+            String(error)
+          );
+        }
+
         const entries =
-          rows.map(row => ({
+          rows.map(row => {
+
+            const liveMatch =
+              liveById.get(
+                String(
+                  row?.match_id ?? ""
+                )
+              ) ?? null;
+
+            const currentMinute =
+              liveMatch
+                ? parseMinuteValue(
+                    liveMatch?.minute ??
+                    liveMatch?.minute_display ??
+                    liveMatch?.minuteDisplay
+                  )
+                : null;
+
+            const period =
+              liveMatch
+                ? normalizeLivePeriod(
+                    liveMatch
+                  )
+                : null;
+
+            return {
             type: "HUNTER_ENTRY",
             signal: "HUNTER_ENTRY",
             action: "ENTRY",
@@ -287,13 +379,17 @@ export default {
               matcher_score: numberOrNull(row?.matcher_score)
             },
             home: null,
-            away: null
-          }));
+            away: null,
+            current_minute:
+              currentMinute,
+            period
+          };
+        });
 
         return json({
           success: true,
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.7.1",
+            "GOAL WATCH — HUNTER TRACKER V6.7.2",
           source:
             "hunter_signals",
           mode:
@@ -411,7 +507,7 @@ export default {
     return json({
       success: true,
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6.7.1",
+        "GOAL WATCH — HUNTER TRACKER V6.7.2",
       status: "ONLINE",
       mode:
         "24/7 CRON + TELEGRAM + MATCHER CLOUDBET ODDS + D1 ODDS",
@@ -1516,6 +1612,78 @@ function parseMinuteValue(
     );
   }
 
+
+  return null;
+}
+
+
+// ============================================================
+// LIVE PERIOD — /entries V6.7.2
+// ============================================================
+
+function normalizeLivePeriod(
+  m
+) {
+
+  const values = [
+    m?.period,
+    m?.phase,
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state
+  ];
+
+  for (
+    const value of values
+  ) {
+
+    const text =
+      String(
+        value ?? ""
+      )
+        .trim()
+        .toUpperCase();
+
+    if (!text)
+      continue;
+
+    if (
+      text === "1H" ||
+      text === "1ST HALF" ||
+      text === "FIRST HALF" ||
+      text === "1P"
+    ) {
+      return "1H";
+    }
+
+    if (
+      text === "HT" ||
+      text === "HALFTIME" ||
+      text === "HALF TIME" ||
+      text === "HALF-TIME"
+    ) {
+      return "HT";
+    }
+
+    if (
+      text === "2H" ||
+      text === "2ND HALF" ||
+      text === "SECOND HALF" ||
+      text === "2P"
+    ) {
+      return "2H";
+    }
+
+    if (
+      text === "FT" ||
+      text === "FINISHED" ||
+      text === "FULL TIME" ||
+      text === "FULL-TIME"
+    ) {
+      return "FT";
+    }
+  }
 
   return null;
 }
