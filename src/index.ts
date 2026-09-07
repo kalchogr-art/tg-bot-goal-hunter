@@ -1,28 +1,18 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.5.1
+// GOAL WATCH — HUNTER TRACKER V6.6.0
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
-// V27 SERVICE BINDING
+// V27 + MATCHER + CLOUDBET SERVICE BINDINGS
 //
-// V6.5:
+// V6.6.0:
 //
-// 1. MONTHLY HOUR × ENTRY-MINUTE MATRIX
-// 2. MONTHLY LEAGUE RANKING
-// 3. TOP 10 STRONGEST LEAGUES + BOTTOM 10 WEAKEST LEAGUES
-// 4. MINIMUM 5 RESOLVED SIGNALS PER LEAGUE FOR RANKING
-// 5. "LIVE" / EMPTY LEAGUE VALUES ARE EXCLUDED
-// 6. MONTHLY STATS BY ENTRY HOUR (EUROPE/SOFIA)
-// 7. DAILY REPORT INCLUDES ENTRY-MINUTE BREAKDOWN
-// 8. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE > 60 (61+)
-// 9. EXISTING TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
-//
-// V6.2.2:
-//
-// TEST MODE CHANGE:
-//
-// 1. HUNTER WINDOW = 10–42'
-// 2. HUNTER SCORE = >60 (61+)
-// 3. SAME SCORE THRESHOLD FOR ALL MINUTES
-// 4. FIXED TELEGRAM /stats SQL BUG
+// 1. REAL CLOUDBET ODDS AT HUNTER ENTRY
+// 2. MATCHER V7.2 FAST_HUNTER
+// 3. ONLY CONFIDENT_MATCH + secure_match=true
+// 4. EXACT MARKET: 1H TOTAL GOALS OVER 0.5
+// 5. ODDS FAILURE NEVER BLOCKS HUNTER ENTRY
+// 6. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE 61+
+// 7. TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
+// 8. DAILY / MONTHLY / LEAGUE / HOUR STATS PRESERVED
 //
 // IMPORTANT:
 //
@@ -75,11 +65,21 @@ const SOFIA_FORMATTER =
     }
   );
 
+
+// ============================================================
+// MAIN
+// ============================================================
+
 export default {
 
   async fetch(request, env) {
 
     const url = new URL(request.url);
+
+
+    // ========================================================    
+    // DEBUG V27
+    // ========================================================
 
     if (
       request.method === "GET" &&
@@ -143,6 +143,123 @@ export default {
         );
       }
     }
+
+
+    // ========================================================
+    // DEBUG MATCHER
+    // ========================================================
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/debug-matcher-binding"
+    ) {
+
+      try {
+
+        if (!env.MATCHER) {
+          throw new Error(
+            "MATCHER Service Binding missing"
+          );
+        }
+
+        const response =
+          await env.MATCHER.fetch(
+            new Request(
+              "https://matcher.internal/",
+              {
+                method: "GET",
+                headers: {
+                  "Accept":
+                    "application/json"
+                }
+              }
+            )
+          );
+
+        const text =
+          await response.text();
+
+        return json({
+          success: true,
+          binding: "MATCHER",
+          status: response.status,
+          response: text
+        });
+
+      } catch (error) {
+
+        return json({
+          success: false,
+          binding: "MATCHER",
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
+    }
+
+
+    // ========================================================
+    // DEBUG CLOUDBET
+    // ========================================================
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/debug-cloudbet-binding"
+    ) {
+
+      try {
+
+        if (!env.CLOUDBET) {
+          throw new Error(
+            "CLOUDBET Service Binding missing"
+          );
+        }
+
+        const response =
+          await env.CLOUDBET.fetch(
+            new Request(
+              "https://cloudbet.internal/live",
+              {
+                method: "GET",
+                headers: {
+                  "Accept":
+                    "application/json"
+                }
+              }
+            )
+          );
+
+        const text =
+          await response.text();
+
+        return json({
+          success: true,
+          binding: "CLOUDBET",
+          status: response.status,
+          response:
+            text.substring(
+              0,
+              5000
+            )
+        });
+
+      } catch (error) {
+
+        return json({
+          success: false,
+          binding: "CLOUDBET",
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
+    }
+
+
+    // ========================================================
+    // ENTRIES
+    // ========================================================
 
     if (
       request.method === "GET" &&
@@ -217,10 +334,14 @@ export default {
 
         return json({
           success: true,
-          worker: "GOAL WATCH — HUNTER TRACKER V6.5.1",
-          source: "hunter_signals",
-          mode: "READ_ONLY",
-          count: entries.length,
+          worker:
+            "GOAL WATCH — HUNTER TRACKER V6.6.0",
+          source:
+            "hunter_signals",
+          mode:
+            "READ_ONLY",
+          count:
+            entries.length,
           entries
         });
 
@@ -228,7 +349,8 @@ export default {
 
         console.error(
           "ENTRIES API ERROR",
-          error?.message || String(error)
+          error?.message ||
+          String(error)
         );
 
         return json({
@@ -240,7 +362,15 @@ export default {
       }
     }
 
-    if (request.method === "OPTIONS") {
+
+    // ========================================================
+    // OPTIONS
+    // ========================================================
+
+    if (
+      request.method === "OPTIONS"
+    ) {
+
       return new Response(
         null,
         {
@@ -250,7 +380,14 @@ export default {
       );
     }
 
-    if (request.method === "POST") {
+
+    // ========================================================
+    // TELEGRAM WEBHOOK
+    // ========================================================
+
+    if (
+      request.method === "POST"
+    ) {
 
       try {
 
@@ -299,7 +436,8 @@ export default {
 
         console.error(
           "TELEGRAM WEBHOOK ERROR",
-          error?.message || String(error)
+          error?.message ||
+          String(error)
         );
 
         return json({
@@ -311,17 +449,39 @@ export default {
       }
     }
 
+
     return json({
       success: true,
-      worker: "GOAL WATCH — HUNTER TRACKER V6.5.1",
+      worker:
+        "GOAL WATCH — HUNTER TRACKER V6.6.0",
       status: "ONLINE",
-      mode: "24/7 CRON + TELEGRAM",
+      mode:
+        "24/7 CRON + TELEGRAM + CLOUDBET ODDS",
+      bindings: {
+        V27:
+          Boolean(env.V27),
+        MATCHER:
+          Boolean(env.MATCHER),
+        CLOUDBET:
+          Boolean(env.CLOUDBET),
+        DB:
+          Boolean(env.DB)
+      },
+      hunter: {
+        from:
+          HUNTER_FROM,
+        to:
+          HUNTER_TO,
+        min_score:
+          HUNTER_MIN_SCORE
+      },
       time:
         getSofiaTime(
           new Date()
         ).text
     });
   },
+
 
   async scheduled(
     event,
@@ -350,7 +510,8 @@ export default {
 async function processTracker(env) {
 
   const now = new Date();
-  const local = getSofiaTime(now);
+  const local =
+    getSofiaTime(now);
 
   if (!env.V27)
     throw new Error(
@@ -372,17 +533,26 @@ async function processTracker(env) {
       "TELEGRAM_CHAT_ID missing"
     );
 
+
+  // MATCHER and CLOUDBET intentionally
+  // are NOT mandatory for Hunter itself.
+  // Missing odds must never stop tracking.
+
   if (
     local.hour === 0 &&
-    local.minute <= DAILY_REPORT_WINDOW_MINUTES
+    local.minute <=
+      DAILY_REPORT_WINDOW_MINUTES
   ) {
 
     try {
+
       await sendDailyReport(
         env,
         local
       );
+
     } catch (error) {
+
       console.error(
         "DAILY REPORT ERROR",
         error?.message ||
@@ -390,6 +560,7 @@ async function processTracker(env) {
       );
     }
   }
+
 
   const response =
     await env.V27.fetch(
@@ -421,16 +592,19 @@ async function processTracker(env) {
     );
   }
 
+
   const data =
     await response.json();
 
   if (
     data?.success !== true
   ) {
+
     throw new Error(
       "V27 returned success=false"
     );
   }
+
 
   const matches =
     Array.isArray(
@@ -438,6 +612,7 @@ async function processTracker(env) {
     )
       ? data.matches
       : [];
+
 
   const result =
     await env.DB
@@ -458,13 +633,18 @@ async function processTracker(env) {
       `)
       .all();
 
+
   const signals =
     result?.results || [];
+
 
   const trackingMap =
     new Map();
 
-  for (const signal of signals) {
+
+  for (
+    const signal of signals
+  ) {
 
     const id =
       String(
@@ -480,10 +660,14 @@ async function processTracker(env) {
     );
   }
 
+
   const currentIds =
     new Set();
 
-  for (const match of matches) {
+
+  for (
+    const match of matches
+  ) {
 
     const id =
       String(
@@ -495,7 +679,14 @@ async function processTracker(env) {
     }
   }
 
-  for (const match of matches) {
+
+  // ==========================================================
+  // CURRENT MATCHES
+  // ==========================================================
+
+  for (
+    const match of matches
+  ) {
 
     const id =
       String(
@@ -505,18 +696,26 @@ async function processTracker(env) {
     if (!id)
       continue;
 
+
+    // --------------------------------------------------------
+    // ALREADY TRACKING
+    // --------------------------------------------------------
+
     if (
       trackingMap.has(id)
     ) {
 
       try {
+
         await processTrackingMatch(
           env,
           match,
           now,
           trackingMap
         );
+
       } catch (error) {
+
         console.error(
           "TRACKING MATCH ERROR",
           id,
@@ -528,8 +727,15 @@ async function processTracker(env) {
       continue;
     }
 
+
+    // --------------------------------------------------------
+    // NEW HUNTER CANDIDATE
+    // --------------------------------------------------------
+
     const score =
-      getHunterScore(match);
+      getHunterScore(
+        match
+      );
 
     if (
       !isHunterCandidate(
@@ -540,7 +746,9 @@ async function processTracker(env) {
       continue;
     }
 
+
     try {
+
       await createHunterEntry(
         env,
         match,
@@ -549,7 +757,9 @@ async function processTracker(env) {
         trackingMap,
         score
       );
+
     } catch (error) {
+
       console.error(
         "ENTRY ERROR",
         id,
@@ -559,7 +769,14 @@ async function processTracker(env) {
     }
   }
 
-  for (const signal of signals) {
+
+  // ==========================================================
+  // MISSING TRACKING
+  // ==========================================================
+
+  for (
+    const signal of signals
+  ) {
 
     const id =
       String(
@@ -575,12 +792,15 @@ async function processTracker(env) {
       continue;
 
     try {
+
       await finalizeMissingTracking(
         env,
         signal,
         now
       );
+
     } catch (error) {
+
       console.error(
         "FINALIZE ERROR",
         id,
@@ -634,18 +854,26 @@ async function processTrackingMatch(
 
   const entryHome =
     Number(
-      existing.entry_home_score || 0
+      existing.entry_home_score ||
+      0
     );
 
   const entryAway =
     Number(
-      existing.entry_away_score || 0
+      existing.entry_away_score ||
+      0
     );
 
   const entryMinute =
     Number(
-      existing.entry_minute || 0
+      existing.entry_minute ||
+      0
     );
+
+
+  // ==========================================================
+  // GOAL
+  // ==========================================================
 
   if (
     home > entryHome ||
@@ -670,6 +898,7 @@ async function processTrackingMatch(
           )
         : null;
 
+
     const update =
       await env.DB
         .prepare(`
@@ -691,9 +920,11 @@ async function processTrackingMatch(
         )
         .run();
 
+
     const changes =
       Number(
-        update?.meta?.changes || 0
+        update?.meta?.changes ||
+        0
       );
 
     if (
@@ -702,7 +933,9 @@ async function processTrackingMatch(
       return;
     }
 
+
     trackingMap.delete(id);
+
 
     await sendTelegram(
       env,
@@ -717,6 +950,11 @@ async function processTrackingMatch(
 
     return;
   }
+
+
+  // ==========================================================
+  // SECOND HALF STARTED
+  // ==========================================================
 
   if (
     isSecondHalfStarted(m)
@@ -739,9 +977,11 @@ async function processTrackingMatch(
         )
         .run();
 
+
     const changes =
       Number(
-        update?.meta?.changes || 0
+        update?.meta?.changes ||
+        0
       );
 
     if (
@@ -750,7 +990,9 @@ async function processTrackingMatch(
       return;
     }
 
+
     trackingMap.delete(id);
+
 
     await sendTelegram(
       env,
@@ -763,6 +1005,11 @@ async function processTrackingMatch(
 
     return;
   }
+
+
+  // ==========================================================
+  // HT 0:0
+  // ==========================================================
 
   if (
     home === 0 &&
@@ -787,9 +1034,11 @@ async function processTrackingMatch(
         )
         .run();
 
+
     const changes =
       Number(
-        update?.meta?.changes || 0
+        update?.meta?.changes ||
+        0
       );
 
     if (
@@ -798,7 +1047,9 @@ async function processTrackingMatch(
       return;
     }
 
+
     trackingMap.delete(id);
+
 
     await sendTelegram(
       env,
@@ -829,7 +1080,10 @@ function isSecondHalfStarted(m) {
     m?.phase
   ];
 
-  for (const value of values) {
+  for (
+    const value of values
+  ) {
+
     if (
       hasSecondHalfValue(
         value
@@ -838,6 +1092,7 @@ function isSecondHalfStarted(m) {
       return true;
     }
   }
+
 
   const nestedValues = [
     m?.period?.type,
@@ -862,7 +1117,11 @@ function isSecondHalfStarted(m) {
     m?.phase?.long
   ];
 
-  for (const value of nestedValues) {
+
+  for (
+    const value of nestedValues
+  ) {
+
     if (
       hasSecondHalfValue(
         value
@@ -872,20 +1131,25 @@ function isSecondHalfStarted(m) {
     }
   }
 
+
   return false;
 }
 
-function hasSecondHalfValue(value) {
+
+function hasSecondHalfValue(
+  value
+) {
 
   const text =
     String(
       value || ""
     )
-    .toUpperCase()
-    .trim();
+      .toUpperCase()
+      .trim();
 
   if (!text)
     return false;
+
 
   return (
     text === "2H" ||
@@ -898,8 +1162,12 @@ function hasSecondHalfValue(value) {
     text === "2ND_HALF" ||
     text === "2H STARTED" ||
     text === "SECOND HALF STARTED" ||
-    text.includes("SECOND HALF") ||
-    text.includes("2ND HALF")
+    text.includes(
+      "SECOND HALF"
+    ) ||
+    text.includes(
+      "2ND HALF"
+    )
   );
 }
 
@@ -918,39 +1186,84 @@ function getRealGoalMinute(
 
   const candidates = [];
 
-  if (Array.isArray(m?.goals))
-    candidates.push(...m.goals);
 
-  if (Array.isArray(m?.events))
-    candidates.push(...m.events);
+  if (
+    Array.isArray(
+      m?.goals
+    )
+  ) {
+    candidates.push(
+      ...m.goals
+    );
+  }
 
-  if (Array.isArray(m?.incidents))
-    candidates.push(...m.incidents);
 
-  if (Array.isArray(m?.goal_events))
-    candidates.push(...m.goal_events);
+  if (
+    Array.isArray(
+      m?.events
+    )
+  ) {
+    candidates.push(
+      ...m.events
+    );
+  }
+
+
+  if (
+    Array.isArray(
+      m?.incidents
+    )
+  ) {
+    candidates.push(
+      ...m.incidents
+    );
+  }
+
+
+  if (
+    Array.isArray(
+      m?.goal_events
+    )
+  ) {
+    candidates.push(
+      ...m.goal_events
+    );
+  }
+
 
   const validGoals = [];
 
-  for (const event of candidates) {
+
+  for (
+    const event of candidates
+  ) {
 
     if (
       !event ||
-      typeof event !== "object"
+      typeof event !==
+        "object"
     ) {
       continue;
     }
 
-    if (!isGoalEvent(event))
+
+    if (
+      !isGoalEvent(event)
+    )
       continue;
+
 
     const minute =
       extractEventMinute(
         event
       );
 
-    if (minute === null)
+
+    if (
+      minute === null
+    )
       continue;
+
 
     if (
       minute <= 0 ||
@@ -959,35 +1272,46 @@ function getRealGoalMinute(
       continue;
     }
 
+
     if (
       minute <= entryMinute
     ) {
       continue;
     }
 
-    validGoals.push(minute);
+
+    validGoals.push(
+      minute
+    );
   }
+
 
   if (
     validGoals.length > 0
   ) {
 
     validGoals.sort(
-      (a, b) => a - b
+      (a, b) =>
+        a - b
     );
 
     return validGoals[0];
   }
 
+
   if (
-    currentMinute > entryMinute &&
+    currentMinute >
+      entryMinute &&
     currentMinute <= 45
   ) {
+
     return currentMinute;
   }
 
+
   return null;
 }
+
 
 function isGoalEvent(event) {
 
@@ -1004,23 +1328,30 @@ function isGoalEvent(event) {
     event?.event
   ];
 
-  for (const value of values) {
+
+  for (
+    const value of values
+  ) {
 
     const text =
       String(
         value || ""
       )
-      .toLowerCase()
-      .trim();
+        .toLowerCase()
+        .trim();
+
 
     if (
       text === "goal" ||
       text === "goals" ||
-      text.includes("goal")
+      text.includes(
+        "goal"
+      )
     ) {
       return true;
     }
   }
+
 
   if (
     event?.is_goal === true ||
@@ -1030,10 +1361,14 @@ function isGoalEvent(event) {
     return true;
   }
 
+
   return false;
 }
 
-function extractEventMinute(event) {
+
+function extractEventMinute(
+  event
+) {
 
   const values = [
     event?.minute,
@@ -1044,21 +1379,29 @@ function extractEventMinute(event) {
     event?.time_minute
   ];
 
-  for (const value of values) {
+
+  for (
+    const value of values
+  ) {
 
     const minute =
       parseMinuteValue(
         value
       );
 
-    if (minute !== null)
+
+    if (
+      minute !== null
+    )
       return minute;
   }
+
 
   const directTime =
     parseMinuteValue(
       event?.time
     );
+
 
   if (
     directTime !== null
@@ -1066,20 +1409,26 @@ function extractEventMinute(event) {
     return directTime;
   }
 
+
   const nested = [
     event?.time,
     event?.match_time,
     event?.clock
   ];
 
-  for (const value of nested) {
+
+  for (
+    const value of nested
+  ) {
 
     if (
       !value ||
-      typeof value !== "object"
+      typeof value !==
+        "object"
     ) {
       continue;
     }
+
 
     const minute =
       parseMinuteValue(
@@ -1088,6 +1437,7 @@ function extractEventMinute(event) {
         value?.value
       );
 
+
     if (
       minute !== null
     ) {
@@ -1095,10 +1445,14 @@ function extractEventMinute(event) {
     }
   }
 
+
   return null;
 }
 
-function parseMinuteValue(value) {
+
+function parseMinuteValue(
+  value
+) {
 
   if (
     value === null ||
@@ -1107,55 +1461,97 @@ function parseMinuteValue(value) {
     return null;
   }
 
+
   if (
-    typeof value === "number"
+    typeof value ===
+      "number"
   ) {
-    return Number.isFinite(value)
-      ? Math.floor(value)
+
+    return Number.isFinite(
+      value
+    )
+      ? Math.floor(
+          value
+        )
       : null;
   }
 
+
   const text =
-    String(value).trim();
+    String(
+      value
+    ).trim();
+
 
   if (!text)
     return null;
+
 
   const apostrophe =
     text.match(
       /^(\d{1,3})\s*['′]/
     );
 
-  if (apostrophe)
-    return Number(apostrophe[1]);
+
+  if (
+    apostrophe
+  ) {
+    return Number(
+      apostrophe[1]
+    );
+  }
+
 
   const clock =
     text.match(
       /^(\d{1,3}):(\d{1,2})/
     );
 
-  if (clock)
-    return Number(clock[1]);
+
+  if (
+    clock
+  ) {
+    return Number(
+      clock[1]
+    );
+  }
+
 
   const added =
     text.match(
       /^(\d{1,3})\s*\+\s*(\d{1,2})/
     );
 
-  if (added) {
+
+  if (
+    added
+  ) {
+
     return (
-      Number(added[1]) +
-      Number(added[2])
+      Number(
+        added[1]
+      ) +
+      Number(
+        added[2]
+      )
     );
   }
+
 
   const plain =
     text.match(
       /^(\d{1,3})$/
     );
 
-  if (plain)
-    return Number(plain[1]);
+
+  if (
+    plain
+  ) {
+    return Number(
+      plain[1]
+    );
+  }
+
 
   return null;
 }
@@ -1176,7 +1572,11 @@ function isFirstHalfFinished(m) {
     m?.period
   ];
 
-  for (const value of values) {
+
+  for (
+    const value of values
+  ) {
+
     if (
       hasHalfTimeValue(
         value
@@ -1185,6 +1585,7 @@ function isFirstHalfFinished(m) {
       return true;
     }
   }
+
 
   const nestedValues = [
     m?.status?.type,
@@ -1201,7 +1602,11 @@ function isFirstHalfFinished(m) {
     m?.state?.long
   ];
 
-  for (const value of nestedValues) {
+
+  for (
+    const value of nestedValues
+  ) {
+
     if (
       hasHalfTimeValue(
         value
@@ -1211,17 +1616,22 @@ function isFirstHalfFinished(m) {
     }
   }
 
+
   return false;
 }
 
-function hasHalfTimeValue(value) {
+
+function hasHalfTimeValue(
+  value
+) {
 
   const text =
     String(
       value || ""
     )
-    .toUpperCase()
-    .trim();
+      .toUpperCase()
+      .trim();
+
 
   return (
     text === "HT" ||
@@ -1234,6 +1644,731 @@ function hasHalfTimeValue(value) {
     text === "END OF 1H" ||
     text === "1H END"
   );
+}
+
+
+// ============================================================
+// CLOUDBET ODDS — HUNTER ENTRY
+// MATCHER V7.2 FAST_HUNTER
+//
+// IMPORTANT:
+// This entire section is BEST EFFORT.
+// Any Matcher / Cloudbet failure returns null.
+// Hunter ENTRY itself continues normally.
+// ============================================================
+
+async function getCloudbetOddsForHunter(
+  env,
+  m,
+  hunterScore
+) {
+
+  try {
+
+    if (!env.MATCHER) {
+
+      console.log(
+        "CLOUDBET ODDS: MATCHER binding missing"
+      );
+
+      return null;
+    }
+
+
+    if (!env.CLOUDBET) {
+
+      console.log(
+        "CLOUDBET ODDS: CLOUDBET binding missing"
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // TEAMS
+    // --------------------------------------------------------
+
+    const split =
+      splitHunterMatchName(
+        m?.match ||
+        m?.name ||
+        ""
+      );
+
+
+    const home =
+      String(
+        m?.home ??
+        m?.homeTeam ??
+        m?.home_name ??
+        m?.home?.name ??
+        split.home ??
+        ""
+      ).trim();
+
+
+    const away =
+      String(
+        m?.away ??
+        m?.awayTeam ??
+        m?.away_name ??
+        m?.away?.name ??
+        split.away ??
+        ""
+      ).trim();
+
+
+    if (
+      !home ||
+      !away
+    ) {
+
+      console.log(
+        "CLOUDBET ODDS: teams missing",
+        m?.match ||
+        ""
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // FAST HUNTER SIGNAL
+    // --------------------------------------------------------
+
+    const hunterSignal = [
+      {
+        type:
+          "HUNTER_ENTRY",
+
+        signal:
+          "HUNTER_ENTRY",
+
+        match:
+          m?.match ??
+          `${home} - ${away}`,
+
+        match_id:
+          m?.id ??
+          null,
+
+        home,
+        away,
+
+        league:
+          m?.league ??
+          m?.tournament ??
+          m?.competition ??
+          null,
+
+        competition:
+          m?.competition ??
+          m?.league ??
+          m?.tournament ??
+          null,
+
+        country:
+          m?.country ??
+          null,
+
+        entry_minute:
+          Number(
+            m?.minute ?? 0
+          ),
+
+        hunter_score:
+          hunterScore
+      }
+    ];
+
+
+    const matcherPath =
+      "/match?threshold=0.45&signals=" +
+      encodeURIComponent(
+        JSON.stringify(
+          hunterSignal
+        )
+      );
+
+
+    // --------------------------------------------------------
+    // MATCHER V7.2 FAST_HUNTER
+    // --------------------------------------------------------
+
+    const matcherResponse =
+      await env.MATCHER.fetch(
+        new Request(
+          "https://matcher.internal" +
+          matcherPath,
+          {
+            method: "GET",
+            headers: {
+              "Accept":
+                "application/json"
+            }
+          }
+        )
+      );
+
+
+    if (
+      !matcherResponse.ok
+    ) {
+
+      const text =
+        await matcherResponse.text();
+
+      console.log(
+        "CLOUDBET ODDS: matcher HTTP",
+        matcherResponse.status,
+        text.substring(
+          0,
+          300
+        )
+      );
+
+      return null;
+    }
+
+
+    const matcherData =
+      await matcherResponse.json();
+
+
+    if (
+      matcherData?.success !==
+        true
+    ) {
+
+      console.log(
+        "CLOUDBET ODDS: matcher success=false"
+      );
+
+      return null;
+    }
+
+
+    const hunterResults =
+      Array.isArray(
+        matcherData?.hunter_results
+      )
+        ? matcherData.hunter_results
+        : [];
+
+
+    const result =
+      hunterResults.find(
+        item =>
+          String(
+            item?.signal?.match_id ??
+            ""
+          ) ===
+          String(
+            m?.id ??
+            ""
+          )
+      ) ??
+      hunterResults[0] ??
+      null;
+
+
+    if (!result) {
+
+      console.log(
+        "CLOUDBET ODDS: no matcher result",
+        m?.match ||
+        ""
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // SECURITY
+    // --------------------------------------------------------
+
+    if (
+      result?.status !==
+        "MATCH" ||
+      result?.classification !==
+        "CONFIDENT_MATCH" ||
+      result?.security?.secure_match !==
+        true
+    ) {
+
+      console.log(
+        "CLOUDBET ODDS: no secure match",
+        m?.match ||
+        "",
+        result?.classification ||
+        "",
+        result?.reason ||
+        ""
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // EVENT ID
+    // --------------------------------------------------------
+
+    const eventId =
+      String(
+        result?.cloudbet?.event_id ??
+        result?.cloudbet?.id ??
+        ""
+      ).trim();
+
+
+    if (!eventId) {
+
+      console.log(
+        "CLOUDBET ODDS: event_id missing",
+        m?.match ||
+        ""
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // EXACT CLOUDBET EVENT
+    // --------------------------------------------------------
+
+    const eventResponse =
+      await env.CLOUDBET.fetch(
+        new Request(
+          "https://cloudbet.internal/event?id=" +
+          encodeURIComponent(
+            eventId
+          ),
+          {
+            method: "GET",
+            headers: {
+              "Accept":
+                "application/json"
+            }
+          }
+        )
+      );
+
+
+    if (
+      !eventResponse.ok
+    ) {
+
+      const text =
+        await eventResponse.text();
+
+      console.log(
+        "CLOUDBET ODDS: event HTTP",
+        eventResponse.status,
+        eventId,
+        text.substring(
+          0,
+          300
+        )
+      );
+
+      return null;
+    }
+
+
+    let eventData =
+      await eventResponse.json();
+
+
+    // --------------------------------------------------------
+    // COMMON WRAPPERS
+    // --------------------------------------------------------
+
+    if (
+      eventData?.event &&
+      typeof eventData.event ===
+        "object"
+    ) {
+
+      eventData =
+        eventData.event;
+    }
+
+
+    if (
+      eventData?.data?.event &&
+      typeof eventData.data.event ===
+        "object"
+    ) {
+
+      eventData =
+        eventData.data.event;
+    }
+
+
+    // --------------------------------------------------------
+    // EXACT MARKET
+    // --------------------------------------------------------
+
+    const selection =
+      findFirstHalfOver05Selection(
+        eventData
+      );
+
+
+    if (!selection) {
+
+      console.log(
+        "CLOUDBET ODDS: exact 1H O0.5 missing",
+        eventId,
+        m?.match ||
+        ""
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // PRICE
+    // --------------------------------------------------------
+
+    const price =
+      numberOrNull(
+        selection?.price
+      );
+
+
+    if (
+      price === null ||
+      price <= 1
+    ) {
+
+      console.log(
+        "CLOUDBET ODDS: invalid price",
+        eventId,
+        price
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // STATUS
+    // --------------------------------------------------------
+
+    const selectionStatus =
+      String(
+        selection?.status ??
+        ""
+      )
+        .trim()
+        .toUpperCase();
+
+
+    if (
+      selectionStatus !==
+      "SELECTION_ENABLED"
+    ) {
+
+      console.log(
+        "CLOUDBET ODDS: selection disabled",
+        eventId,
+        selectionStatus
+      );
+
+      return null;
+    }
+
+
+    // --------------------------------------------------------
+    // SUCCESS
+    // --------------------------------------------------------
+
+    return {
+      success: true,
+
+      event_id:
+        eventId,
+
+      match:
+        result?.cloudbet?.match ??
+        null,
+
+      cloudbet_status:
+        result?.cloudbet?.status ??
+        null,
+
+      price,
+
+      selection_status:
+        selectionStatus,
+
+      max_stake:
+        numberOrNull(
+          selection?.maxStake ??
+          selection?.max_stake
+        ),
+
+      min_stake:
+        numberOrNull(
+          selection?.minStake ??
+          selection?.min_stake
+        ),
+
+      probability:
+        numberOrNull(
+          selection?.probability
+        ),
+
+      market_url:
+        selection?.marketUrl ??
+        selection?.market_url ??
+        "soccer.total_goals_period_first_half/over?total=0.5",
+
+      matcher_score:
+        numberOrNull(
+          result?.matcher_scoring?.total
+        ),
+
+      home_score:
+        numberOrNull(
+          result?.matcher_scoring?.home_score
+        ),
+
+      away_score:
+        numberOrNull(
+          result?.matcher_scoring?.away_score
+        ),
+
+      classification:
+        result?.classification ??
+        null,
+
+      secure_match:
+        result?.security?.secure_match ===
+        true
+    };
+
+
+  } catch (error) {
+
+    console.error(
+      "CLOUDBET ENTRY ODDS ERROR",
+      error?.message ||
+      String(error)
+    );
+
+    return null;
+  }
+}
+
+
+// ============================================================
+// EXACT CLOUDBET MARKET PARSER
+//
+// TARGET:
+// soccer.total_goals_period_first_half
+// period=1h
+// over
+// total=0.5
+// ============================================================
+
+function findFirstHalfOver05Selection(
+  event
+) {
+
+  if (
+    !event ||
+    typeof event !==
+      "object"
+  ) {
+    return null;
+  }
+
+
+  const markets =
+    event?.markets;
+
+
+  if (
+    !markets ||
+    typeof markets !==
+      "object"
+  ) {
+    return null;
+  }
+
+
+  const market =
+    markets[
+      "soccer.total_goals_period_first_half"
+    ];
+
+
+  if (
+    !market ||
+    typeof market !==
+      "object"
+  ) {
+    return null;
+  }
+
+
+  const submarkets =
+    market?.submarkets;
+
+
+  if (
+    !submarkets ||
+    typeof submarkets !==
+      "object"
+  ) {
+    return null;
+  }
+
+
+  const submarket =
+    submarkets[
+      "period=1h"
+    ];
+
+
+  if (
+    !submarket ||
+    typeof submarket !==
+      "object"
+  ) {
+    return null;
+  }
+
+
+  const selections =
+    Array.isArray(
+      submarket?.selections
+    )
+      ? submarket.selections
+      : [];
+
+
+  for (
+    const selection of
+      selections
+  ) {
+
+    const outcome =
+      String(
+        selection?.outcome ??
+        ""
+      )
+        .toLowerCase()
+        .trim();
+
+
+    const params =
+      String(
+        selection?.params ??
+        ""
+      )
+        .toLowerCase()
+        .replace(
+          /\s+/g,
+          ""
+        )
+        .trim();
+
+
+    if (
+      outcome === "over" &&
+      params === "total=0.5"
+    ) {
+
+      return selection;
+    }
+  }
+
+
+  return null;
+}
+
+
+// ============================================================
+// MATCH NAME SPLIT FOR MATCHER
+// ============================================================
+
+function splitHunterMatchName(
+  value
+) {
+
+  const text =
+    String(
+      value || ""
+    ).trim();
+
+
+  if (!text) {
+
+    return {
+      home: null,
+      away: null
+    };
+  }
+
+
+  const separators = [
+    " - ",
+    " v ",
+    " vs ",
+    " VS ",
+    " @ "
+  ];
+
+
+  for (
+    const separator of
+      separators
+  ) {
+
+    const index =
+      text.indexOf(
+        separator
+      );
+
+
+    if (
+      index >= 0
+    ) {
+
+      return {
+        home:
+          text
+            .slice(
+              0,
+              index
+            )
+            .trim(),
+
+        away:
+          text
+            .slice(
+              index +
+              separator.length
+            )
+            .trim()
+      };
+    }
+  }
+
+
+  return {
+    home: null,
+    away: null
+  };
 }
 
 
@@ -1255,8 +2390,10 @@ async function createHunterEntry(
       m?.id || ""
     );
 
+
   if (!id)
     return;
+
 
   if (
     trackingMap.has(id)
@@ -1264,15 +2401,18 @@ async function createHunterEntry(
     return;
   }
 
+
   const minute =
     Number(
       m?.minute ?? 0
     );
 
+
   const requiredScore =
     getRequiredHunterScore(
       minute
     );
+
 
   if (
     requiredScore === null
@@ -1280,25 +2420,31 @@ async function createHunterEntry(
     return;
   }
 
+
   if (
-    hunterScore < requiredScore
+    hunterScore <
+      requiredScore
   ) {
     return;
   }
+
 
   const home =
     Number(
       m?.score?.home ?? 0
     );
 
+
   const away =
     Number(
       m?.score?.away ?? 0
     );
 
+
   const matchName =
     m?.match ||
     "Unknown match";
+
 
   const league =
     m?.league ||
@@ -1306,23 +2452,36 @@ async function createHunterEntry(
     m?.competition ||
     "LIVE";
 
+
   const goalPressure =
     numberOrNull(
       m?.derived?.goal_pressure
     );
+
 
   const dangerIndex =
     numberOrNull(
       m?.derived?.danger_index
     );
 
+
   const attackScore =
     numberOrNull(
       m?.derived?.attack_score
     );
 
+
   const nowIso =
     now.toISOString();
+
+
+  // ==========================================================
+  // FIRST INSERT ENTRY
+  //
+  // IMPORTANT:
+  // Hunter is stored BEFORE Cloudbet lookup.
+  // Therefore odds failure cannot lose the Hunter signal.
+  // ==========================================================
 
   const insert =
     await env.DB
@@ -1393,10 +2552,13 @@ async function createHunterEntry(
       )
       .run();
 
+
   const changes =
     Number(
-      insert?.meta?.changes || 0
+      insert?.meta?.changes ||
+      0
     );
+
 
   if (
     changes < 1
@@ -1404,30 +2566,118 @@ async function createHunterEntry(
     return;
   }
 
+
   const insertedId =
     insert?.meta?.last_row_id ||
     null;
 
+
   const signal = {
-    id: insertedId,
-    match_id: id,
-    match_name: matchName,
+    id:
+      insertedId,
+
+    match_id:
+      id,
+
+    match_name:
+      matchName,
+
     league,
-    entry_time: nowIso,
-    entry_minute: minute,
-    hunter_score: hunterScore,
-    goal_pressure: goalPressure,
-    danger_index: dangerIndex,
-    attack_score: attackScore,
-    entry_home_score: home,
-    entry_away_score: away,
-    telegram_message_id: null
+
+    entry_time:
+      nowIso,
+
+    entry_minute:
+      minute,
+
+    hunter_score:
+      hunterScore,
+
+    goal_pressure:
+      goalPressure,
+
+    danger_index:
+      dangerIndex,
+
+    attack_score:
+      attackScore,
+
+    entry_home_score:
+      home,
+
+    entry_away_score:
+      away,
+
+    telegram_message_id:
+      null
   };
+
 
   trackingMap.set(
     id,
     signal
   );
+
+
+  // ==========================================================
+  // CLOUDBET ODDS
+  //
+  // BEST EFFORT.
+  // NEVER cancel Telegram ENTRY.
+  // ==========================================================
+
+  let cloudbetOdds =
+    null;
+
+
+  try {
+
+    cloudbetOdds =
+      await getCloudbetOddsForHunter(
+        env,
+        m,
+        hunterScore
+      );
+
+  } catch (error) {
+
+    console.error(
+      "ENTRY CLOUDBET LOOKUP ERROR",
+      id,
+      error?.message ||
+      String(error)
+    );
+
+    cloudbetOdds =
+      null;
+  }
+
+
+  if (
+    cloudbetOdds?.success ===
+      true
+  ) {
+
+    console.log(
+      "CLOUDBET ENTRY ODDS OK",
+      id,
+      cloudbetOdds.event_id,
+      cloudbetOdds.price
+    );
+
+  } else {
+
+    console.log(
+      "CLOUDBET ENTRY ODDS UNAVAILABLE",
+      id,
+      matchName
+    );
+  }
+
+
+  // ==========================================================
+  // TELEGRAM ENTRY
+  // ==========================================================
 
   const telegramMessageId =
     await sendTelegram(
@@ -1435,13 +2685,16 @@ async function createHunterEntry(
       formatEntryMessage(
         m,
         hunterScore,
-        local
+        local,
+        cloudbetOdds
       )
     );
 
+
   if (
     telegramMessageId !== null &&
-    telegramMessageId !== undefined
+    telegramMessageId !==
+      undefined
   ) {
 
     await env.DB
@@ -1459,6 +2712,7 @@ async function createHunterEntry(
         insertedId
       )
       .run();
+
 
     signal.telegram_message_id =
       telegramMessageId;
@@ -1478,8 +2732,10 @@ async function finalizeMissingTracking(
 
   const entryMinute =
     Number(
-      signal?.entry_minute || 0
+      signal?.entry_minute ||
+      0
     );
+
 
   const safeEntryMinute =
     Math.max(
@@ -1490,13 +2746,18 @@ async function finalizeMissingTracking(
       )
     );
 
+
   const requiredMinutes =
     Math.max(
       68,
-      (90 - safeEntryMinute) +
+      (
+        90 -
+        safeEntryMinute
+      ) +
       15 +
       20
     );
+
 
   const entryTime =
     new Date(
@@ -1504,6 +2765,7 @@ async function finalizeMissingTracking(
       signal?.created_at ||
       ""
     );
+
 
   if (
     Number.isNaN(
@@ -1513,6 +2775,7 @@ async function finalizeMissingTracking(
     return;
   }
 
+
   const ageMinutes =
     (
       now.getTime() -
@@ -1520,15 +2783,18 @@ async function finalizeMissingTracking(
     ) /
     60000;
 
+
   if (
     ageMinutes <
-    requiredMinutes
+      requiredMinutes
   ) {
     return;
   }
 
+
   const nowIso =
     now.toISOString();
+
 
   const update =
     await env.DB
@@ -1547,16 +2813,20 @@ async function finalizeMissingTracking(
       )
       .run();
 
+
   const changes =
     Number(
-      update?.meta?.changes || 0
+      update?.meta?.changes ||
+      0
     );
+
 
   if (
     changes < 1
   ) {
     return;
   }
+
 
   await sendTelegram(
     env,
@@ -1567,6 +2837,7 @@ async function finalizeMissingTracking(
           home:
             signal?.entry_home_score ??
             0,
+
           away:
             signal?.entry_away_score ??
             0
@@ -1592,36 +2863,46 @@ function isHunterCandidate(
       m?.minute ?? 0
     );
 
+
   const period =
     String(
       m?.period || ""
     ).toUpperCase();
+
 
   const home =
     Number(
       m?.score?.home ?? 0
     );
 
+
   const away =
     Number(
       m?.score?.away ?? 0
     );
+
 
   const firstHalf =
     period === "1H" ||
     period === "FIRST" ||
     period === "FIRST HALF" ||
     period === "1ST HALF" ||
-    period.includes("1H");
+    period.includes(
+      "1H"
+    );
+
 
   if (!firstHalf)
     return false;
 
+
   if (
     home !== 0 ||
     away !== 0
-  )
+  ) {
     return false;
+  }
+
 
   if (
     minute < HUNTER_FROM ||
@@ -1630,14 +2911,18 @@ function isHunterCandidate(
     return false;
   }
 
+
   if (
-    score < HUNTER_MIN_SCORE
+    score <
+      HUNTER_MIN_SCORE
   ) {
     return false;
   }
 
+
   return true;
 }
+
 
 function getRequiredHunterScore(
   minute
@@ -1648,15 +2933,19 @@ function getRequiredHunterScore(
       minute || 0
     );
 
+
   if (
     m >= HUNTER_FROM &&
     m <= HUNTER_TO
   ) {
+
     return HUNTER_MIN_SCORE;
   }
 
+
   return null;
 }
+
 
 function getHunterScore(m) {
 
@@ -1665,11 +2954,13 @@ function getHunterScore(m) {
       m?.goal_signal?.score
     );
 
+
   if (
     score === null
   ) {
     return 0;
   }
+
 
   return Math.round(
     Math.max(
@@ -1706,6 +2997,7 @@ function getBulgarianMonthName(
     "ДЕКЕМВРИ"
   ];
 
+
   return (
     months[
       Number(month) - 1
@@ -1713,6 +3005,7 @@ function getBulgarianMonthName(
     String(month)
   );
 }
+
 
 function getMonthKey(
   dateString
@@ -1725,8 +3018,10 @@ function getMonthKey(
       /^(\d{4})-(\d{2})/
     );
 
+
   if (!match)
     return null;
+
 
   return (
     match[1] +
@@ -1734,6 +3029,7 @@ function getMonthKey(
     match[2]
   );
 }
+
 
 function formatMonthLabel(
   monthKey
@@ -1746,17 +3042,22 @@ function formatMonthLabel(
       /^(\d{4})-(\d{2})$/
     );
 
+
   if (!match)
     return monthKey;
 
+
   return (
     getBulgarianMonthName(
-      Number(match[2])
+      Number(
+        match[2]
+      )
     ) +
     " " +
     match[1]
   );
 }
+
 
 function getSofiaMonthUtcBounds(
   monthKey
@@ -1769,18 +3070,22 @@ function getSofiaMonthUtcBounds(
       /^(\d{4})-(\d{2})$/
     );
 
+
   if (!match)
     return null;
+
 
   const year =
     Number(
       match[1]
     );
 
+
   const month =
     Number(
       match[2]
     );
+
 
   if (
     !year ||
@@ -1791,23 +3096,28 @@ function getSofiaMonthUtcBounds(
     return null;
   }
 
+
   const startDate =
     `${year}-${String(month).padStart(2, "0")}-01`;
+
 
   const nextDate =
     month === 12
       ? `${year + 1}-01-01`
       : `${year}-${String(month + 1).padStart(2, "0")}-01`;
 
+
   const start =
     getSofiaDayUtcBounds(
       startDate
     );
 
+
   const end =
     getSofiaDayUtcBounds(
       nextDate
     );
+
 
   if (
     !start ||
@@ -1816,11 +3126,16 @@ function getSofiaMonthUtcBounds(
     return null;
   }
 
+
   return {
-    start: start.start,
-    end: end.start
+    start:
+      start.start,
+
+    end:
+      end.start
   };
 }
+
 
 function getSofiaDayUtcBounds(
   dateString
@@ -1833,17 +3148,28 @@ function getSofiaDayUtcBounds(
       /^(\d{4})-(\d{2})-(\d{2})$/
     );
 
+
   if (!match)
     return null;
 
+
   const year =
-    Number(match[1]);
+    Number(
+      match[1]
+    );
+
 
   const month =
-    Number(match[2]);
+    Number(
+      match[2]
+    );
+
 
   const day =
-    Number(match[3]);
+    Number(
+      match[3]
+    );
+
 
   if (
     !year ||
@@ -1852,6 +3178,7 @@ function getSofiaDayUtcBounds(
   ) {
     return null;
   }
+
 
   const getOffsetMinutes =
     utcMillis => {
@@ -1863,18 +3190,22 @@ function getSofiaDayUtcBounds(
           )
         );
 
+
       const get =
         type => {
+
           const part =
             parts.find(
               p =>
                 p.type === type
             );
 
+
           return Number(
             part?.value
           );
         };
+
 
       const localAsUtc =
         Date.UTC(
@@ -1886,12 +3217,14 @@ function getSofiaDayUtcBounds(
           get("second")
         );
 
+
       return (
         localAsUtc -
         utcMillis
       ) /
       60000;
     };
+
 
   const localMidnightGuess =
     Date.UTC(
@@ -1900,14 +3233,18 @@ function getSofiaDayUtcBounds(
       day
     );
 
+
   const startOffset =
     getOffsetMinutes(
       localMidnightGuess
     );
 
+
   const startMillis =
     localMidnightGuess -
-    startOffset * 60000;
+    startOffset *
+    60000;
+
 
   const nextLocalMidnightGuess =
     Date.UTC(
@@ -1916,14 +3253,18 @@ function getSofiaDayUtcBounds(
       day + 1
     );
 
+
   const endOffset =
     getOffsetMinutes(
       nextLocalMidnightGuess
     );
 
+
   const endMillis =
     nextLocalMidnightGuess -
-    endOffset * 60000;
+    endOffset *
+    60000;
+
 
   return {
     start:
@@ -1953,7 +3294,9 @@ async function getMonthlyStats(
       monthKey
     );
 
+
   if (!bounds) {
+
     return {
       monthKey,
       total: 0,
@@ -1964,6 +3307,7 @@ async function getMonthlyStats(
       avg: null
     };
   }
+
 
   const result =
     await env.DB
@@ -2007,24 +3351,29 @@ async function getMonthlyStats(
       )
       .first();
 
+
   const total =
     Number(
       result?.total || 0
     );
+
 
   const goals =
     Number(
       result?.goals || 0
     );
 
+
   const noGoals =
     Number(
       result?.no_goals || 0
     );
 
+
   const resolved =
     goals +
     noGoals;
+
 
   const rate =
     resolved > 0
@@ -2033,13 +3382,17 @@ async function getMonthlyStats(
         100
       : 0;
 
+
   const avg =
-    result?.avg_goal_after !== null &&
-    result?.avg_goal_after !== undefined
+    result?.avg_goal_after !==
+      null &&
+    result?.avg_goal_after !==
+      undefined
       ? Number(
           result.avg_goal_after
         )
       : null;
+
 
   return {
     monthKey,
@@ -2051,6 +3404,7 @@ async function getMonthlyStats(
     avg
   };
 }
+
 
 async function getMonthlyHistory(
   env,
@@ -2066,8 +3420,10 @@ async function getMonthlyHistory(
       `)
       .all();
 
+
   const monthSet =
     new Set();
+
 
   for (
     const row of
@@ -2079,6 +3435,7 @@ async function getMonthlyHistory(
         row?.created_at
       );
 
+
     if (
       Number.isNaN(
         createdAt.getTime()
@@ -2087,37 +3444,47 @@ async function getMonthlyHistory(
       continue;
     }
 
+
     const local =
       getSofiaTime(
         createdAt
       );
+
 
     const key =
       getMonthKey(
         local.date
       );
 
+
     if (key) {
       monthSet.add(key);
     }
   }
 
+
   monthSet.add(
     currentMonth
   );
+
 
   const months =
     Array.from(
       monthSet
     )
-    .sort(
-      (a, b) =>
-        b.localeCompare(a)
-    );
+      .sort(
+        (a, b) =>
+          b.localeCompare(a)
+      );
+
 
   const stats = [];
 
-  for (const monthKey of months) {
+
+  for (
+    const monthKey of months
+  ) {
+
     stats.push(
       await getMonthlyStats(
         env,
@@ -2126,8 +3493,10 @@ async function getMonthlyHistory(
     );
   }
 
+
   return stats;
 }
+
 
 function formatMonthGraph(
   goals,
@@ -2135,26 +3504,38 @@ function formatMonthGraph(
 ) {
 
   const total =
-    Number(goals || 0) +
-    Number(noGoals || 0);
+    Number(
+      goals || 0
+    ) +
+    Number(
+      noGoals || 0
+    );
+
 
   if (
     total <= 0
   ) {
+
     return (
       "🟢 GOAL     —\n" +
       "🔴 NO GOAL  —"
     );
   }
 
-  const graphLength = 20;
+
+  const graphLength =
+    20;
+
 
   const goalBlocks =
     Math.round(
-      Number(goals || 0) /
+      Number(
+        goals || 0
+      ) /
       total *
       graphLength
     );
+
 
   const noGoalBlocks =
     Math.max(
@@ -2163,8 +3544,11 @@ function formatMonthGraph(
       goalBlocks
     );
 
+
   const goalBar =
-    "█".repeat(goalBlocks) +
+    "█".repeat(
+      goalBlocks
+    ) +
     "░".repeat(
       Math.max(
         0,
@@ -2173,8 +3557,11 @@ function formatMonthGraph(
       )
     );
 
+
   const noGoalBar =
-    "█".repeat(noGoalBlocks) +
+    "█".repeat(
+      noGoalBlocks
+    ) +
     "░".repeat(
       Math.max(
         0,
@@ -2183,21 +3570,29 @@ function formatMonthGraph(
       )
     );
 
+
   const rate =
-    Number(goals || 0) /
+    Number(
+      goals || 0
+    ) /
     total *
     100;
 
+
   const noGoalRate =
-    Number(noGoals || 0) /
+    Number(
+      noGoals || 0
+    ) /
     total *
     100;
+
 
   return (
 `🟢 GOAL     ${goalBar} ${rate.toFixed(1)}%
 🔴 NO GOAL  ${noGoalBar} ${noGoalRate.toFixed(1)}%`
   );
 }
+
 
 function formatMonthlyBlock(
   stats
@@ -2219,15 +3614,16 @@ ${stats.rate.toFixed(1)}%
 
 ⏱ Средно до гол:
 ${
-    stats.avg !== null
-      ? stats.avg.toFixed(1) + " мин."
-      : "—"
-  }
+  stats.avg !== null
+    ? stats.avg.toFixed(1) +
+      " мин."
+    : "—"
+}
 
 ${formatMonthGraph(
-    stats.goals,
-    stats.noGoals
-  )}`
+  stats.goals,
+  stats.noGoals
+)}`
   );
 }
 
@@ -2246,7 +3642,9 @@ async function getCurrentMonthDetails(
       monthKey
     );
 
+
   if (!bounds) {
+
     return {
       scoreRows: [],
       minuteRows: [],
@@ -2255,6 +3653,7 @@ async function getCurrentMonthDetails(
       leagueRows: []
     };
   }
+
 
   const scoreResult =
     await env.DB
@@ -2325,6 +3724,7 @@ async function getCurrentMonthDetails(
       )
       .all();
 
+
   const minuteResult =
     await env.DB
       .prepare(`
@@ -2394,6 +3794,7 @@ async function getCurrentMonthDetails(
       )
       .all();
 
+
   const hourSource =
     await env.DB
       .prepare(`
@@ -2411,15 +3812,20 @@ async function getCurrentMonthDetails(
       )
       .all();
 
+
   const hourRows =
     buildHourRows(
-      hourSource?.results || []
+      hourSource?.results ||
+      []
     );
+
 
   const hourMinuteRows =
     buildHourMinuteRows(
-      hourSource?.results || []
+      hourSource?.results ||
+      []
     );
+
 
   const leagueResult =
     await env.DB
@@ -2460,8 +3866,12 @@ async function getCurrentMonthDetails(
       )
       .all();
 
+
   const leagueRows =
-    (leagueResult?.results || [])
+    (
+      leagueResult?.results ||
+      []
+    )
       .map(row => {
 
         const total =
@@ -2469,19 +3879,23 @@ async function getCurrentMonthDetails(
             row?.total || 0
           );
 
+
         const goals =
           Number(
             row?.goals || 0
           );
+
 
         const noGoals =
           Number(
             row?.no_goals || 0
           );
 
+
         const resolved =
           goals +
           noGoals;
+
 
         const rate =
           resolved > 0
@@ -2490,17 +3904,23 @@ async function getCurrentMonthDetails(
               100
             : 0;
 
+
         return {
           league:
             String(
-              row?.league || ""
+              row?.league ||
+              ""
             ).trim(),
 
           total,
+
           goals,
+
           no_goals:
             noGoals,
+
           resolved,
+
           rate
         };
       })
@@ -2511,12 +3931,15 @@ async function getCurrentMonthDetails(
             MIN_LEAGUE_RESOLVED
       );
 
+
   return {
     scoreRows:
-      scoreResult?.results || [],
+      scoreResult?.results ||
+      [],
 
     minuteRows:
-      minuteResult?.results || [],
+      minuteResult?.results ||
+      [],
 
     hourRows,
 
@@ -2528,7 +3951,7 @@ async function getCurrentMonthDetails(
 
 
 // ============================================================
-// HOUR GROUPING — EUROPE/SOFIA
+// HOUR GROUPING
 // ============================================================
 
 function buildHourRows(rows) {
@@ -2536,24 +3959,38 @@ function buildHourRows(rows) {
   const map =
     new Map();
 
-  for (const group of ENTRY_HOUR_GROUPS) {
+
+  for (
+    const group of
+      ENTRY_HOUR_GROUPS
+  ) {
+
     map.set(
       group.label,
       {
-        hour_group: group.label,
+        hour_group:
+          group.label,
+
         total: 0,
+
         goals: 0,
+
         no_goals: 0
       }
     );
   }
 
-  for (const row of rows) {
+
+  for (
+    const row of rows
+  ) {
 
     const date =
       new Date(
-        row?.created_at || ""
+        row?.created_at ||
+        ""
       );
+
 
     if (
       Number.isNaN(
@@ -2563,15 +4000,18 @@ function buildHourRows(rows) {
       continue;
     }
 
+
     const local =
       getSofiaTime(
         date
       );
 
+
     const hour =
       Number(
         local.hour
       );
+
 
     const group =
       ENTRY_HOUR_GROUPS.find(
@@ -2580,37 +4020,53 @@ function buildHourRows(rows) {
           hour <= g.max
       );
 
+
     if (!group)
       continue;
+
 
     const item =
       map.get(
         group.label
       );
 
+
     item.total++;
 
+
     if (
-      row?.result === "GOAL HIT"
+      row?.result ===
+        "GOAL HIT"
     ) {
+
       item.goals++;
+
     } else if (
-      row?.result === "NO GOAL"
+      row?.result ===
+        "NO GOAL"
     ) {
+
       item.no_goals++;
     }
   }
 
+
   return ENTRY_HOUR_GROUPS.map(
-    g => map.get(g.label)
+    g =>
+      map.get(
+        g.label
+      )
   );
 }
 
 
-function buildHourMinuteRows(rows) {
+function buildHourMinuteRows(
+  rows
+) {
 
   const matrix =
     new Map();
+
 
   for (
     const hourGroup of
@@ -2626,6 +4082,7 @@ function buildHourMinuteRows(rows) {
         hourGroup.label +
         "|" +
         minuteGroup.label;
+
 
       matrix.set(
         key,
@@ -2637,19 +4094,26 @@ function buildHourMinuteRows(rows) {
             minuteGroup.label,
 
           total: 0,
+
           goals: 0,
+
           no_goals: 0
         }
       );
     }
   }
 
-  for (const row of rows) {
+
+  for (
+    const row of rows
+  ) {
 
     const date =
       new Date(
-        row?.created_at || ""
+        row?.created_at ||
+        ""
       );
+
 
     if (
       Number.isNaN(
@@ -2659,20 +4123,24 @@ function buildHourMinuteRows(rows) {
       continue;
     }
 
+
     const local =
       getSofiaTime(
         date
       );
+
 
     const hour =
       Number(
         local.hour
       );
 
+
     const entryMinute =
       Number(
         row?.entry_minute
       );
+
 
     const hourGroup =
       ENTRY_HOUR_GROUPS.find(
@@ -2681,12 +4149,16 @@ function buildHourMinuteRows(rows) {
           hour <= g.max
       );
 
+
     const minuteGroup =
       ENTRY_MINUTE_GROUPS.find(
         g =>
-          entryMinute >= g.min &&
-          entryMinute <= g.max
+          entryMinute >=
+            g.min &&
+          entryMinute <=
+            g.max
       );
+
 
     if (
       !hourGroup ||
@@ -2695,31 +4167,43 @@ function buildHourMinuteRows(rows) {
       continue;
     }
 
+
     const key =
       hourGroup.label +
       "|" +
       minuteGroup.label;
 
+
     const item =
       matrix.get(key);
+
 
     if (!item)
       continue;
 
+
     item.total++;
 
+
     if (
-      row?.result === "GOAL HIT"
+      row?.result ===
+        "GOAL HIT"
     ) {
+
       item.goals++;
+
     } else if (
-      row?.result === "NO GOAL"
+      row?.result ===
+        "NO GOAL"
     ) {
+
       item.no_goals++;
     }
   }
 
+
   const result = [];
+
 
   for (
     const hourGroup of
@@ -2736,11 +4220,13 @@ function buildHourMinuteRows(rows) {
         "|" +
         minuteGroup.label;
 
+
       result.push(
         matrix.get(key)
       );
     }
   }
+
 
   return result;
 }
@@ -2758,6 +4244,7 @@ async function getMinuteStatsForBounds(
   if (!bounds) {
     return [];
   }
+
 
   const result =
     await env.DB
@@ -2828,10 +4315,13 @@ async function getMinuteStatsForBounds(
       )
       .all();
 
+
   return (
-    result?.results || []
+    result?.results ||
+    []
   );
 }
+
 
 function formatMinuteStats(
   rows
@@ -2840,14 +4330,21 @@ function formatMinuteStats(
   const map =
     new Map();
 
-  for (const row of rows || []) {
+
+  for (
+    const row of
+      rows || []
+  ) {
+
     map.set(
       row.minute_group,
       row
     );
   }
 
+
   let text = "";
+
 
   for (
     const group of
@@ -2859,30 +4356,38 @@ function formatMinuteStats(
         group.label
       );
 
+
     if (!row) {
+
       text +=
         `${group.label}: 0 ENTRY\n`;
+
       continue;
     }
+
 
     const total =
       Number(
         row.total || 0
       );
 
+
     const goals =
       Number(
         row.goals || 0
       );
+
 
     const noGoals =
       Number(
         row.no_goals || 0
       );
 
+
     const resolved =
       goals +
       noGoals;
+
 
     const rate =
       resolved > 0
@@ -2891,6 +4396,7 @@ function formatMinuteStats(
           100
         : 0;
 
+
     text +=
       `${group.label}: ` +
       `${total} ENTRY | ` +
@@ -2898,6 +4404,7 @@ function formatMinuteStats(
       `${noGoals} NO GOAL | ` +
       `${rate.toFixed(1)}%\n`;
   }
+
 
   return text;
 }
@@ -2912,16 +4419,22 @@ async function buildStats(env) {
   const now =
     new Date();
 
+
   const local =
-    getSofiaTime(now);
+    getSofiaTime(
+      now
+    );
+
 
   const today =
     local.date;
+
 
   const currentMonth =
     getMonthKey(
       today
     );
+
 
   const monthlyHistory =
     await getMonthlyHistory(
@@ -2929,16 +4442,19 @@ async function buildStats(env) {
       currentMonth
     );
 
+
   const currentDetails =
     await getCurrentMonthDetails(
       env,
       currentMonth
     );
 
+
   const dailyBounds =
     getSofiaDayUtcBounds(
       today
     );
+
 
   const daily =
     dailyBounds
@@ -2984,30 +4500,36 @@ async function buildStats(env) {
           .first()
       : null;
 
+
   const dailyMinuteRows =
     await getMinuteStatsForBounds(
       env,
       dailyBounds
     );
 
+
   const dailyTotal =
     Number(
       daily?.total || 0
     );
+
 
   const dailyGoals =
     Number(
       daily?.goals || 0
     );
 
+
   const dailyNoGoals =
     Number(
       daily?.no_goals || 0
     );
 
+
   const dailyResolved =
     dailyGoals +
     dailyNoGoals;
+
 
   const dailyRate =
     dailyResolved > 0
@@ -3016,22 +4538,27 @@ async function buildStats(env) {
         100
       : 0;
 
+
   const dailyAvg =
-    daily?.avg_goal_after !== null &&
-    daily?.avg_goal_after !== undefined
+    daily?.avg_goal_after !==
+      null &&
+    daily?.avg_goal_after !==
+      undefined
       ? Number(
           daily.avg_goal_after
         )
       : null;
 
+
   let message =
 `📊 HUNTER MONTHLY REPORT
 
 📅 ${formatMonthLabel(
-    currentMonth
-  )}
+  currentMonth
+)}
 
 `;
+
 
   for (
     const monthStats of
@@ -3045,24 +4572,29 @@ async function buildStats(env) {
       "\n\n";
   }
 
+
   message +=
 `━━━━━━━━━━━━━━━━
 🎯 ${formatMonthLabel(currentMonth)} — ПО HUNTER SCORE
 ━━━━━━━━━━━━━━━━
 `;
 
+
   const scoreMap =
     new Map();
+
 
   for (
     const row of
       currentDetails.scoreRows
   ) {
+
     scoreMap.set(
       row.score_group,
       row
     );
   }
+
 
   const scoreGroups = [
     "60–69",
@@ -3071,35 +4603,47 @@ async function buildStats(env) {
     "90–100"
   ];
 
-  for (const group of scoreGroups) {
+
+  for (
+    const group of
+      scoreGroups
+  ) {
 
     const row =
       scoreMap.get(group);
 
+
     if (!row) {
+
       message +=
         `${group}: 0 ENTRY\n`;
+
       continue;
     }
+
 
     const rowTotal =
       Number(
         row.total || 0
       );
 
+
     const rowGoals =
       Number(
         row.goals || 0
       );
+
 
     const rowNoGoals =
       Number(
         row.no_goals || 0
       );
 
+
     const rowResolved =
       rowGoals +
       rowNoGoals;
+
 
     const rowRate =
       rowResolved > 0
@@ -3107,6 +4651,7 @@ async function buildStats(env) {
           rowResolved *
           100
         : 0;
+
 
     message +=
       `${group}: ` +
@@ -3116,6 +4661,7 @@ async function buildStats(env) {
       `${rowRate.toFixed(1)}%\n`;
   }
 
+
   message +=
 `
 ━━━━━━━━━━━━━━━━
@@ -3123,28 +4669,40 @@ async function buildStats(env) {
 ━━━━━━━━━━━━━━━━
 `;
 
-  for (const group of scoreGroups) {
+
+  for (
+    const group of
+      scoreGroups
+  ) {
 
     const row =
-      scoreMap.get(group);
+      scoreMap.get(
+        group
+      );
+
 
     const rowAvg =
-      row?.avg_goal_after !== null &&
-      row?.avg_goal_after !== undefined
+      row?.avg_goal_after !==
+        null &&
+      row?.avg_goal_after !==
+        undefined
         ? Number(
             row.avg_goal_after
           )
         : null;
 
+
     message +=
       `${group}: ` +
       (
         rowAvg !== null
-          ? rowAvg.toFixed(1) + " мин."
+          ? rowAvg.toFixed(1) +
+            " мин."
           : "—"
       ) +
-      `\n`;
+      "\n";
   }
+
 
   message +=
 `
@@ -3153,10 +4711,12 @@ async function buildStats(env) {
 ━━━━━━━━━━━━━━━━
 `;
 
+
   message +=
     formatMinuteStats(
       currentDetails.minuteRows
     );
+
 
   message +=
 `
@@ -3164,6 +4724,7 @@ async function buildStats(env) {
 🕐 ${formatMonthLabel(currentMonth)} — ПО ЧАС НА ENTRY
 ━━━━━━━━━━━━━━━━
 `;
+
 
   for (
     const row of
@@ -3175,19 +4736,23 @@ async function buildStats(env) {
         row?.total || 0
       );
 
+
     const goals =
       Number(
         row?.goals || 0
       );
+
 
     const noGoals =
       Number(
         row?.no_goals || 0
       );
 
+
     const resolved =
       goals +
       noGoals;
+
 
     const rate =
       resolved > 0
@@ -3195,6 +4760,7 @@ async function buildStats(env) {
           resolved *
           100
         : 0;
+
 
     message +=
       `${row.hour_group}: ` +
@@ -3212,12 +4778,14 @@ async function buildStats(env) {
       ? currentDetails.leagueRows
       : [];
 
+
   const strongestLeagues =
     [...leagueRows]
       .sort(
         (a, b) =>
           b.rate - a.rate ||
-          b.resolved - a.resolved ||
+          b.resolved -
+            a.resolved ||
           b.total - a.total ||
           a.league.localeCompare(
             b.league
@@ -3228,12 +4796,15 @@ async function buildStats(env) {
         LEAGUE_TOP_COUNT
       );
 
+
   const strongestNames =
     new Set(
       strongestLeagues.map(
-        row => row.league
+        row =>
+          row.league
       )
     );
+
 
   const weakestLeagues =
     [...leagueRows]
@@ -3248,7 +4819,8 @@ async function buildStats(env) {
       .sort(
         (a, b) =>
           a.rate - b.rate ||
-          b.resolved - a.resolved ||
+          b.resolved -
+            a.resolved ||
           b.total - a.total ||
           a.league.localeCompare(
             b.league
@@ -3259,6 +4831,7 @@ async function buildStats(env) {
         LEAGUE_BOTTOM_COUNT
       );
 
+
   message +=
 `
 ━━━━━━━━━━━━━━━━
@@ -3266,8 +4839,10 @@ async function buildStats(env) {
 ━━━━━━━━━━━━━━━━
 `;
 
+
   if (
-    strongestLeagues.length === 0
+    strongestLeagues.length ===
+      0
   ) {
 
     message +=
@@ -3284,11 +4859,10 @@ async function buildStats(env) {
           `${row.goals} GOAL | ` +
           `${row.no_goals} NO GOAL | ` +
           `${row.rate.toFixed(1)}%\n`;
-
       }
     );
-
   }
+
 
   message +=
 `
@@ -3297,8 +4871,10 @@ async function buildStats(env) {
 ━━━━━━━━━━━━━━━━
 `;
 
+
   if (
-    weakestLeagues.length === 0
+    weakestLeagues.length ===
+      0
   ) {
 
     message +=
@@ -3315,11 +4891,10 @@ async function buildStats(env) {
           `${row.goals} GOAL | ` +
           `${row.no_goals} NO GOAL | ` +
           `${row.rate.toFixed(1)}%\n`;
-
       }
     );
-
   }
+
 
   message +=
 `
@@ -3340,17 +4915,18 @@ ${dailyRate.toFixed(1)}%
 
 ⏱ Средно до гол:
 ${
-    dailyAvg !== null
-      ? dailyAvg.toFixed(1) + " мин."
-      : "—"
-  }
+  dailyAvg !== null
+    ? dailyAvg.toFixed(1) +
+      " мин."
+    : "—"
+}
 
 ━━━━━━━━━━━━━━━━
 ⏱ ДНЕС — ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
 ${formatMinuteStats(
-    dailyMinuteRows
-  )}
+  dailyMinuteRows
+)}
 ━━━━━━━━━━━━━━━━
 💾 Данните са от hunter_signals
 🕐 Daily timezone: Europe/Sofia
@@ -3359,12 +4935,13 @@ ${formatMinuteStats(
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
 
+
   return message;
 }
 
 
 // ============================================================
-// HOUR × ENTRY MINUTE — SEPARATE /stats MESSAGE
+// HOUR × ENTRY MINUTE
 // ============================================================
 
 async function buildHourMinuteStatsMessage(
@@ -3374,19 +4951,25 @@ async function buildHourMinuteStatsMessage(
   const now =
     new Date();
 
+
   const local =
-    getSofiaTime(now);
+    getSofiaTime(
+      now
+    );
+
 
   const currentMonth =
     getMonthKey(
       local.date
     );
 
+
   const details =
     await getCurrentMonthDetails(
       env,
       currentMonth
     );
+
 
   const rows =
     Array.isArray(
@@ -3395,10 +4978,12 @@ async function buildHourMinuteStatsMessage(
       ? details.hourMinuteRows
       : [];
 
+
   let message =
 `🧭 ${formatMonthLabel(currentMonth)} — ЧАС × ENTRY МИНУТА
 
 `;
+
 
   for (
     const hourGroup of
@@ -3406,10 +4991,11 @@ async function buildHourMinuteStatsMessage(
   ) {
 
     message +=
-      `━━━━━━━━━━━━━━━━
+`━━━━━━━━━━━━━━━━
 🕐 ${hourGroup.label}
 ━━━━━━━━━━━━━━━━
 `;
+
 
     for (
       const minuteGroup of
@@ -3425,24 +5011,29 @@ async function buildHourMinuteStatsMessage(
               minuteGroup.label
         );
 
+
       const total =
         Number(
           row?.total || 0
         );
+
 
       const goals =
         Number(
           row?.goals || 0
         );
 
+
       const noGoals =
         Number(
           row?.no_goals || 0
         );
 
+
       const resolved =
         goals +
         noGoals;
+
 
       const rate =
         resolved > 0
@@ -3451,7 +5042,10 @@ async function buildHourMinuteStatsMessage(
             100
           : 0;
 
-      if (total === 0) {
+
+      if (
+        total === 0
+      ) {
 
         message +=
           `${minuteGroup.label}: 0 ENTRY\n`;
@@ -3467,12 +5061,16 @@ async function buildHourMinuteStatsMessage(
       }
     }
 
-    message += "\n";
+
+    message +=
+      "\n";
   }
+
 
   message +=
 `💾 hunter_signals
 🕐 Europe/Sofia`;
+
 
   return message;
 }
@@ -3492,6 +5090,7 @@ async function sendDailyReport(
       local.date
     );
 
+
   const already =
     await env.DB
       .prepare(`
@@ -3505,20 +5104,25 @@ async function sendDailyReport(
       )
       .first();
 
+
   if (already)
     return;
+
 
   const reportBounds =
     getSofiaDayUtcBounds(
       reportDate
     );
 
+
   if (!reportBounds) {
+
     throw new Error(
       "Could not calculate Sofia UTC bounds for " +
       reportDate
     );
   }
+
 
   const stats =
     await env.DB
@@ -3554,30 +5158,36 @@ async function sendDailyReport(
       )
       .first();
 
+
   const minuteRows =
     await getMinuteStatsForBounds(
       env,
       reportBounds
     );
 
+
   const total =
     Number(
       stats?.total || 0
     );
+
 
   const goals =
     Number(
       stats?.goals || 0
     );
 
+
   const noGoals =
     Number(
       stats?.no_goals || 0
     );
 
+
   const resolved =
     goals +
     noGoals;
+
 
   const rate =
     resolved > 0
@@ -3585,6 +5195,7 @@ async function sendDailyReport(
         resolved *
         100
       : 0;
+
 
   const message =
 `📊 DAILY HUNTER REPORT
@@ -3604,18 +5215,20 @@ ${rate.toFixed(1)}%
 ⏱ ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
 ${formatMinuteStats(
-    minuteRows
-  )}
+  minuteRows
+)}
 ━━━━━━━━━━━━━━━━
 🕐 Timezone: Europe/Sofia
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
 ━━━━━━━━━━━━━━━━`;
 
+
   await sendTelegram(
     env,
     message
   );
+
 
   await env.DB
     .prepare(`
@@ -3638,7 +5251,8 @@ NEXT GOAL HUNTER
       goals,
       noGoals,
       rate,
-      new Date().toISOString()
+      new Date()
+        .toISOString()
     )
     .run();
 }
@@ -3657,28 +5271,31 @@ async function sendTelegram(
   const token =
     env.TELEGRAM_BOT_TOKEN;
 
+
   const chatId =
     env.TELEGRAM_CHAT_ID;
+
 
   const text =
     String(
       message || ""
     );
 
+
   if (!text)
     return null;
 
-  // Telegram sendMessage allows max 4096 characters.
-  // Keep a small safety margin and split long /stats reports
-  // on line boundaries.
+
   const chunks =
     splitTelegramMessage(
       text,
       3900
     );
 
+
   let firstMessageId =
     null;
+
 
   for (
     let i = 0;
@@ -3687,15 +5304,23 @@ async function sendTelegram(
   ) {
 
     const body = {
-      chat_id: chatId,
-      text: chunks[i]
+      chat_id:
+        chatId,
+
+      text:
+        chunks[i]
     };
+
 
     if (
       i === 0 &&
-      replyToMessageId !== null &&
-      replyToMessageId !== undefined &&
-      String(replyToMessageId) !== ""
+      replyToMessageId !==
+        null &&
+      replyToMessageId !==
+        undefined &&
+      String(
+        replyToMessageId
+      ) !== ""
     ) {
 
       body.reply_parameters = {
@@ -3706,24 +5331,33 @@ async function sendTelegram(
       };
     }
 
+
     const response =
       await fetch(
         `https://api.telegram.org/bot${token}/sendMessage`,
         {
-          method: "POST",
+          method:
+            "POST",
+
           headers: {
             "Content-Type":
               "application/json"
           },
+
           body:
-            JSON.stringify(body)
+            JSON.stringify(
+              body
+            )
         }
       );
+
 
     const responseText =
       await response.text();
 
+
     if (!response.ok) {
+
       throw new Error(
         "Telegram HTTP " +
         response.status +
@@ -3735,6 +5369,7 @@ async function sendTelegram(
       );
     }
 
+
     try {
 
       const result =
@@ -3742,9 +5377,11 @@ async function sendTelegram(
           responseText
         );
 
+
       if (
         result?.ok === true &&
-        result?.result?.message_id !== undefined
+        result?.result?.message_id !==
+          undefined
       ) {
 
         const messageId =
@@ -3752,9 +5389,12 @@ async function sendTelegram(
             result.result.message_id
           );
 
+
         if (
-          firstMessageId === null
+          firstMessageId ===
+            null
         ) {
+
           firstMessageId =
             messageId;
         }
@@ -3770,6 +5410,7 @@ async function sendTelegram(
     }
   }
 
+
   return firstMessageId;
 }
 
@@ -3784,21 +5425,34 @@ function splitTelegramMessage(
       text || ""
     );
 
+
   if (
     source.length <=
-    maxLength
+      maxLength
   ) {
-    return [source];
+
+    return [
+      source
+    ];
   }
 
+
   const lines =
-    source.split("\n");
+    source.split(
+      "\n"
+    );
+
 
   const chunks = [];
 
-  let current = "";
 
-  for (const line of lines) {
+  let current =
+    "";
+
+
+  for (
+    const line of lines
+  ) {
 
     const candidate =
       current
@@ -3807,37 +5461,49 @@ function splitTelegramMessage(
           line
         : line;
 
+
     if (
       candidate.length <=
-      maxLength
+        maxLength
     ) {
+
       current =
         candidate;
+
       continue;
     }
 
+
     if (current) {
+
       chunks.push(
         current
       );
-      current = "";
+
+      current =
+        "";
     }
+
 
     if (
       line.length <=
-      maxLength
+        maxLength
     ) {
+
       current =
         line;
+
       continue;
     }
+
 
     let remaining =
       line;
 
+
     while (
       remaining.length >
-      maxLength
+        maxLength
     ) {
 
       chunks.push(
@@ -3847,46 +5513,57 @@ function splitTelegramMessage(
         )
       );
 
+
       remaining =
         remaining.slice(
           maxLength
         );
     }
 
+
     current =
       remaining;
   }
 
+
   if (current) {
+
     chunks.push(
       current
     );
   }
+
 
   return chunks;
 }
 
 
 // ============================================================
-// ENTRY MESSAGE
+// ENTRY MESSAGE — V6.6 CLOUDBET ODDS
 // ============================================================
 
 function formatEntryMessage(
   m,
   score,
-  local
+  local,
+  cloudbet = null
 ) {
 
   const home =
-    m?.score?.home ?? 0;
+    m?.score?.home ??
+    0;
+
 
   const away =
-    m?.score?.away ?? 0;
+    m?.score?.away ??
+    0;
+
 
   const minute =
     Number(
       m?.minute ?? 0
     );
+
 
   const minuteDisplay =
     m?.minute_display ||
@@ -3895,11 +5572,59 @@ function formatEntryMessage(
       "'"
     );
 
+
   const league =
     m?.league ||
     m?.tournament ||
     m?.competition ||
     "LIVE";
+
+
+  // ==========================================================
+  // CLOUDBET BLOCK
+  // ==========================================================
+
+  let cloudbetText =
+`💰 CLOUDBET
+1H Over 0.5: —`;
+
+
+  if (
+    cloudbet?.success ===
+      true &&
+    Number.isFinite(
+      Number(
+        cloudbet?.price
+      )
+    )
+  ) {
+
+    const price =
+      Number(
+        cloudbet.price
+      );
+
+
+    const maxStake =
+      numberOrNull(
+        cloudbet?.max_stake
+      );
+
+
+    cloudbetText =
+`💰 CLOUDBET
+1H Over 0.5: ${price.toFixed(2)}`;
+
+
+    if (
+      maxStake !== null
+    ) {
+
+      cloudbetText +=
+        `\nMax stake: ${maxStake.toFixed(2)}`;
+    }
+  }
+
 
   return `🎯 HUNTER ENTRY
 
@@ -3912,6 +5637,8 @@ function formatEntryMessage(
 📊 Резултат: ${home}:${away}
 
 🔥 HUNTER SCORE: ${score}/100
+
+${cloudbetText}
 
 🎯 Условие: > 60
 
@@ -3943,17 +5670,18 @@ ${existing.entry_minute}'
 
 ⚽ ГОЛ:
 ${
-    goalMinute !== null
-      ? goalMinute + "'"
-      : "—"
-  }
+  goalMinute !== null
+    ? goalMinute + "'"
+    : "—"
+}
 
 ⏱ След ENTRY:
 ${
-    afterMinutes !== null
-      ? afterMinutes + " мин."
-      : "—"
-  }
+  afterMinutes !== null
+    ? afterMinutes +
+      " мин."
+    : "—"
+}
 
 📊 HUNTER SCORE:
 ${existing.hunter_score}/100
@@ -3999,12 +5727,16 @@ RESULT: NO GOAL`;
 // SOFIA TIME
 // ============================================================
 
-function getSofiaTime(date) {
+function getSofiaTime(
+  date
+) {
 
   const parts =
-    SOFIA_FORMATTER.formatToParts(
-      date
-    );
+    SOFIA_FORMATTER
+      .formatToParts(
+        date
+      );
+
 
   const get =
     type =>
@@ -4013,36 +5745,47 @@ function getSofiaTime(date) {
           p.type === type
       )?.value;
 
+
   const year =
     get("year");
+
 
   const month =
     get("month");
 
+
   const day =
     get("day");
+
 
   const hour =
     Number(
       get("hour")
     );
 
+
   const minute =
     Number(
       get("minute")
     );
+
 
   const second =
     Number(
       get("second")
     );
 
+
   return {
     date:
       `${year}-${month}-${day}`,
+
     hour,
+
     minute,
+
     second,
+
     text:
       `${day}.${month}.${year} ` +
       `${String(hour).padStart(2, "0")}:` +
@@ -4063,7 +5806,10 @@ function getPreviousSofiaDate(
   const parts =
     dateString
       .split("-")
-      .map(Number);
+      .map(
+        Number
+      );
+
 
   const d =
     new Date(
@@ -4074,20 +5820,30 @@ function getPreviousSofiaDate(
       )
     );
 
+
   d.setUTCDate(
-    d.getUTCDate() - 1
+    d.getUTCDate() -
+    1
   );
+
 
   return (
     d.getUTCFullYear() +
     "-" +
     String(
-      d.getUTCMonth() + 1
-    ).padStart(2, "0") +
+      d.getUTCMonth() +
+      1
+    ).padStart(
+      2,
+      "0"
+    ) +
     "-" +
     String(
       d.getUTCDate()
-    ).padStart(2, "0")
+    ).padStart(
+      2,
+      "0"
+    )
   );
 }
 
@@ -4096,20 +5852,29 @@ function getPreviousSofiaDate(
 // NUMBER
 // ============================================================
 
-function numberOrNull(value) {
+function numberOrNull(
+  value
+) {
 
   if (
     value === null ||
     value === undefined ||
     value === ""
   ) {
+
     return null;
   }
 
-  const n =
-    Number(value);
 
-  return Number.isFinite(n)
+  const n =
+    Number(
+      value
+    );
+
+
+  return Number.isFinite(
+    n
+  )
     ? n
     : null;
 }
@@ -4124,8 +5889,10 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin":
       "*",
+
     "Access-Control-Allow-Methods":
       "GET,HEAD,POST,OPTIONS",
+
     "Access-Control-Allow-Headers":
       "Content-Type"
   };
@@ -4149,13 +5916,16 @@ function json(
     ),
     {
       status,
+
       headers: {
         "Content-Type":
           "application/json; charset=utf-8",
+
         ...corsHeaders(),
+
         "Cache-Control":
           "no-store"
       }
     }
   );
-}
+      }
