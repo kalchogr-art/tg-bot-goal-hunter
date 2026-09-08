@@ -20,6 +20,10 @@
     {
       "binding": "MATCHER",
       "service": "cloudbet-match-matcher"
+    },
+    {
+      "binding": "BET_WORKER",
+      "service": "cloudbet-bet-worker"
     }
   ],
 
