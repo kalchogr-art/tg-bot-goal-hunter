@@ -1,9 +1,9 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.3
+// GOAL WATCH — HUNTER TRACKER V6.7.4
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER SERVICE BINDINGS
 //
-// V6.7.3:
+// V6.7.4:
 //
 // 1. REAL CLOUDBET ODDS AT HUNTER ENTRY
 // 2. MATCHER V7.3.1 FAST_HUNTER
@@ -18,6 +18,9 @@
 // 11. TELEGRAM ENTRY SHOWS MATCHED / UNMATCHED
 // 12. BET READY COMES ONLY FROM BET WORKER PREFLIGHT
 // 13. BET WORKER FAILURE NEVER BLOCKS HUNTER ENTRY
+// 14. STRICT MATCHER RETRY x2 AT ENTRY (750ms)
+// 15. REAL MATCHER FAILURE REASON IN TELEGRAM
+// 16. MATCHER DIAGNOSTICS PRESERVED IN MEMORY RESPONSE
 //
 // IMPORTANT:
 //
@@ -32,6 +35,10 @@ const HUNTER_MIN_SCORE = 61;
 
 const TIME_ZONE = "Europe/Sofia";
 const DAILY_REPORT_WINDOW_MINUTES = 10;
+
+// V6.7.4 matcher retry: same strict matcher rules, no relaxed names.
+const MATCHER_ENTRY_ATTEMPTS = 2;
+const MATCHER_RETRY_DELAY_MS = 750;
 
 const MIN_LEAGUE_RESOLVED = 5;
 const LEAGUE_TOP_COUNT = 10;
@@ -260,7 +267,7 @@ export default {
         const rows =
           result?.results || [];
 
-        // V6.7.3:
+        // V6.7.4:
         // Enrich /entries with the CURRENT V27 live minute/period.
         // entry_minute remains the immutable Hunter entry snapshot.
         // No D1 migration is required.
@@ -392,7 +399,7 @@ export default {
         return json({
           success: true,
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.7.3",
+            "GOAL WATCH — HUNTER TRACKER V6.7.4",
           source:
             "hunter_signals",
           mode:
@@ -510,7 +517,7 @@ export default {
     return json({
       success: true,
       worker:
-        "GOAL WATCH — HUNTER TRACKER V6.7.3",
+        "GOAL WATCH — HUNTER TRACKER V6.7.4",
       status: "ONLINE",
       mode:
         "24/7 CRON + TELEGRAM + MATCHER CLOUDBET ODDS + D1 ODDS",
@@ -1802,359 +1809,178 @@ async function getCloudbetOddsForHunter(
   hunterScore
 ) {
 
-  try {
-
-    if (!env.MATCHER) {
-
-      console.log(
-        "CLOUDBET ODDS: MATCHER binding missing"
-      );
-
-      return null;
-    }
-
-
-    const split =
-      splitHunterMatchName(
-        m?.match ||
-        m?.name ||
-        ""
-      );
-
-
-    const home =
-      String(
-        m?.home ??
-        m?.homeTeam ??
-        m?.home_name ??
-        m?.home?.name ??
-        split.home ??
-        ""
-      ).trim();
-
-
-    const away =
-      String(
-        m?.away ??
-        m?.awayTeam ??
-        m?.away_name ??
-        m?.away?.name ??
-        split.away ??
-        ""
-      ).trim();
-
-
-    if (
-      !home ||
-      !away
-    ) {
-
-      console.log(
-        "CLOUDBET ODDS: teams missing",
-        m?.match || ""
-      );
-
-      return null;
-    }
-
-
-    const hunterSignal = [
-      {
-        type:
-          "HUNTER_ENTRY",
-
-        signal:
-          "HUNTER_ENTRY",
-
-        match:
-          m?.match ??
-          `${home} - ${away}`,
-
-        match_id:
-          m?.id ??
-          null,
-
-        home,
-        away,
-
-        league:
-          m?.league ??
-          m?.tournament ??
-          m?.competition ??
-          null,
-
-        competition:
-          m?.competition ??
-          m?.league ??
-          m?.tournament ??
-          null,
-
-        country:
-          m?.country ??
-          null,
-
-        entry_minute:
-          Number(
-            m?.minute ?? 0
-          ),
-
-        hunter_score:
-          hunterScore
-      }
-    ];
-
-
-    const matcherPath =
-      "/match?threshold=0.45&signals=" +
-      encodeURIComponent(
-        JSON.stringify(
-          hunterSignal
-        )
-      );
-
-
-    const matcherResponse =
-      await env.MATCHER.fetch(
-        new Request(
-          "https://matcher.internal" +
-          matcherPath,
-          {
-            method: "GET",
-            headers: {
-              "Accept":
-                "application/json"
-            }
-          }
-        )
-      );
-
-
-    if (!matcherResponse.ok) {
-
-      const text =
-        await matcherResponse.text();
-
-      console.log(
-        "CLOUDBET ODDS: matcher HTTP",
-        matcherResponse.status,
-        text.substring(
-          0,
-          300
-        )
-      );
-
-      return null;
-    }
-
-
-    const matcherData =
-      await matcherResponse.json();
-
-
-    if (
-      matcherData?.success !==
-        true
-    ) {
-
-      console.log(
-        "CLOUDBET ODDS: matcher success=false"
-      );
-
-      return null;
-    }
-
-
-    const hunterResults =
-      Array.isArray(
-        matcherData?.hunter_results
-      )
-        ? matcherData.hunter_results
-        : [];
-
-
-    const result =
-      hunterResults.find(
-        item =>
-          String(
-            item?.signal?.match_id ??
-            ""
-          ) ===
-          String(
-            m?.id ??
-            ""
-          )
-      ) ??
-      hunterResults[0] ??
-      null;
-
-
-    if (!result) {
-
-      console.log(
-        "CLOUDBET ODDS: no matcher result",
-        m?.match || ""
-      );
-
-      return null;
-    }
-
-
-    if (
-      result?.status !==
-        "MATCH" ||
-      result?.classification !==
-        "CONFIDENT_MATCH" ||
-      result?.security?.secure_match !==
-        true
-    ) {
-
-      console.log(
-        "CLOUDBET ODDS: no secure match",
-        m?.match || "",
-        result?.classification || "",
-        result?.reason || ""
-      );
-
-      return null;
-    }
-
-
-    // V6.7.1:
-    // A secure MATCH is valuable even when the target selection
-    // is temporarily disabled. Always preserve the exact event_id.
-    // Entry odds are stored only when they are really available.
-    const odds =
-      result?.odds ?? null;
-
-    const rawPrice =
-      numberOrNull(
-        odds?.price ??
-        odds?.raw_price
-      );
-
-    const selectionStatus =
-      String(
-        odds?.selection_status ??
-        odds?.status ??
-        ""
-      )
-        .trim()
-        .toUpperCase();
-
-    const oddsAvailable =
-      odds?.available === true &&
-      rawPrice !== null &&
-      rawPrice > 1 &&
-      (
-        !selectionStatus ||
-        selectionStatus ===
-          "SELECTION_ENABLED"
-      );
-
-    const price =
-      oddsAvailable
-        ? rawPrice
-        : null;
-
-    if (!oddsAvailable) {
-      console.log(
-        "CLOUDBET MATCH SAVED; ODDS WAITING",
-        m?.match || "",
-        result?.cloudbet?.event_id ??
-          result?.cloudbet?.id ??
-          null,
-        selectionStatus || "NO_STATUS"
-      );
-    }
-
+  if (!env.MATCHER) {
     return {
-      success:
-        true,
-
-      event_id:
-        result?.cloudbet?.event_id ??
-        result?.cloudbet?.id ??
-        null,
-
-      match:
-        result?.cloudbet?.match ??
-        null,
-
-      cloudbet_status:
-        result?.cloudbet?.status ??
-        null,
-
-      price,
-
-      odds_available:
-        oddsAvailable,
-
-      selection_status:
-        selectionStatus ||
-        null,
-
-      max_stake:
-        oddsAvailable
-          ? numberOrNull(
-              odds?.max_stake ??
-              odds?.maxStake
-            )
-          : null,
-
-      min_stake:
-        oddsAvailable
-          ? numberOrNull(
-              odds?.min_stake ??
-              odds?.minStake
-            )
-          : null,
-
-      probability:
-        oddsAvailable
-          ? numberOrNull(
-              odds?.probability
-            )
-          : null,
-
-      market_url:
-        odds?.market_url ??
-        odds?.marketUrl ??
-        "soccer.total_goals_period_first_half/over?total=0.5",
-
-      matcher_score:
-        numberOrNull(
-          result?.matcher_scoring?.total
-        ),
-
-      home_score:
-        numberOrNull(
-          result?.matcher_scoring?.home_score
-        ),
-
-      away_score:
-        numberOrNull(
-          result?.matcher_scoring?.away_score
-        ),
-
-      classification:
-        result?.classification ??
-        null,
-
-      secure_match:
-        true
+      success: false,
+      matcher_reason: "MATCHER_BINDING_MISSING",
+      matcher_attempts: 0,
+      event_id: null
     };
-
-
-  } catch (error) {
-
-    console.error(
-      "CLOUDBET ENTRY ODDS ERROR",
-      error?.message ||
-      String(error)
-    );
-
-    return null;
   }
+
+  const split = splitHunterMatchName(m?.match || m?.name || "");
+  const home = String(
+    m?.home ?? m?.homeTeam ?? m?.home_name ?? m?.home?.name ?? split.home ?? ""
+  ).trim();
+  const away = String(
+    m?.away ?? m?.awayTeam ?? m?.away_name ?? m?.away?.name ?? split.away ?? ""
+  ).trim();
+
+  if (!home || !away) {
+    return {
+      success: false,
+      matcher_reason: "HUNTER_TEAMS_MISSING",
+      matcher_attempts: 0,
+      event_id: null
+    };
+  }
+
+  const hunterSignal = [{
+    type: "HUNTER_ENTRY",
+    signal: "HUNTER_ENTRY",
+    match: m?.match ?? `${home} - ${away}`,
+    match_id: m?.id ?? null,
+    home,
+    away,
+    league: m?.league ?? m?.tournament ?? m?.competition ?? null,
+    competition: m?.competition ?? m?.league ?? m?.tournament ?? null,
+    country: m?.country ?? null,
+    entry_minute: Number(m?.minute ?? 0),
+    current_minute: Number(m?.minute ?? 0),
+    hunter_score: hunterScore
+  }];
+
+  const matcherPath =
+    "/match?threshold=0.45&signals=" +
+    encodeURIComponent(JSON.stringify(hunterSignal));
+
+  let lastDiagnostic = {
+    success: false,
+    event_id: null,
+    matcher_reason: "MATCHER_NO_RESULT",
+    matcher_attempts: 0,
+    classification: null,
+    match_mode: null,
+    cloudbet_minute: null,
+    minute_difference: null,
+    candidate_evaluations: null,
+    minute_candidates: null,
+    best_candidate: null
+  };
+
+  for (let attempt = 1; attempt <= MATCHER_ENTRY_ATTEMPTS; attempt++) {
+    try {
+      const matcherResponse = await env.MATCHER.fetch(
+        new Request("https://matcher.internal" + matcherPath, {
+          method: "GET",
+          headers: { "Accept": "application/json" }
+        })
+      );
+
+      if (!matcherResponse.ok) {
+        const text = await matcherResponse.text();
+        lastDiagnostic = {
+          ...lastDiagnostic,
+          matcher_reason: "MATCHER_HTTP_" + matcherResponse.status,
+          matcher_attempts: attempt,
+          matcher_error: text.substring(0, 160)
+        };
+      } else {
+        const matcherData = await matcherResponse.json();
+        const hunterResults = Array.isArray(matcherData?.hunter_results)
+          ? matcherData.hunter_results
+          : [];
+        const result = hunterResults.find(item =>
+          String(item?.signal?.match_id ?? "") === String(m?.id ?? "")
+        ) ?? hunterResults[0] ?? null;
+
+        const diagnostics = result?.diagnostics ?? matcherData?.diagnostics ?? {};
+        const scoring = result?.matcher_scoring ?? {};
+
+        lastDiagnostic = {
+          success: false,
+          event_id: result?.cloudbet?.event_id ?? result?.cloudbet?.id ?? null,
+          matcher_reason:
+            result?.reason ??
+            matcherData?.reason ??
+            (matcherData?.success === true ? "MATCHER_NO_SECURE_MATCH" : "MATCHER_SUCCESS_FALSE"),
+          matcher_attempts: attempt,
+          classification: result?.classification ?? null,
+          match_mode: result?.matchMode ?? result?.match_mode ?? null,
+          cloudbet_minute:
+            diagnostics?.cloudbet_minute ?? result?.cloudbet?.minute ?? null,
+          minute_difference:
+            diagnostics?.minute_difference ?? null,
+          candidate_evaluations:
+            diagnostics?.candidate_evaluations ?? null,
+          minute_candidates:
+            diagnostics?.minute_candidates ?? null,
+          best_candidate:
+            diagnostics?.best_candidate ?? diagnostics?.best ?? null,
+          matcher_score: numberOrNull(scoring?.total),
+          home_score: numberOrNull(scoring?.home_score),
+          away_score: numberOrNull(scoring?.away_score)
+        };
+
+        const secure =
+          matcherData?.success === true &&
+          result?.status === "MATCH" &&
+          result?.classification === "CONFIDENT_MATCH" &&
+          result?.security?.secure_match === true &&
+          lastDiagnostic.event_id !== null;
+
+        if (secure) {
+          const odds = result?.odds ?? null;
+          const rawPrice = numberOrNull(odds?.price ?? odds?.raw_price);
+          const selectionStatus = String(
+            odds?.selection_status ?? odds?.status ?? ""
+          ).trim().toUpperCase();
+          const oddsAvailable =
+            odds?.available === true &&
+            rawPrice !== null && rawPrice > 1 &&
+            (!selectionStatus || selectionStatus === "SELECTION_ENABLED");
+
+          return {
+            ...lastDiagnostic,
+            success: true,
+            matcher_reason: result?.reason ?? "CONFIDENT_MATCH",
+            match: result?.cloudbet?.match ?? null,
+            cloudbet_status: result?.cloudbet?.status ?? null,
+            price: oddsAvailable ? rawPrice : null,
+            odds_available: oddsAvailable,
+            selection_status: selectionStatus || null,
+            max_stake: oddsAvailable ? numberOrNull(odds?.max_stake ?? odds?.maxStake) : null,
+            min_stake: oddsAvailable ? numberOrNull(odds?.min_stake ?? odds?.minStake) : null,
+            probability: oddsAvailable ? numberOrNull(odds?.probability) : null,
+            market_url: odds?.market_url ?? odds?.marketUrl ??
+              "soccer.total_goals_period_first_half/over?total=0.5",
+            secure_match: true
+          };
+        }
+      }
+    } catch (error) {
+      lastDiagnostic = {
+        ...lastDiagnostic,
+        matcher_reason: "MATCHER_EXCEPTION",
+        matcher_attempts: attempt,
+        matcher_error: error?.message || String(error)
+      };
+    }
+
+    // Retry only after a failed strict lookup. No thresholds/names are relaxed.
+    if (attempt < MATCHER_ENTRY_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, MATCHER_RETRY_DELAY_MS));
+    }
+  }
+
+  console.log(
+    "CLOUDBET MATCHER UNMATCHED",
+    m?.match || "",
+    lastDiagnostic.matcher_reason,
+    "attempts=" + lastDiagnostic.matcher_attempts
+  );
+
+  return lastDiagnostic;
 }
 
 
@@ -6056,6 +5882,24 @@ function formatEntryMessage(
   }
 
 
+  if (!matched && cloudbet) {
+    const matcherReason = cloudbet?.matcher_reason ?? null;
+    if (matcherReason) {
+      cloudbetText += `\n🔎 Matcher: ${matcherReason}`;
+    }
+
+    const attempts = Number(cloudbet?.matcher_attempts ?? 0);
+    if (attempts > 0) {
+      cloudbetText += `\n🔁 Matcher attempts: ${attempts}`;
+    }
+
+    const minuteDiff = numberOrNull(cloudbet?.minute_difference);
+    if (minuteDiff !== null) {
+      cloudbetText += `\n⏱ Minute diff: ${minuteDiff}`;
+    }
+  }
+
+
   // ==========================================================
   // BET READY STATUS
   // ==========================================================
@@ -6123,7 +5967,10 @@ function formatEntryMessage(
 
     const reason =
       !matched
-        ? "NO_CLOUDBET_EVENT_ID"
+        ? (
+            cloudbet?.matcher_reason ??
+            "NO_CLOUDBET_EVENT_ID"
+          )
         : (
             betReady?.reason ??
             "PREFLIGHT_NOT_READY"
