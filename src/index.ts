@@ -1,9 +1,21 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.5
+// GOAL WATCH — HUNTER TRACKER V6.7.6
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER SERVICE BINDINGS
 //
+// V6.7.6:
+//
+// 1. DAILY REPORT: OPEN count
+// 2. DAILY REPORT: average real Cloudbet ENTRY odds
+// 3. DAILY REPORT: break-even odds
+// 4. DAILY REPORT: exact P/L from each resolved signal with known entry_odds
+// 5. DAILY REPORT: ROI based only on resolved signals with known entry_odds
+// 6. Minute groups include OPEN / Avg odds / Break-even / P/L / ROI
+// 7. Missing odds are excluded from financial P/L/ROI, never invented
+// 8. Hunter / Matcher / Bet Worker / tracking logic unchanged
+//
 // V6.7.5:
+//
 //
 // 1. BET WORKER PREFLIGHT SENDS THE EXACT MATCHED EVENT DIRECTLY
 // 2. USES POST /preflight INSTEAD OF GENERAL /run
@@ -44,6 +56,9 @@ const HUNTER_MIN_SCORE = 61;
 
 const TIME_ZONE = "Europe/Sofia";
 const DAILY_REPORT_WINDOW_MINUTES = 10;
+
+// Theoretical reporting stake per signal. Change only this value if needed.
+const REPORT_STAKE = 10;
 
 // V6.7.4 matcher retry: same strict matcher rules, no relaxed names.
 const MATCHER_ENTRY_ATTEMPTS = 2;
@@ -2141,7 +2156,19 @@ async function getBetReadyForHunter(
 
   try {
 
-    // V6.7.5:
+    // V6.7.6:
+//
+// 1. DAILY REPORT: OPEN count
+// 2. DAILY REPORT: average real Cloudbet ENTRY odds
+// 3. DAILY REPORT: break-even odds
+// 4. DAILY REPORT: exact P/L from each resolved signal with known entry_odds
+// 5. DAILY REPORT: ROI based only on resolved signals with known entry_odds
+// 6. Minute groups include OPEN / Avg odds / Break-even / P/L / ROI
+// 7. Missing odds are excluded from financial P/L/ROI, never invented
+// 8. Hunter / Matcher / Bet Worker / tracking logic unchanged
+//
+// V6.7.5:
+//
     // Send THIS exact matched event directly to Bet Worker.
     // No general /run and no search through ready/pending/skipped arrays.
     const payload = {
@@ -4378,7 +4405,50 @@ async function getMinuteStatsForBounds(
               THEN 1
               ELSE 0
             END
-          ) AS no_goals
+          ) AS no_goals,
+
+          SUM(
+            CASE
+              WHEN result IS NULL
+                OR result NOT IN ('GOAL HIT', 'NO GOAL')
+              THEN 1
+              ELSE 0
+            END
+          ) AS open_count,
+
+          AVG(
+            CASE
+              WHEN entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN entry_odds
+            END
+          ) AS avg_entry_odds,
+
+          SUM(
+            CASE
+              WHEN result IN ('GOAL HIT', 'NO GOAL')
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN 1
+              ELSE 0
+            END
+          ) AS financial_bets,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN ? * (entry_odds - 1)
+
+              WHEN result = 'NO GOAL'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN -?
+
+              ELSE 0
+            END
+          ) AS profit_loss
 
         FROM hunter_signals
 
@@ -4399,6 +4469,8 @@ async function getMinuteStatsForBounds(
           END
       `)
       .bind(
+        REPORT_STAKE,
+        REPORT_STAKE,
         bounds.start,
         bounds.end
       )
@@ -4409,6 +4481,15 @@ async function getMinuteStatsForBounds(
     result?.results ||
     []
   );
+}
+
+
+function formatMoney(
+  value
+) {
+  const n = Number(value || 0);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}`;
 }
 
 
@@ -4478,6 +4559,14 @@ function formatMinuteStats(
       noGoals;
 
 
+    const open =
+      Math.max(
+        0,
+        total -
+        resolved
+      );
+
+
     const rate =
       resolved > 0
         ? goals /
@@ -4486,12 +4575,80 @@ function formatMinuteStats(
         : 0;
 
 
+    const breakEven =
+      goals > 0 &&
+      resolved > 0
+        ? resolved /
+          goals
+        : null;
+
+
+    const avgOdds =
+      numberOrNull(
+        row.avg_entry_odds
+      );
+
+
+    const financialBets =
+      Number(
+        row.financial_bets || 0
+      );
+
+
+    const profitLoss =
+      Number(
+        row.profit_loss || 0
+      );
+
+
+    const roi =
+      financialBets > 0
+        ? profitLoss /
+          (
+            financialBets *
+            REPORT_STAKE
+          ) *
+          100
+        : null;
+
+
     text +=
       `${group.label}: ` +
       `${total} ENTRY | ` +
       `${goals} GOAL | ` +
-      `${noGoals} NO GOAL | ` +
-      `${rate.toFixed(1)}%\n`;
+      `${noGoals} NO GOAL` +
+      (
+        open > 0
+          ? ` | ${open} OPEN`
+          : ""
+      ) +
+      ` | ${rate.toFixed(1)}%\n` +
+      `   🎲 Avg odds: ${
+        avgOdds !== null
+          ? avgOdds.toFixed(2)
+          : "—"
+      } | ⚖️ BE: ${
+        breakEven !== null
+          ? breakEven.toFixed(2)
+          : "—"
+      }\n` +
+      `   💶 P/L: ${
+        financialBets > 0
+          ? formatMoney(
+              profitLoss
+            ) + " EUR"
+          : "—"
+      } | 📈 ROI: ${
+        roi !== null
+          ? (
+              roi > 0
+                ? "+"
+                : ""
+            ) +
+            roi.toFixed(1) +
+            "%"
+          : "—"
+      } | bets: ${financialBets}\n`;
   }
 
 
@@ -5234,7 +5391,41 @@ async function sendDailyReport(
               THEN 1
               ELSE 0
             END
-          ) AS no_goals
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN entry_odds
+            END
+          ) AS avg_entry_odds,
+
+          SUM(
+            CASE
+              WHEN result IN ('GOAL HIT', 'NO GOAL')
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN 1
+              ELSE 0
+            END
+          ) AS financial_bets,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN ? * (entry_odds - 1)
+
+              WHEN result = 'NO GOAL'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN -?
+
+              ELSE 0
+            END
+          ) AS profit_loss
 
         FROM hunter_signals
 
@@ -5242,6 +5433,8 @@ async function sendDailyReport(
           AND created_at < ?
       `)
       .bind(
+        REPORT_STAKE,
+        REPORT_STAKE,
         reportBounds.start,
         reportBounds.end
       )
@@ -5286,6 +5479,51 @@ async function sendDailyReport(
       : 0;
 
 
+  const open =
+    Math.max(
+      0,
+      total -
+      resolved
+    );
+
+
+  const avgEntryOdds =
+    numberOrNull(
+      stats?.avg_entry_odds
+    );
+
+
+  const breakEvenOdds =
+    goals > 0 &&
+    resolved > 0
+      ? resolved /
+        goals
+      : null;
+
+
+  const financialBets =
+    Number(
+      stats?.financial_bets || 0
+    );
+
+
+  const profitLoss =
+    Number(
+      stats?.profit_loss || 0
+    );
+
+
+  const roi =
+    financialBets > 0
+      ? profitLoss /
+        (
+          financialBets *
+          REPORT_STAKE
+        ) *
+        100
+      : null;
+
+
   const message =
 `📊 DAILY HUNTER REPORT
 
@@ -5297,8 +5535,49 @@ async function sendDailyReport(
 
 🔴 NO GOAL: ${noGoals}
 
+⏳ OPEN: ${open}
+
 📈 Успеваемост:
 ${rate.toFixed(1)}%
+
+🎲 Avg Entry Odds:
+${
+  avgEntryOdds !== null
+    ? avgEntryOdds.toFixed(2)
+    : "—"
+}
+
+⚖️ Break-even Odds:
+${
+  breakEvenOdds !== null
+    ? breakEvenOdds.toFixed(2)
+    : "—"
+}
+
+💶 P/L @ ${REPORT_STAKE.toFixed(2)} EUR:
+${
+  financialBets > 0
+    ? formatMoney(
+        profitLoss
+      ) + " EUR"
+    : "—"
+}
+
+📈 ROI:
+${
+  roi !== null
+    ? (
+        roi > 0
+          ? "+"
+          : ""
+      ) +
+      roi.toFixed(1) +
+      "%"
+    : "—"
+}
+
+🎟 Financial bets:
+${financialBets}/${resolved}
 
 ━━━━━━━━━━━━━━━━
 ⏱ ПО ENTRY МИНУТА
