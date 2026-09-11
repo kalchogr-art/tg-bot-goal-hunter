@@ -1,5 +1,5 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.7
+// GOAL WATCH — HUNTER TRACKER V6.7.8 MATCHER SYNC + ODDS CALLBACK
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER SERVICE BINDINGS
 //
@@ -476,6 +476,254 @@ export default {
           headers: corsHeaders()
         }
       );
+    }
+
+
+
+    // ========================================================
+    // V6.7.8 — INTERNAL PENDING ODDS FOUND CALLBACK
+    // Bet Worker calls this only when the SAME locked event_id
+    // changes from PENDING_ODDS to a real exact 1H O0.5 price.
+    // The atomic entry_odds IS NULL guard prevents duplicate
+    // storage and duplicate Telegram replies.
+    // ========================================================
+
+    if (
+      request.method === "POST" &&
+      url.pathname ===
+        "/internal/odds-found"
+    ) {
+
+      try {
+
+        const body =
+          await request.json();
+
+        const matchId =
+          String(
+            body?.match_id ?? ""
+          ).trim();
+
+        const eventId =
+          String(
+            body?.event_id ?? ""
+          ).trim();
+
+        const odds =
+          numberOrNull(
+            body?.odds
+          );
+
+        if (
+          !matchId ||
+          !eventId ||
+          odds === null ||
+          odds <= 1
+        ) {
+          return json(
+            {
+              success: false,
+              error:
+                "INVALID_ODDS_FOUND_PAYLOAD"
+            },
+            400
+          );
+        }
+
+        const nowIso =
+          new Date().toISOString();
+
+        const update =
+          await env.DB
+            .prepare(`
+              UPDATE hunter_signals
+              SET
+                cloudbet_event_id = ?,
+                entry_odds = ?,
+                odds_available = 1,
+                cloudbet_max_stake =
+                  COALESCE(?, cloudbet_max_stake),
+                cloudbet_match =
+                  COALESCE(?, cloudbet_match),
+                updated_at = ?
+              WHERE match_id = ?
+                AND entry_odds IS NULL
+            `)
+            .bind(
+              eventId,
+              odds,
+              numberOrNull(
+                body?.max_stake
+              ),
+              body?.cloudbet_match ??
+              null,
+              nowIso,
+              matchId
+            )
+            .run();
+
+        const changed =
+          Number(
+            update?.meta?.changes ?? 0
+          );
+
+        if (changed < 1) {
+
+          return json({
+            success: true,
+            action:
+              "ALREADY_PROCESSED",
+            duplicate:
+              true,
+            match_id:
+              matchId,
+            event_id:
+              eventId,
+            odds
+          });
+        }
+
+        const row =
+          await env.DB
+            .prepare(`
+              SELECT
+                id,
+                match_id,
+                match_name,
+                entry_minute,
+                telegram_message_id,
+                entry_time
+              FROM hunter_signals
+              WHERE match_id = ?
+              LIMIT 1
+            `)
+            .bind(
+              matchId
+            )
+            .first();
+
+        const entryMinute =
+          numberOrNull(
+            row?.entry_minute
+          );
+
+        let delayText =
+          null;
+
+        if (row?.entry_time) {
+          const entryMs =
+            new Date(
+              row.entry_time
+            ).getTime();
+
+          if (
+            Number.isFinite(entryMs)
+          ) {
+            const seconds =
+              Math.max(
+                0,
+                Math.round(
+                  (
+                    Date.now() -
+                    entryMs
+                  ) / 1000
+                )
+              );
+
+            delayText =
+              seconds < 60
+                ? seconds + " сек."
+                : Math.max(
+                    1,
+                    Math.round(
+                      seconds / 60
+                    )
+                  ) + " мин.";
+          }
+        }
+
+        const message =
+          [
+            "🎲 ODDS FOUND",
+            "",
+            "⚽ " +
+              String(
+                row?.match_name ??
+                matchId
+              ),
+
+            entryMinute !== null
+              ? "📥 ENTRY: " +
+                entryMinute +
+                "'"
+              : null,
+
+            "🎲 1H Over 0.5: " +
+              odds.toFixed(2),
+
+            delayText
+              ? "⏳ Намерен след: " +
+                delayText
+              : null,
+
+            "🆔 Event: " +
+              eventId,
+
+            "",
+            "✅ PENDING → ODDS FOUND"
+          ]
+            .filter(
+              value =>
+                value !== null &&
+                value !== undefined
+            )
+            .join("\n");
+
+        const telegramMessageId =
+          await sendTelegram(
+            env,
+            message,
+            row?.telegram_message_id ??
+            null
+          );
+
+        return json({
+          success: true,
+          action:
+            "ODDS_FOUND_SAVED",
+          duplicate:
+            false,
+          match_id:
+            matchId,
+          event_id:
+            eventId,
+          odds,
+          reply_to:
+            row?.telegram_message_id ??
+            null,
+          telegram_message_id:
+            telegramMessageId ??
+            null
+        });
+
+      } catch (error) {
+
+        console.error(
+          "ODDS FOUND CALLBACK ERROR",
+          error?.message ||
+          String(error)
+        );
+
+        return json(
+          {
+            success: false,
+            error:
+              error?.message ||
+              String(error)
+          },
+          500
+        );
+      }
     }
 
 
@@ -2167,13 +2415,37 @@ async function getBetReadyForHunter(
         rawMatch
       );
 
+    const oldMatcherEventId =
+      eventId === null ||
+      eventId === undefined ||
+      String(eventId).trim() === ""
+        ? null
+        : String(eventId);
+
+    const oldMatcherSecure =
+      cloudbet?.success === true &&
+      oldMatcherEventId !== null;
+
     const payload = {
       event_id:
-        eventId === null ||
-        eventId === undefined ||
-        String(eventId).trim() === ""
-          ? null
-          : String(eventId),
+        oldMatcherEventId,
+
+      // V6.7.8 — synchronize deterministic matcher with AI matcher.
+      // A secure old-matcher event becomes an identity lock.
+      matcher_sync: {
+        old_matcher_event_id:
+          oldMatcherEventId,
+        old_matcher_locked:
+          oldMatcherSecure,
+        old_matcher_score:
+          numberOrNull(
+            cloudbet?.matcher_score
+          ),
+        ai_mode:
+          oldMatcherSecure
+            ? "VERIFY_LOCKED_EVENT"
+            : "FALLBACK_SEARCH"
+      },
 
       match_id:
         m?.id ??
