@@ -1,9 +1,19 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.6
+// GOAL WATCH — HUNTER TRACKER V6.7.7
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER SERVICE BINDINGS
 //
+// V6.7.7:
+//
+// 1. /preflight is called for EVERY Hunter ENTRY, even when old Matcher is UNMATCHED.
+// 2. AI Matcher can recover the correct Cloudbet event_id.
+// 3. Temporary AI resolution => WAITING, not false final NO.
+// 4. Exact odds unavailable => WAITING; Bet Worker persistent queue owns retry.
+// 5. Hunter remains stored and normal tracking/reporting is unchanged.
+// 6. No real betting is enabled by Tracker.
+//
 // V6.7.6:
+//
 //
 // 1. DAILY REPORT: OPEN count
 // 2. DAILY REPORT: average real Cloudbet ENTRY odds
@@ -2111,30 +2121,6 @@ async function getBetReadyForHunter(
     null;
 
 
-  if (
-    eventId === null ||
-    eventId === undefined ||
-    String(eventId).trim() === ""
-  ) {
-
-    return {
-      checked: true,
-      ready: false,
-      reason:
-        cloudbet?.matcher_reason ??
-        "NO_CLOUDBET_EVENT_ID",
-      action:
-        "UNMATCHED",
-      current_odds:
-        null,
-      max_stake:
-        null,
-      account_balance:
-        null
-    };
-  }
-
-
   if (!env.BET_WORKER) {
 
     return {
@@ -2171,11 +2157,23 @@ async function getBetReadyForHunter(
 //
     // Send THIS exact matched event directly to Bet Worker.
     // No general /run and no search through ready/pending/skipped arrays.
+    const rawMatch =
+      m?.match ??
+      m?.name ??
+      null;
+
+    const split =
+      splitHunterMatchName(
+        rawMatch
+      );
+
     const payload = {
       event_id:
-        String(
-          eventId
-        ),
+        eventId === null ||
+        eventId === undefined ||
+        String(eventId).trim() === ""
+          ? null
+          : String(eventId),
 
       match_id:
         m?.id ??
@@ -2183,16 +2181,31 @@ async function getBetReadyForHunter(
         null,
 
       match:
-        m?.match ??
-        m?.name ??
-        null,
+        rawMatch,
+
+      match_name:
+        rawMatch,
 
       home:
         m?.home ??
+        split.home ??
         null,
 
       away:
         m?.away ??
+        split.away ??
+        null,
+
+      competition:
+        m?.league ??
+        m?.tournament ??
+        m?.competition ??
+        null,
+
+      league:
+        m?.league ??
+        m?.tournament ??
+        m?.competition ??
         null,
 
       entry_minute:
@@ -2318,6 +2331,19 @@ async function getBetReadyForHunter(
           numberOrNull(
             data?.account_balance ??
             data?.account?.balance
+          ),
+
+        event_id:
+          data?.event_id ??
+          null,
+
+        cloudbet_match:
+          data?.ai_match?.cloudbet_match ??
+          null,
+
+        ai_confidence:
+          numberOrNull(
+            data?.ai_match?.confidence
           )
       };
     }
@@ -2361,6 +2387,19 @@ async function getBetReadyForHunter(
         numberOrNull(
           data?.account_balance ??
           data?.account?.balance
+        ),
+
+      event_id:
+        data?.event_id ??
+        null,
+
+      cloudbet_match:
+        data?.ai_match?.cloudbet_match ??
+        null,
+
+      ai_confidence:
+        numberOrNull(
+          data?.ai_match?.confidence
         )
     };
 
@@ -6050,12 +6089,68 @@ function formatEntryMessage(
   // BET READY STATUS
   // ==========================================================
 
+  const aiEventId =
+    betReady?.event_id ??
+    null;
+
+  const aiCloudbetMatch =
+    betReady?.cloudbet_match ??
+    null;
+
+  const aiConfidence =
+    numberOrNull(
+      betReady?.ai_confidence
+    );
+
+  const aiMatched =
+    aiEventId !== null &&
+    aiEventId !== undefined &&
+    String(aiEventId).trim() !== "";
+
+  if (
+    !matched &&
+    aiMatched
+  ) {
+    cloudbetText =
+      "🔗 CLOUDBET: ✅ AI MATCHED";
+
+    if (aiCloudbetMatch) {
+      cloudbetText +=
+        `\n🎯 Cloudbet: ${aiCloudbetMatch}`;
+    }
+
+    cloudbetText +=
+      `\n🆔 Event: ${aiEventId}`;
+
+    if (aiConfidence !== null) {
+      cloudbetText +=
+        `\n🤖 AI Match: ${(aiConfidence * 100).toFixed(0)}%`;
+    }
+  }
+
+  const waitingAction =
+    betReady?.action === "WAITING_AI" ||
+    betReady?.action === "PENDING_ODDS";
+
+  const waitingReason =
+    [
+      "AI_MATCH_PENDING",
+      "TARGET_ODDS_NOT_AVAILABLE",
+      "EXACT_ODDS_EVENT_NOT_FOUND",
+      "MATCHER_LIVE_FAILED",
+      "CURRENT_ODDS_INVALID",
+      "SELECTION_NOT_ENABLED",
+      "MINUTE_UNKNOWN"
+    ].includes(
+      String(
+        betReady?.reason || ""
+      )
+    );
+
   let betReadyText =
     "💰 BET READY: ❌ NO";
 
-
   if (
-    matched &&
     betReady?.ready ===
       true
   ) {
@@ -6063,36 +6158,29 @@ function formatEntryMessage(
     betReadyText =
       "💰 BET READY: ✅ YES";
 
-
     const currentOdds =
       numberOrNull(
         betReady?.current_odds
       );
 
-
     if (
       currentOdds !== null
     ) {
-
       betReadyText +=
         `\n🎲 Current odds: ${currentOdds.toFixed(2)}`;
     }
-
 
     const maxStake =
       numberOrNull(
         betReady?.max_stake
       );
 
-
     if (
       maxStake !== null
     ) {
-
       betReadyText +=
         `\n💵 Max stake: ${maxStake.toFixed(2)}`;
     }
-
 
     const balance =
       numberOrNull(
@@ -6100,28 +6188,39 @@ function formatEntryMessage(
           ?.account_balance
       );
 
-
     if (
       balance !== null
     ) {
-
       betReadyText +=
         `\n💳 Balance: ${balance.toFixed(2)}`;
     }
 
+  } else if (
+    waitingAction ||
+    waitingReason
+  ) {
+
+    betReadyText =
+      "💰 BET READY: ⏳ WAITING";
+
+    betReadyText +=
+      `\nПричина: ${
+        betReady?.reason ??
+        "WAITING_FOR_AI_OR_ODDS"
+      }`;
+
   } else {
 
     const reason =
-      !matched
-        ? (
-            cloudbet?.matcher_reason ??
-            "NO_CLOUDBET_EVENT_ID"
-          )
-        : (
-            betReady?.reason ??
-            "PREFLIGHT_NOT_READY"
-          );
-
+      betReady?.reason ??
+      (
+        !matched
+          ? (
+              cloudbet?.matcher_reason ??
+              "NO_CLOUDBET_EVENT_ID"
+            )
+          : "PREFLIGHT_NOT_READY"
+      );
 
     betReadyText +=
       `\nПричина: ${reason}`;
