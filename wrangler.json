@@ -22,6 +22,10 @@
       "service": "cloudbet-match-matcher"
     },
     {
+      "binding": "AI_MATCHER",
+      "service": "ai-matcher"
+    },
+    {
       "binding": "BET_WORKER",
       "service": "cloudbet-bet-worker"
     }
