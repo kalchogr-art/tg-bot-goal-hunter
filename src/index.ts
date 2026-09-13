@@ -68,14 +68,14 @@
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // created_at / updated_at / entry_time are stored as UTC ISO.
 // Statistics are calculated according to Europe/Sofia.
-// V6.7.9.7: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
+// V6.7.9.9: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
 // ============================================================
 
 const HUNTER_FROM = 5;
 const HUNTER_TO = 42;
 const HUNTER_MIN_SCORE = 60;
 
-// V6.7.9.7 LIVE HUNTER FILTER
+// V6.7.9.9 LIVE HUNTER FILTER
 // 5–9   => 65+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
 // 10–19 => 60+
 // 20–24 => 65+
@@ -91,7 +91,7 @@ const DAILY_REPORT_WINDOW_MINUTES = 10;
 // Theoretical reporting stake per signal. Change only this value if needed.
 const REPORT_STAKE = 10;
 
-// V6.7.9.7 REPORT FILTER
+// V6.7.9.9 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
 // A normal row enters statistics only after a real entry odds is captured
 // and only if it passes the same dynamic Score threshold used for live ENTRY.
@@ -117,11 +117,10 @@ const LEAGUE_BOTTOM_COUNT = 10;
 
 const ENTRY_MINUTE_GROUPS = [
   { label: "10–19′", min: 10, max: 19 },
-  { label: "20–29′", min: 20, max: 29 },
+  { label: "20–24′", min: 20, max: 24 },
+  { label: "25–29′", min: 25, max: 29 },
   { label: "30–34′", min: 30, max: 34 },
-  { label: "35–37′", min: 35, max: 37 },
-  { label: "38–39′", min: 38, max: 39 },
-  { label: "40–42′", min: 40, max: 42 }
+  { label: "35–42′", min: 35, max: 42 }
 ];
 
 const ENTRY_HOUR_GROUPS = [
@@ -4414,20 +4413,17 @@ async function getCurrentMonthDetails(
             WHEN entry_minute BETWEEN 10 AND 19
               THEN '10–19′'
 
-            WHEN entry_minute BETWEEN 20 AND 29
-              THEN '20–29′'
+            WHEN entry_minute BETWEEN 20 AND 24
+              THEN '20–24′'
+
+            WHEN entry_minute BETWEEN 25 AND 29
+              THEN '25–29′'
 
             WHEN entry_minute BETWEEN 30 AND 34
               THEN '30–34′'
 
-            WHEN entry_minute BETWEEN 35 AND 37
-              THEN '35–37′'
-
-            WHEN entry_minute BETWEEN 38 AND 39
-              THEN '38–39′'
-
-            WHEN entry_minute BETWEEN 40 AND 42
-              THEN '40–42′'
+            WHEN entry_minute BETWEEN 35 AND 42
+              THEN '35–42′'
 
           END AS minute_group,
 
@@ -4461,11 +4457,10 @@ async function getCurrentMonthDetails(
         ORDER BY
           CASE minute_group
             WHEN '10–19′' THEN 1
-            WHEN '20–29′' THEN 2
-            WHEN '30–34′' THEN 3
-            WHEN '35–37′' THEN 4
-            WHEN '38–39′' THEN 5
-            WHEN '40–42′' THEN 6
+            WHEN '20–24′' THEN 2
+            WHEN '25–29′' THEN 3
+            WHEN '30–34′' THEN 4
+            WHEN '35–42′' THEN 5
           END
       `)
       .bind(
@@ -4938,20 +4933,17 @@ async function getMinuteStatsForBounds(
             WHEN entry_minute BETWEEN 10 AND 19
               THEN '10–19′'
 
-            WHEN entry_minute BETWEEN 20 AND 29
-              THEN '20–29′'
+            WHEN entry_minute BETWEEN 20 AND 24
+              THEN '20–24′'
+
+            WHEN entry_minute BETWEEN 25 AND 29
+              THEN '25–29′'
 
             WHEN entry_minute BETWEEN 30 AND 34
               THEN '30–34′'
 
-            WHEN entry_minute BETWEEN 35 AND 37
-              THEN '35–37′'
-
-            WHEN entry_minute BETWEEN 38 AND 39
-              THEN '38–39′'
-
-            WHEN entry_minute BETWEEN 40 AND 42
-              THEN '40–42′'
+            WHEN entry_minute BETWEEN 35 AND 42
+              THEN '35–42′'
 
           END AS minute_group,
 
@@ -5028,11 +5020,10 @@ async function getMinuteStatsForBounds(
         ORDER BY
           CASE minute_group
             WHEN '10–19′' THEN 1
-            WHEN '20–29′' THEN 2
-            WHEN '30–34′' THEN 3
-            WHEN '35–37′' THEN 4
-            WHEN '38–39′' THEN 5
-            WHEN '40–42′' THEN 6
+            WHEN '20–24′' THEN 2
+            WHEN '25–29′' THEN 3
+            WHEN '30–34′' THEN 4
+            WHEN '35–42′' THEN 5
           END
       `)
       .bind(
@@ -5227,15 +5218,15 @@ function formatMinuteStats(
 // TODAY COMMAND
 // ============================================================
 
-async function buildTodayStats(env) {
+async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 HUNTER TODAY") {
 
   const now = new Date();
   const local = getSofiaTime(now);
-  const today = local.date;
+  const today = requestedDate || local.date;
   const bounds = getSofiaDayUtcBounds(today);
 
   if (!bounds) {
-    return `📊 HUNTER TODAY\n\n📅 ${today}\n\n❌ Не успях да изчисля дневните граници.`;
+    return `${reportTitle}\n\n📅 ${today}\n\n❌ Не успях да изчисля дневните граници.`;
   }
 
   const overall = await env.DB
@@ -5306,7 +5297,7 @@ async function buildTodayStats(env) {
     : null;
 
   let message =
-`📊 HUNTER TODAY
+`${reportTitle}
 
 📅 ${today}
 
@@ -6233,73 +6224,13 @@ async function sendDailyReport(
       : null;
 
 
-  const message =
-`📊 DAILY HUNTER REPORT
-
-📅 ${reportDate}
-
-🎯 ENTRY: ${total}
-
-🟢 GOAL HIT: ${goals}
-
-🔴 NO GOAL: ${noGoals}
-
-⏳ OPEN: ${open}
-
-📈 Успеваемост:
-${rate.toFixed(1)}%
-
-🎲 Avg Entry Odds:
-${
-  avgEntryOdds !== null
-    ? avgEntryOdds.toFixed(2)
-    : "—"
-}
-
-⚖️ Break-even Odds:
-${
-  breakEvenOdds !== null
-    ? breakEvenOdds.toFixed(2)
-    : "—"
-}
-
-💶 P/L @ ${REPORT_STAKE.toFixed(2)} EUR:
-${
-  financialBets > 0
-    ? formatMoney(
-        profitLoss
-      ) + " EUR"
-    : "—"
-}
-
-📈 ROI:
-${
-  roi !== null
-    ? (
-        roi > 0
-          ? "+"
-          : ""
-      ) +
-      roi.toFixed(1) +
-      "%"
-    : "—"
-}
-
-🎟 Financial bets:
-${financialBets}/${resolved}
-
-━━━━━━━━━━━━━━━━
-⏱ ПО ENTRY МИНУТА
-━━━━━━━━━━━━━━━━
-${formatMinuteStats(
-  minuteRows
-)}
-━━━━━━━━━━━━━━━━
-🎲 Stats filter: entry_odds > 1 + dynamic Hunter Score
-🕐 Timezone: Europe/Sofia
-━━━━━━━━━━━━━━━━
-NEXT GOAL HUNTER
-━━━━━━━━━━━━━━━━`;
+  // V6.7.9.9: the automatic midnight report uses the exact same
+  // formatter, filters and minute/score groups as /today.
+  const message = await buildTodayStats(
+    env,
+    reportDate,
+    "📊 HUNTER DAILY FINAL"
+  );
 
 
   await sendTelegram(
