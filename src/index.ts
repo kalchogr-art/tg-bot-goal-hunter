@@ -1,5 +1,5 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.9.2 PARALLEL MATCHER + AI FINAL TELEGRAM
+// GOAL WATCH — HUNTER TRACKER V6.7.9.5 AI 0% HARD GUARD
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -53,7 +53,7 @@
 // 5. ODDS READ DIRECTLY FROM MATCHER result.odds
 // 6. ENTRY ODDS SAVED IN D1
 // 7. ODDS FAILURE NEVER BLOCKS HUNTER ENTRY
-// 8. HUNTER LOGIC UNCHANGED: 10–42' AND SCORE 61+
+// 8. HUNTER LOGIC: 5–9 SHADOW 65+; 10–19 60+; 20–24 65+; 25–29 70+; 30–34 75+; 35–42 80+
 // 9. TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
 // 10. DAILY / MONTHLY / LEAGUE / HOUR STATS PRESERVED
 // 11. TELEGRAM ENTRY SHOWS MATCHED / UNMATCHED
@@ -68,17 +68,44 @@
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // created_at / updated_at / entry_time are stored as UTC ISO.
 // Statistics are calculated according to Europe/Sofia.
+// V6.7.9.6: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
 // ============================================================
 
-const HUNTER_FROM = 10;
+const HUNTER_FROM = 5;
 const HUNTER_TO = 42;
-const HUNTER_MIN_SCORE = 61;
+const HUNTER_MIN_SCORE = 60;
+
+// V6.7.9.6 LIVE HUNTER FILTER
+// 5–9   => 65+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
+// 10–19 => 60+
+// 20–24 => 65+
+// 25–29 => 70+
+// 30–34 => 75+
+// 35–42 => 80+
+const SHADOW_FROM = 5;
+const SHADOW_TO = 9;
 
 const TIME_ZONE = "Europe/Sofia";
 const DAILY_REPORT_WINDOW_MINUTES = 10;
 
 // Theoretical reporting stake per signal. Change only this value if needed.
 const REPORT_STAKE = 10;
+
+// V6.7.9.6 REPORT FILTER
+// 5–9 shadow rows NEVER enter the normal Telegram statistics.
+// A normal row enters statistics only after a real entry odds is captured
+// and only if it passes the same dynamic Score threshold used for live ENTRY.
+const REPORT_ELIGIBLE_SQL = `
+  entry_odds IS NOT NULL
+  AND entry_odds > 1
+  AND (
+    (entry_minute BETWEEN 10 AND 19 AND hunter_score >= 60)
+    OR (entry_minute BETWEEN 20 AND 24 AND hunter_score >= 65)
+    OR (entry_minute BETWEEN 25 AND 29 AND hunter_score >= 70)
+    OR (entry_minute BETWEEN 30 AND 34 AND hunter_score >= 75)
+    OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 80)
+  )
+`;
 
 // V6.7.4 matcher retry: same strict matcher rules, no relaxed names.
 const MATCHER_ENTRY_ATTEMPTS = 2;
@@ -1301,16 +1328,18 @@ async function processTrackingMatch(
     trackingMap.delete(id);
 
 
-    await sendTelegram(
-      env,
-      formatGoalMessage(
-        existing,
-        m,
-        goalMinute,
-        afterMinutes
-      ),
-      existing.telegram_message_id
-    );
+    if (!isShadowSignal(existing)) {
+      await sendTelegram(
+        env,
+        formatGoalMessage(
+          existing,
+          m,
+          goalMinute,
+          afterMinutes
+        ),
+        existing.telegram_message_id
+      );
+    }
 
     return;
   }
@@ -1358,14 +1387,16 @@ async function processTrackingMatch(
     trackingMap.delete(id);
 
 
-    await sendTelegram(
-      env,
-      formatNoGoalMessage(
-        existing,
-        m
-      ),
-      existing.telegram_message_id
-    );
+    if (!isShadowSignal(existing)) {
+      await sendTelegram(
+        env,
+        formatNoGoalMessage(
+          existing,
+          m
+        ),
+        existing.telegram_message_id
+      );
+    }
 
     return;
   }
@@ -1415,14 +1446,16 @@ async function processTrackingMatch(
     trackingMap.delete(id);
 
 
-    await sendTelegram(
-      env,
-      formatNoGoalMessage(
-        existing,
-        m
-      ),
-      existing.telegram_message_id
-    );
+    if (!isShadowSignal(existing)) {
+      await sendTelegram(
+        env,
+        formatNoGoalMessage(
+          existing,
+          m
+        ),
+        existing.telegram_message_id
+      );
+    }
 
     return;
   }
@@ -3209,20 +3242,113 @@ async function createHunterEntry(
 
 
   // ==========================================================
+  // V6.7.9.5 — SYNC AI PREFLIGHT ODDS BACK TO ENTRY ODDS
+  //
+  // AI matcher returns a locked event_id but usually no price.
+  // If Bet Worker preflight finds the exact 1H O0.5 price for
+  // that SAME locked event, treat it as the real ENTRY odds.
+  // This fixes: Entry odds WAITING + Current odds X.XX.
+  // ==========================================================
+
+  const preflightOdds =
+    numberOrNull(
+      betReady?.current_odds
+    );
+
+  const finalEventId =
+    cloudbetOdds?.event_id === null ||
+    cloudbetOdds?.event_id === undefined
+      ? null
+      : String(cloudbetOdds.event_id);
+
+  const preflightEventId =
+    betReady?.event_id === null ||
+    betReady?.event_id === undefined ||
+    String(betReady.event_id).trim() === ""
+      ? finalEventId
+      : String(betReady.event_id);
+
+  const sameLockedEvent =
+    finalEventId !== null &&
+    preflightEventId !== null &&
+    finalEventId === preflightEventId;
+
+  if (
+    cloudbetOdds?.success === true &&
+    sameLockedEvent &&
+    numberOrNull(cloudbetOdds?.price) === null &&
+    preflightOdds !== null &&
+    preflightOdds > 1
+  ) {
+
+    cloudbetOdds = {
+      ...cloudbetOdds,
+      price: preflightOdds,
+      entry_odds: preflightOdds,
+      odds_available: true,
+      max_stake:
+        numberOrNull(betReady?.max_stake) ??
+        numberOrNull(cloudbetOdds?.max_stake)
+    };
+
+    try {
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            entry_odds = ?,
+            cloudbet_max_stake = COALESCE(?, cloudbet_max_stake),
+            odds_available = 1,
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+            AND cloudbet_event_id = ?
+            AND entry_odds IS NULL
+        `)
+        .bind(
+          preflightOdds,
+          numberOrNull(betReady?.max_stake),
+          nowIso,
+          insertedId,
+          finalEventId
+        )
+        .run();
+
+      console.log(
+        "AI PREFLIGHT ODDS SYNCED TO ENTRY",
+        id,
+        finalEventId,
+        preflightOdds
+      );
+
+    } catch (error) {
+      console.error(
+        "AI PREFLIGHT ODDS SYNC DB ERROR",
+        id,
+        error?.message || String(error)
+      );
+    }
+  }
+
+  // ==========================================================
   // TELEGRAM ENTRY
   // ==========================================================
 
+  const shadowEntry = isShadowEntryMinute(minute);
+
   const telegramMessageId =
-    await sendTelegram(
-      env,
-      formatEntryMessage(
-        m,
-        hunterScore,
-        local,
-        cloudbetOdds,
-        betReady
-      )
-    );
+    shadowEntry
+      ? null
+      : await sendTelegram(
+          env,
+          formatEntryMessage(
+            m,
+            hunterScore,
+            local,
+            cloudbetOdds,
+            betReady
+          )
+        );
 
 
   if (
@@ -3362,24 +3488,26 @@ async function finalizeMissingTracking(
   }
 
 
-  await sendTelegram(
-    env,
-    formatNoGoalMessage(
-      signal,
-      {
-        score: {
-          home:
-            signal?.entry_home_score ??
-            0,
+  if (!isShadowSignal(signal)) {
+    await sendTelegram(
+      env,
+      formatNoGoalMessage(
+        signal,
+        {
+          score: {
+            home:
+              signal?.entry_home_score ??
+              0,
 
-          away:
-            signal?.entry_away_score ??
-            0
+            away:
+              signal?.entry_away_score ??
+              0
+          }
         }
-      }
-    ),
-    signal?.telegram_message_id
-  );
+      ),
+      signal?.telegram_message_id
+    );
+  }
 }
 
 
@@ -3446,38 +3574,36 @@ function isHunterCandidate(
   }
 
 
-  if (
-    score <
-      HUNTER_MIN_SCORE
-  ) {
+  const requiredScore = getRequiredHunterScore(minute);
+
+  if (requiredScore === null || score < requiredScore) {
     return false;
   }
-
 
   return true;
 }
 
 
-function getRequiredHunterScore(
-  minute
-) {
+function getRequiredHunterScore(minute) {
+  const m = Number(minute || 0);
 
-  const m =
-    Number(
-      minute || 0
-    );
-
-
-  if (
-    m >= HUNTER_FROM &&
-    m <= HUNTER_TO
-  ) {
-
-    return HUNTER_MIN_SCORE;
-  }
-
+  if (m >= 5 && m <= 9) return 65;
+  if (m >= 10 && m <= 19) return 60;
+  if (m >= 20 && m <= 24) return 65;
+  if (m >= 25 && m <= 29) return 70;
+  if (m >= 30 && m <= 34) return 75;
+  if (m >= 35 && m <= 42) return 80;
 
   return null;
+}
+
+function isShadowEntryMinute(minute) {
+  const m = Number(minute || 0);
+  return m >= SHADOW_FROM && m <= SHADOW_TO;
+}
+
+function isShadowSignal(signal) {
+  return isShadowEntryMinute(signal?.entry_minute);
 }
 
 
@@ -3878,6 +4004,7 @@ async function getMonthlyStats(
 
         WHERE created_at >= ?
           AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
       `)
       .bind(
         bounds.start,
@@ -3951,6 +4078,7 @@ async function getMonthlyHistory(
         SELECT created_at
         FROM hunter_signals
         WHERE created_at IS NOT NULL
+          AND ${REPORT_ELIGIBLE_SQL}
       `)
       .all();
 
@@ -4240,7 +4368,7 @@ async function getCurrentMonthDetails(
 
         WHERE created_at >= ?
           AND created_at < ?
-          AND hunter_score BETWEEN 61 AND 100
+          AND ${REPORT_ELIGIBLE_SQL}
 
         GROUP BY score_group
 
@@ -4308,6 +4436,7 @@ async function getCurrentMonthDetails(
 
         WHERE created_at >= ?
           AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
           AND entry_minute BETWEEN 10 AND 42
 
         GROUP BY minute_group
@@ -4339,6 +4468,7 @@ async function getCurrentMonthDetails(
         FROM hunter_signals
         WHERE created_at >= ?
           AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
       `)
       .bind(
         bounds.start,
@@ -4388,6 +4518,7 @@ async function getCurrentMonthDetails(
 
         WHERE created_at >= ?
           AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
           AND league IS NOT NULL
           AND TRIM(league) <> ''
           AND UPPER(TRIM(league)) <> 'LIVE'
@@ -4872,6 +5003,7 @@ async function getMinuteStatsForBounds(
 
         WHERE created_at >= ?
           AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
           AND entry_minute BETWEEN 10 AND 42
 
         GROUP BY minute_group
@@ -5156,6 +5288,7 @@ async function buildStats(env) {
 
             WHERE created_at >= ?
               AND created_at < ?
+              AND ${REPORT_ELIGIBLE_SQL}
           `)
           .bind(
             dailyBounds.start,
@@ -5593,6 +5726,8 @@ ${formatMinuteStats(
 )}
 ━━━━━━━━━━━━━━━━
 💾 Данните са от hunter_signals
+🎲 Филтър: само entry_odds > 1
+🔥 Score: 61 / 65 / 68 / 72 / 75 според минутата
 🕐 Daily timezone: Europe/Sofia
 📊 Месеците се изчисляват по Europe/Sofia
 ━━━━━━━━━━━━━━━━
@@ -5733,6 +5868,7 @@ async function buildHourMinuteStatsMessage(
 
   message +=
 `💾 hunter_signals
+🎲 Само мачове с entry odds + динамичен Score filter
 🕐 Europe/Sofia`;
 
 
@@ -5849,6 +5985,7 @@ async function sendDailyReport(
 
         WHERE created_at >= ?
           AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
       `)
       .bind(
         REPORT_STAKE,
@@ -6004,6 +6141,7 @@ ${formatMinuteStats(
   minuteRows
 )}
 ━━━━━━━━━━━━━━━━
+🎲 Stats filter: entry_odds > 1 + dynamic Hunter Score
 🕐 Timezone: Europe/Sofia
 ━━━━━━━━━━━━━━━━
 NEXT GOAL HUNTER
@@ -6476,44 +6614,13 @@ function formatEntryMessage(
   // BET READY STATUS
   // ==========================================================
 
-  const aiEventId =
-    betReady?.event_id ??
-    null;
-
-  const aiCloudbetMatch =
-    betReady?.cloudbet_match ??
-    null;
-
-  const aiConfidence =
-    numberOrNull(
-      betReady?.ai_confidence
-    );
-
-  const aiMatched =
-    aiEventId !== null &&
-    aiEventId !== undefined &&
-    String(aiEventId).trim() !== "";
-
-  if (
-    !matched &&
-    aiMatched
-  ) {
-    cloudbetText =
-      "🔗 CLOUDBET: ✅ AI MATCHED";
-
-    if (aiCloudbetMatch) {
-      cloudbetText +=
-        `\n🎯 Cloudbet: ${aiCloudbetMatch}`;
-    }
-
-    cloudbetText +=
-      `\n🆔 Event: ${aiEventId}`;
-
-    if (aiConfidence !== null) {
-      cloudbetText +=
-        `\n🤖 AI Match: ${(aiConfidence * 100).toFixed(0)}%`;
-    }
-  }
+  // V6.7.9.3 HARD GUARD:
+  // Bet Worker is PRE-FLIGHT only. It must never promote a rejected/stale
+  // AI candidate into Telegram as a successful match.
+  // The final Cloudbet identity is accepted ONLY from `cloudbet`, which is
+  // already resolved by the Tracker's parallel Mechanical + AI matcher.
+  // Therefore confidence 0%, rejected AI candidates and stale event_ids
+  // can never become `✅ AI MATCHED` here.
 
   const waitingAction =
     betReady?.action === "WAITING_AI" ||
