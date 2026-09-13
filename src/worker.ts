@@ -47,29 +47,12 @@ export default {
         "no-cache"
     };
 
-    // =================================================
-    // DEBUG FEED FRESHNESS
-    // =================================================
-    //
-    // READ ONLY.
-    //
-    // /debug-feed-freshness?matchId=XXXXXXXX
-    // /debug-feed-freshness?matchId=XXXXXXXX&raw=1
-    //
-    // Compares:
-    // - main live feed
-    // - df_sui match events
-    // - df_st match statistics
-    //
-    // V2 FIX:
-    // - IA is NOT treated as event type
-    // - IK÷Goal is the real goal marker
-    // - Goal + Assistance inside same event are separated
-    // - INX / IOX parsed as score
-    // =================================================
-
     const requestUrl =
       new URL(request.url);
+
+    // =================================================
+    // DEBUG FEED FRESHNESS V3
+    // =================================================
 
     if (
       request.method === "GET" &&
@@ -123,11 +106,6 @@ export default {
       const matches =
         parse(mainText);
 
-      // =================================================
-      // LIVE MATCHES
-      // AB = 2
-      // =================================================
-
       const liveMatches =
         matches.filter(
           m => m.raw.AB === "2"
@@ -136,7 +114,7 @@ export default {
       const output = [];
 
       // =================================================
-      // ONE TIME SNAPSHOT
+      // ONE SNAPSHOT FOR ALL MATCHES
       // =================================================
 
       const snapshotUnix =
@@ -145,7 +123,7 @@ export default {
         );
 
       // =================================================
-      // FETCH STATISTICS IN PARALLEL BATCHES
+      // FETCH STATS IN PARALLEL
       // =================================================
 
       const STATISTICS_BATCH_SIZE =
@@ -159,7 +137,7 @@ export default {
         );
 
       // =================================================
-      // PROCESS LIVE MATCHES
+      // PROCESS MATCHES
       // =================================================
 
       for (const match of liveMatches) {
@@ -187,14 +165,91 @@ export default {
           timeInfo.period;
 
         // =================================================
-        // SCORE
+        // MAIN FEED SCORE
         // =================================================
 
-        const scoreHome =
+        const mainScoreHome =
           toNumber(r.AG);
 
-        const scoreAway =
+        const mainScoreAway =
           toNumber(r.AH);
+
+        // =================================================
+        // V3 SCORE CROSS-CHECK
+        // =================================================
+        //
+        // Only check df_sui when this match could potentially
+        // become a Hunter ENTRY:
+        // - 1H
+        // - 10..42
+        // - main feed currently says 0:0
+        //
+        // This avoids fetching df_sui for every live match.
+        // =================================================
+
+        let summaryCheck = {
+          checked: false,
+          status: 0,
+          goal_count: 0,
+          latest_goal_minute: null,
+          latest_score: null,
+          score_mismatch: false,
+          main_feed_behind: false
+        };
+
+        if (
+          period === "1H" &&
+          minute >= 10 &&
+          minute <= 42 &&
+          mainScoreHome === 0 &&
+          mainScoreAway === 0
+        ) {
+
+          summaryCheck =
+            await getSummaryScoreCheck(
+              match.id,
+              headers,
+              mainScoreHome,
+              mainScoreAway
+            );
+        }
+
+        // =================================================
+        // EFFECTIVE SCORE
+        // =================================================
+        //
+        // If df_sui has a confirmed goal and a score that is
+        // ahead of the main feed, use df_sui score.
+        //
+        // Otherwise keep AG/AH from main feed.
+        // =================================================
+
+        let scoreHome =
+          mainScoreHome;
+
+        let scoreAway =
+          mainScoreAway;
+
+        let scoreSource =
+          "MAIN_FEED";
+
+        if (
+          summaryCheck.checked &&
+          summaryCheck.main_feed_behind &&
+          summaryCheck.latest_score &&
+          valid(summaryCheck.latest_score.home) &&
+          valid(summaryCheck.latest_score.away)
+        ) {
+
+          scoreHome =
+            summaryCheck.latest_score.home;
+
+          scoreAway =
+            summaryCheck.latest_score.away;
+
+          scoreSource =
+            "DF_SUI_CROSSCHECK";
+        }
 
         const totalGoals =
           valid(scoreHome) &&
@@ -207,7 +262,7 @@ export default {
           scoreAway === 0;
 
         // =================================================
-        // STATISTICS
+        // FLASHCORE STATISTICS
         // =================================================
 
         const statistics =
@@ -393,18 +448,11 @@ export default {
 
         const attackScore =
           calculateAttackScore({
-
-            xg:
-              xgTotal,
-
+            xg: xgTotal,
             shots,
-
             shotsOnTarget,
-
             corners,
-
             boxTouches,
-
             minute
           });
 
@@ -414,23 +462,13 @@ export default {
 
         const dangerIndex =
           calculateDangerIndex({
-
-            xg:
-              xgTotal,
-
-            xgot:
-              xgotTotal,
-
+            xg: xgTotal,
+            xgot: xgotTotal,
             shots,
-
             shotsOnTarget,
-
             corners,
-
             boxTouches,
-
             bigChances,
-
             minute
           });
 
@@ -440,20 +478,12 @@ export default {
 
         const goalPressure =
           calculateGoalPressure({
-
-            xg:
-              xgTotal,
-
+            xg: xgTotal,
             shots,
-
             shotsOnTarget,
-
             corners,
-
             boxTouches,
-
             bigChances,
-
             minute
           });
 
@@ -463,35 +493,46 @@ export default {
 
         const signal =
           calculateGoalSignal({
-
             minute,
-
             period,
-
             scoreHome,
-
             scoreAway,
-
             shots,
-
             shotsOnTarget,
-
             corners,
-
             boxTouches,
-
             bigChances,
-
             possessionHome,
-
             possessionAway,
-
-            xg:
-              xgTotal,
-
-            xgot:
-              xgotTotal
+            xg: xgTotal,
+            xgot: xgotTotal
           });
+
+        // =================================================
+        // EXTRA ENTRY GUARD
+        // =================================================
+        //
+        // If main says 0:0 but df_sui already has a goal,
+        // Hunter must NOT be eligible.
+        // =================================================
+
+        if (
+          summaryCheck.checked &&
+          summaryCheck.goal_count > 0 &&
+          mainScoreHome === 0 &&
+          mainScoreAway === 0
+        ) {
+
+          signal.hunter_eligible =
+            false;
+
+          signal.target =
+            "NONE";
+
+          signal.reasons.push(
+            "df_sui_goal_guard"
+          );
+        }
 
         // =================================================
         // DERIVED
@@ -588,11 +629,24 @@ export default {
               totalGoals,
 
             zero_zero:
-              isZeroZero
+              isZeroZero,
+
+            source:
+              scoreSource,
+
+            main_feed: {
+              home:
+                mainScoreHome,
+
+              away:
+                mainScoreAway
+            },
+
+            df_sui_check:
+              summaryCheck
           },
 
           xg: {
-
             home:
               xgHome,
 
@@ -607,7 +661,6 @@ export default {
             xgShare,
 
           xgot: {
-
             home:
               xgotHome,
 
@@ -619,7 +672,6 @@ export default {
           },
 
           xa: {
-
             home:
               xaHome,
 
@@ -690,7 +742,16 @@ export default {
               true,
 
             occurrences:
-              parsed.occurrences
+              parsed.occurrences,
+
+            score_source:
+              scoreSource,
+
+            score_crosscheck_used:
+              summaryCheck.checked,
+
+            stale_main_detected:
+              summaryCheck.main_feed_behind
           }
         });
       }
@@ -728,6 +789,13 @@ export default {
             "LOW"
         );
 
+      const staleScoresDetected =
+        output.filter(
+          m =>
+            m.data_quality
+              .stale_main_detected
+        );
+
       // =================================================
       // RESPONSE
       // =================================================
@@ -735,7 +803,10 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v27_leagues_batch10_snapshot",
+          "flashscore_only_v27_score_crosscheck_v3",
+
+        version:
+          "V3_DF_SUI_SCORE_CROSSCHECK",
 
         success:
           true,
@@ -752,25 +823,18 @@ export default {
             "10-42",
 
           thresholds: {
-
-            "10-29":
-              61,
-
-            "30-34":
-              65,
-
-            "35-37":
-              68,
-
-            "38-39":
-              72,
-
-            "40-42":
-              75
+            "10-29": 61,
+            "30-34": 65,
+            "35-37": 68,
+            "38-39": 72,
+            "40-42": 75
           },
 
           after_42:
-            false
+            false,
+
+          score_guard:
+            "DF_SUI_GOAL_CROSSCHECK_ON_0_0_CANDIDATES"
         },
 
         feed: {
@@ -796,6 +860,9 @@ export default {
           signals_found:
             signals.length,
 
+          stale_scores_detected:
+            staleScoresDetected.length,
+
           statistics_batch_size:
             STATISTICS_BATCH_SIZE,
 
@@ -813,7 +880,10 @@ export default {
       return json({
 
         test:
-          "flashscore_only_v27_leagues_batch10_snapshot",
+          "flashscore_only_v27_score_crosscheck_v3",
+
+        version:
+          "V3_DF_SUI_SCORE_CROSSCHECK",
 
         success:
           false,
@@ -854,20 +924,16 @@ async function fetchEndpoint(
       await res.text();
 
     return {
-
       status:
         res.status,
-
       text
     };
 
   } catch (e) {
 
     return {
-
       status:
         0,
-
       text:
         ""
     };
@@ -922,16 +988,13 @@ async function fetchStatisticsInBatches(
             return {
               id:
                 match.id,
-
               statistics
             };
           }
         )
       );
 
-    for (
-      const item of responses
-    ) {
+    for (const item of responses) {
 
       result.set(
         item.id,
@@ -941,6 +1004,119 @@ async function fetchStatisticsInBatches(
   }
 
   return result;
+}
+
+
+// =====================================================
+// DF_SUI SCORE CHECK
+// =====================================================
+
+async function getSummaryScoreCheck(
+  matchId,
+  headers,
+  mainHome,
+  mainAway
+) {
+
+  const response =
+    await fetchEndpoint(
+      `https://www.flashscore.com/x/feed/df_sui_1_${encodeURIComponent(matchId)}`,
+      headers
+    );
+
+  const parsed =
+    parseSummaryEvents(
+      response.text
+    );
+
+  const goals =
+    parsed.events.filter(
+      isLikelyGoalEvent
+    );
+
+  let latestGoal =
+    null;
+
+  for (const goal of goals) {
+
+    if (
+      goal.score &&
+      valid(goal.score.home) &&
+      valid(goal.score.away)
+    ) {
+
+      latestGoal =
+        goal;
+    }
+  }
+
+  const latestScore =
+    latestGoal
+      ? {
+          home:
+            latestGoal.score.home,
+          away:
+            latestGoal.score.away
+        }
+      : null;
+
+  const mainTotal =
+    (
+      valid(mainHome)
+        ? mainHome
+        : 0
+    ) +
+    (
+      valid(mainAway)
+        ? mainAway
+        : 0
+    );
+
+  const summaryTotal =
+    latestScore
+      ? latestScore.home +
+        latestScore.away
+      : 0;
+
+  const scoreMismatch =
+    Boolean(
+      latestScore &&
+      (
+        latestScore.home !== mainHome ||
+        latestScore.away !== mainAway
+      )
+    );
+
+  const mainFeedBehind =
+    Boolean(
+      latestScore &&
+      summaryTotal > mainTotal
+    );
+
+  return {
+
+    checked:
+      true,
+
+    status:
+      response.status,
+
+    goal_count:
+      goals.length,
+
+    latest_goal_minute:
+      latestGoal?.minute ||
+      null,
+
+    latest_score:
+      latestScore,
+
+    score_mismatch:
+      scoreMismatch,
+
+    main_feed_behind:
+      mainFeedBehind
+  };
 }
 
 
@@ -1018,9 +1194,7 @@ function parse(text) {
   const latest =
     new Map();
 
-  for (
-    const match of result
-  ) {
+  for (const match of result) {
 
     latest.set(
       match.id,
@@ -1117,19 +1291,14 @@ function parseStatistics(text) {
         value.toLowerCase();
 
       if (v.includes("1st")) {
-
         section =
           "first_half";
-
       } else if (
         v.includes("2nd")
       ) {
-
         section =
           "second_half";
-
       } else {
-
         section =
           "match";
       }
@@ -1208,12 +1377,9 @@ function parseStatistics(text) {
             result.stats[
               currentStat
             ] = {
-
               found:
                 true,
-
               home,
-
               away
             };
           }
@@ -1225,7 +1391,6 @@ function parseStatistics(text) {
   }
 
   const names = [
-
     "possession",
     "shots",
     "shots_on_target",
@@ -1242,22 +1407,17 @@ function parseStatistics(text) {
     "goals_prevented"
   ];
 
-  for (
-    const name of names
-  ) {
+  for (const name of names) {
 
     if (
       !result.stats[name]
     ) {
 
       result.stats[name] = {
-
         found:
           false,
-
         home:
           null,
-
         away:
           null
       };
@@ -1481,16 +1641,13 @@ function getMinuteInfo(
         "AO_2H",
 
       debug: {
-
         AC,
         AD,
         AO,
         BC,
         BD,
-
         now_unix:
           now,
-
         now_minus_AO:
           now - AO
       }
@@ -1530,16 +1687,13 @@ function getMinuteInfo(
         "AO_1H",
 
       debug: {
-
         AC,
         AD,
         AO,
         BC,
         BD,
-
         now_unix:
           now,
-
         now_minus_AO:
           now - AO
       }
@@ -1565,13 +1719,11 @@ function getMinuteInfo(
         "BC_FALLBACK",
 
       debug: {
-
         AC,
         AD,
         AO,
         BC,
         BD,
-
         now_unix:
           now
       }
@@ -1593,13 +1745,11 @@ function getMinuteInfo(
       "NONE",
 
     debug: {
-
       AC,
       AD,
       AO,
       BC,
       BD,
-
       now_unix:
         now
     }
@@ -1932,120 +2082,68 @@ function calculateGoalSignal(data) {
   }
 
   if (shots >= 6) {
-
     score += 8;
-
-    reasons.push(
-      "shots_6_plus"
-    );
+    reasons.push("shots_6_plus");
   }
 
   if (shots >= 10) {
-
     score += 8;
-
-    reasons.push(
-      "shots_10_plus"
-    );
+    reasons.push("shots_10_plus");
   }
 
   if (shots >= 15) {
-
     score += 7;
-
-    reasons.push(
-      "shots_15_plus"
-    );
+    reasons.push("shots_15_plus");
   }
 
   if (sot >= 2) {
-
     score += 10;
-
-    reasons.push(
-      "sot_2_plus"
-    );
+    reasons.push("sot_2_plus");
   }
 
   if (sot >= 4) {
-
     score += 10;
-
-    reasons.push(
-      "sot_4_plus"
-    );
+    reasons.push("sot_4_plus");
   }
 
   if (sot >= 6) {
-
     score += 8;
-
-    reasons.push(
-      "sot_6_plus"
-    );
+    reasons.push("sot_6_plus");
   }
 
   if (corners >= 3) {
-
     score += 5;
-
-    reasons.push(
-      "corners_3_plus"
-    );
+    reasons.push("corners_3_plus");
   }
 
   if (corners >= 5) {
-
     score += 7;
-
-    reasons.push(
-      "corners_5_plus"
-    );
+    reasons.push("corners_5_plus");
   }
 
   if (corners >= 8) {
-
     score += 8;
-
-    reasons.push(
-      "corners_8_plus"
-    );
+    reasons.push("corners_8_plus");
   }
 
   if (bigChances >= 1) {
-
     score += 10;
-
-    reasons.push(
-      "big_chance"
-    );
+    reasons.push("big_chance");
   }
 
   if (bigChances >= 2) {
-
     score += 10;
-
-    reasons.push(
-      "big_chances_2_plus"
-    );
+    reasons.push("big_chances_2_plus");
   }
 
   if (boxTouches >= 15) {
-
     score += 8;
-
-    reasons.push(
-      "box_touches_15_plus"
-    );
+    reasons.push("box_touches_15_plus");
   }
 
   if (boxTouches >= 25) {
-
     score += 8;
-
-    reasons.push(
-      "box_touches_25_plus"
-    );
+    reasons.push("box_touches_25_plus");
   }
 
   if (
@@ -2060,18 +2158,14 @@ function calculateGoalSignal(data) {
       );
 
     if (diff >= 15) {
-
       score += 4;
-
       reasons.push(
         "possession_advantage"
       );
     }
 
     if (diff >= 25) {
-
       score += 5;
-
       reasons.push(
         "strong_possession_advantage"
       );
@@ -2081,51 +2175,31 @@ function calculateGoalSignal(data) {
   if (valid(xg)) {
 
     if (xg >= 0.50) {
-
       score += 8;
-
-      reasons.push(
-        "xg_0_50_plus"
-      );
+      reasons.push("xg_0_50_plus");
     }
 
     if (xg >= 0.90) {
-
       score += 10;
-
-      reasons.push(
-        "xg_0_90_plus"
-      );
+      reasons.push("xg_0_90_plus");
     }
 
     if (xg >= 1.30) {
-
       score += 10;
-
-      reasons.push(
-        "xg_1_30_plus"
-      );
+      reasons.push("xg_1_30_plus");
     }
   }
 
   if (valid(xgot)) {
 
     if (xgot >= 0.50) {
-
       score += 7;
-
-      reasons.push(
-        "xgot_0_50_plus"
-      );
+      reasons.push("xgot_0_50_plus");
     }
 
     if (xgot >= 1.00) {
-
       score += 8;
-
-      reasons.push(
-        "xgot_1_00_plus"
-      );
+      reasons.push("xgot_1_00_plus");
     }
   }
 
@@ -2193,22 +2267,15 @@ function calculateGoalSignal(data) {
     "LOW";
 
   if (score >= 75) {
-
     signal =
       "VERY_STRONG";
-
   } else if (score >= 60) {
-
     signal =
       "STRONG";
-
   } else if (score >= 45) {
-
     signal =
       "MEDIUM";
-
   } else if (score >= 30) {
-
     signal =
       "WATCH";
   }
@@ -2219,7 +2286,6 @@ function calculateGoalSignal(data) {
   if (
     hunterEligible
   ) {
-
     target =
       "NEXT_GOAL";
   }
@@ -2250,493 +2316,10 @@ function calculateGoalSignal(data) {
 
 
 // =====================================================
-// HELPERS
+// SUMMARY EVENTS PARSER
 // =====================================================
 
-function valid(v) {
-
-  return (
-    typeof v === "number" &&
-    Number.isFinite(v)
-  );
-}
-
-
-function toNumber(v) {
-
-  if (
-    v === undefined ||
-    v === null ||
-    v === ""
-  )
-    return null;
-
-  const n =
-    Number(v);
-
-  return Number.isFinite(n)
-    ? n
-    : null;
-}
-
-
-function round(
-  v,
-  decimals = 2
-) {
-
-  if (
-    !Number.isFinite(v)
-  )
-    return 0;
-
-  const p =
-    Math.pow(
-      10,
-      decimals
-    );
-
-  return (
-    Math.round(
-      v * p
-    ) / p
-  );
-}
-
-
-// =====================================================
-// JSON RESPONSE + CORS
-// =====================================================
-
-function json(
-  data,
-  status = 200,
-  corsHeaders = {}
-) {
-
-  return new Response(
-
-    JSON.stringify(
-      data,
-      null,
-      2
-    ),
-
-    {
-
-      status,
-
-      headers: {
-
-        "Content-Type":
-          "application/json; charset=utf-8",
-
-        "Cache-Control":
-          "no-store, no-cache, must-revalidate",
-
-        "Pragma":
-          "no-cache",
-
-        "Expires":
-          "0",
-
-        ...corsHeaders
-      }
-    }
-  );
-}
-
-
-// =====================================================
-// DEBUG: FEED FRESHNESS COMPARISON V2
-// =====================================================
-
-async function debugFeedFreshness(
-  requestUrl,
-  mainUrl,
-  headers,
-  corsHeaders
-) {
-
-  const matchId =
-    String(
-      requestUrl.searchParams.get("matchId") ||
-      ""
-    ).trim();
-
-  const includeRaw =
-    requestUrl.searchParams.get("raw") ===
-    "1";
-
-  if (!matchId) {
-
-    return json(
-      {
-        success: false,
-        debug: "FEED_FRESHNESS",
-        version:
-          "V2_DF_SUI_REAL_EVENT_PARSER",
-        mode: "READ_ONLY",
-        error: "MATCH_ID_REQUIRED",
-        usage:
-          "/debug-feed-freshness?matchId=FLASHSCORE_MATCH_ID",
-        raw_usage:
-          "/debug-feed-freshness?matchId=FLASHSCORE_MATCH_ID&raw=1"
-      },
-      400,
-      corsHeaders
-    );
-  }
-
-  const started =
-    Date.now();
-
-  const [
-    main,
-    summary,
-    statistics
-  ] =
-    await Promise.all([
-      fetchDebugEndpoint(
-        mainUrl,
-        headers
-      ),
-
-      fetchDebugEndpoint(
-        `https://www.flashscore.com/x/feed/df_sui_1_${encodeURIComponent(matchId)}`,
-        headers
-      ),
-
-      fetchDebugEndpoint(
-        `https://www.flashscore.com/x/feed/df_st_1_${encodeURIComponent(matchId)}`,
-        headers
-      )
-    ]);
-
-  const parsedMain =
-    parse(main.text);
-
-  const mainMatch =
-    parsedMain.find(
-      item =>
-        String(item?.id || "") ===
-        matchId
-    ) || null;
-
-  const mainRaw =
-    mainMatch?.raw ||
-    {};
-
-  const mainScore = {
-
-    home:
-      toNumber(
-        mainRaw.AG
-      ),
-
-    away:
-      toNumber(
-        mainRaw.AH
-      )
-  };
-
-  const mainZeroZero =
-    mainScore.home === 0 &&
-    mainScore.away === 0;
-
-  const summaryEvents =
-    parseDebugSummaryEvents(
-      summary.text
-    );
-
-  const goalEvents =
-    summaryEvents.events.filter(
-      event =>
-        isLikelyGoalEvent(event)
-    );
-
-  const comparison = {
-
-    main_match_found:
-      Boolean(mainMatch),
-
-    main_says_zero_zero:
-      mainZeroZero,
-
-    summary_has_goal:
-      goalEvents.length > 0,
-
-    stale_main_suspected:
-      mainZeroZero &&
-      goalEvents.length > 0
-  };
-
-  return json(
-    {
-      success: true,
-
-      debug:
-        "FEED_FRESHNESS",
-
-      version:
-        "V2_DF_SUI_REAL_EVENT_PARSER",
-
-      mode:
-        "READ_ONLY",
-
-      match_id:
-        matchId,
-
-      checked_at:
-        new Date().toISOString(),
-
-      processing_ms:
-        Date.now() - started,
-
-      main_feed: {
-
-        endpoint:
-          "f_1_0_3_en_1",
-
-        http_status:
-          main.status,
-
-        response_ms:
-          main.ms,
-
-        length:
-          main.text.length,
-
-        match_found:
-          Boolean(mainMatch),
-
-        match:
-          mainMatch
-            ? `${mainRaw.AE || ""} - ${mainRaw.AF || ""}`
-            : null,
-
-        league:
-          mainMatch?.league ||
-          null,
-
-        score:
-          mainScore,
-
-        raw_time_fields: {
-
-          AB:
-            mainRaw.AB ??
-            null,
-
-          AC:
-            mainRaw.AC ??
-            null,
-
-          AO:
-            mainRaw.AO ??
-            null,
-
-          BC:
-            mainRaw.BC ??
-            null,
-
-          BD:
-            mainRaw.BD ??
-            null
-        }
-      },
-
-      match_summary_events: {
-
-        endpoint:
-          `df_sui_1_${matchId}`,
-
-        http_status:
-          summary.status,
-
-        response_ms:
-          summary.ms,
-
-        length:
-          summary.text.length,
-
-        parsed_event_count:
-          summaryEvents.events.length,
-
-        likely_goal_count:
-          goalEvents.length,
-
-        goals:
-          goalEvents.slice(
-            0,
-            20
-          ),
-
-        type_counts:
-          summaryEvents.typeCounts,
-
-        all_events:
-          summaryEvents.events.slice(
-            0,
-            50
-          )
-      },
-
-      match_statistics: {
-
-        endpoint:
-          `df_st_1_${matchId}`,
-
-        http_status:
-          statistics.status,
-
-        response_ms:
-          statistics.ms,
-
-        length:
-          statistics.text.length,
-
-        parsed:
-          buildDebugStatsSummary(
-            statistics.text
-          )
-      },
-
-      comparison,
-
-      conclusion:
-        comparison.stale_main_suspected
-          ? "STALE_MAIN_FEED_SUSPECTED"
-          : comparison.summary_has_goal
-            ? "SUMMARY_HAS_GOAL"
-            : "NO_STALE_SCORE_DETECTED",
-
-      raw:
-        includeRaw
-          ? {
-
-              main_match_raw:
-                mainMatch ||
-                null,
-
-              summary:
-                limitDebugText(
-                  summary.text,
-                  30000
-                ),
-
-              statistics:
-                limitDebugText(
-                  statistics.text,
-                  15000
-                )
-            }
-          : undefined
-    },
-    200,
-    corsHeaders
-  );
-}
-
-
-// =====================================================
-// DEBUG FETCH
-// =====================================================
-
-async function fetchDebugEndpoint(
-  url,
-  headers
-) {
-
-  const started =
-    Date.now();
-
-  try {
-
-    const separator =
-      url.includes("?")
-        ? "&"
-        : "?";
-
-    const response =
-      await fetch(
-        `${url}${separator}_=${Date.now()}`,
-        {
-          headers,
-          cache: "no-store"
-        }
-      );
-
-    const text =
-      await response.text();
-
-    return {
-
-      status:
-        response.status,
-
-      text,
-
-      ms:
-        Date.now() - started
-    };
-
-  } catch (error) {
-
-    return {
-
-      status:
-        0,
-
-      text:
-        "",
-
-      ms:
-        Date.now() - started,
-
-      error:
-        error?.message ||
-        String(error)
-    };
-  }
-}
-
-
-// =====================================================
-// DEBUG DF_SUI PARSER V2
-// =====================================================
-//
-// VERIFIED REAL FORMAT:
-//
-// IA÷2
-// IB÷21'
-// IE÷3
-// INX÷0
-// IOX÷1
-// IF÷Nusken S.
-// IK÷Goal
-// IM÷xODAAUJh
-//
-// IE÷8
-// IF÷Kaptein W.
-// IK÷Assistance
-// IM÷O21mPSNT
-//
-// IMPORTANT:
-//
-// IA IS NOT THE GOAL TYPE.
-//
-// IK IS THE EVENT KIND:
-//
-// IK÷Goal
-// IK÷Assistance
-// etc.
-//
-// Multiple IK entries can appear in the same main event.
-// Therefore each sub-event must be stored separately.
-// =====================================================
-
-function parseDebugSummaryEvents(
+function parseSummaryEvents(
   text
 ) {
 
@@ -2747,10 +2330,6 @@ function parseDebugSummaryEvents(
   const fields =
     String(text || "")
       .split("¬");
-
-  // ===================================================
-  // EVENT CONTEXT
-  // ===================================================
 
   let context = {
 
@@ -2769,10 +2348,6 @@ function parseDebugSummaryEvents(
     away_score:
       null
   };
-
-  // ===================================================
-  // CURRENT SUB EVENT
-  // ===================================================
 
   let current = {};
 
@@ -2863,26 +2438,18 @@ function parseDebugSummaryEvents(
       event
     );
 
-    const typeKey =
-      kind ||
-      "UNKNOWN";
-
     typeCounts[
-      typeKey
+      kind
     ] =
       (
         typeCounts[
-          typeKey
+          kind
         ] ||
         0
       ) + 1;
 
     current = {};
   }
-
-  // ===================================================
-  // SEQUENTIAL PARSER
-  // ===================================================
 
   for (
     const rawField of fields
@@ -2913,16 +2480,11 @@ function parseDebugSummaryEvents(
         i + 1
       );
 
-    // =================================================
-    // SECTION
-    // =================================================
-
     if (
       key === "AC"
     ) {
 
       if (current.IK) {
-
         finishCurrent();
       }
 
@@ -2934,16 +2496,11 @@ function parseDebugSummaryEvents(
       continue;
     }
 
-    // =================================================
-    // NEW MAIN EVENT
-    // =================================================
-
     if (
       key === "IA"
     ) {
 
       if (current.IK) {
-
         finishCurrent();
       }
 
@@ -2955,16 +2512,11 @@ function parseDebugSummaryEvents(
       continue;
     }
 
-    // =================================================
-    // MINUTE
-    // =================================================
-
     if (
       key === "IB"
     ) {
 
       if (current.IK) {
-
         finishCurrent();
       }
 
@@ -2975,10 +2527,6 @@ function parseDebugSummaryEvents(
 
       continue;
     }
-
-    // =================================================
-    // SCORE
-    // =================================================
 
     if (
       key === "INX"
@@ -3004,10 +2552,6 @@ function parseDebugSummaryEvents(
       continue;
     }
 
-    // =================================================
-    // NEW PARTICIPANT
-    // =================================================
-
     if (
       key === "IE" &&
       current.IK
@@ -3015,10 +2559,6 @@ function parseDebugSummaryEvents(
 
       finishCurrent();
     }
-
-    // =================================================
-    // STORE SUB EVENT
-    // =================================================
 
     if (
       key === "IE" ||
@@ -3038,10 +2578,6 @@ function parseDebugSummaryEvents(
     }
   }
 
-  // ===================================================
-  // FINAL SUB EVENT
-  // ===================================================
-
   if (
     current.IK
   ) {
@@ -3050,23 +2586,14 @@ function parseDebugSummaryEvents(
   }
 
   return {
-
     events,
-
     typeCounts
   };
 }
 
 
 // =====================================================
-// DEBUG EVENT HEURISTIC V2
-// =====================================================
-//
-// REAL GOAL:
-//
-// IK÷Goal
-//
-// IA MUST NOT BE USED FOR GOAL DETECTION.
+// GOAL EVENT CHECK
 // =====================================================
 
 function isLikelyGoalEvent(
@@ -3083,7 +2610,6 @@ function isLikelyGoalEvent(
       .toLowerCase();
 
   if (!kind) {
-
     return false;
   }
 
@@ -3114,55 +2640,418 @@ function isLikelyGoalEvent(
 
 
 // =====================================================
-// OLD DEBUG CHUNK PARSER
-// =====================================================
-//
-// Kept for compatibility/debugging.
-// V2 goal parser no longer depends on this function.
+// DEBUG FEED FRESHNESS V3
 // =====================================================
 
-function parseDebugChunk(
-  chunk
+async function debugFeedFreshness(
+  requestUrl,
+  mainUrl,
+  headers,
+  corsHeaders
 ) {
 
-  const raw = {};
+  const matchId =
+    String(
+      requestUrl.searchParams.get("matchId") ||
+      ""
+    ).trim();
 
-  for (
-    const field of
-    String(chunk || "")
-      .split("¬")
-  ) {
+  const includeRaw =
+    requestUrl.searchParams.get("raw") ===
+    "1";
 
-    if (!field) {
-      continue;
-    }
+  if (!matchId) {
 
-    const i =
-      field.indexOf("÷");
+    return json(
+      {
+        success: false,
+        debug: "FEED_FRESHNESS",
+        version:
+          "V3_SCORE_CROSSCHECK",
+        mode: "READ_ONLY",
+        error: "MATCH_ID_REQUIRED",
+        usage:
+          "/debug-feed-freshness?matchId=FLASHSCORE_MATCH_ID",
+        raw_usage:
+          "/debug-feed-freshness?matchId=FLASHSCORE_MATCH_ID&raw=1"
+      },
+      400,
+      corsHeaders
+    );
+  }
 
-    if (i === -1) {
-      continue;
-    }
+  const started =
+    Date.now();
 
-    const key =
-      field
-        .slice(0, i)
-        .replace(/^~/, "")
-        .trim();
+  const [
+    main,
+    summary,
+    statistics
+  ] =
+    await Promise.all([
+      fetchDebugEndpoint(
+        mainUrl,
+        headers
+      ),
 
-    const value =
-      field.slice(
-        i + 1
-      );
+      fetchDebugEndpoint(
+        `https://www.flashscore.com/x/feed/df_sui_1_${encodeURIComponent(matchId)}`,
+        headers
+      ),
 
-    if (key) {
+      fetchDebugEndpoint(
+        `https://www.flashscore.com/x/feed/df_st_1_${encodeURIComponent(matchId)}`,
+        headers
+      )
+    ]);
 
-      raw[key] =
-        value;
+  const parsedMain =
+    parse(main.text);
+
+  const mainMatch =
+    parsedMain.find(
+      item =>
+        String(item?.id || "") ===
+        matchId
+    ) || null;
+
+  const mainRaw =
+    mainMatch?.raw ||
+    {};
+
+  const mainScore = {
+
+    home:
+      toNumber(
+        mainRaw.AG
+      ),
+
+    away:
+      toNumber(
+        mainRaw.AH
+      )
+  };
+
+  const summaryEvents =
+    parseSummaryEvents(
+      summary.text
+    );
+
+  const goalEvents =
+    summaryEvents.events.filter(
+      isLikelyGoalEvent
+    );
+
+  let latestGoal =
+    null;
+
+  for (const goal of goalEvents) {
+
+    if (
+      goal.score &&
+      valid(goal.score.home) &&
+      valid(goal.score.away)
+    ) {
+
+      latestGoal =
+        goal;
     }
   }
 
-  return raw;
+  const summaryLatestScore =
+    latestGoal
+      ? {
+          home:
+            latestGoal.score.home,
+          away:
+            latestGoal.score.away
+        }
+      : null;
+
+  const mainTotal =
+    (
+      valid(mainScore.home)
+        ? mainScore.home
+        : 0
+    ) +
+    (
+      valid(mainScore.away)
+        ? mainScore.away
+        : 0
+    );
+
+  const summaryTotal =
+    summaryLatestScore
+      ? summaryLatestScore.home +
+        summaryLatestScore.away
+      : 0;
+
+  const scoreMismatch =
+    Boolean(
+      summaryLatestScore &&
+      (
+        summaryLatestScore.home !==
+          mainScore.home ||
+        summaryLatestScore.away !==
+          mainScore.away
+      )
+    );
+
+  const mainFeedBehind =
+    Boolean(
+      summaryLatestScore &&
+      summaryTotal > mainTotal
+    );
+
+  const comparison = {
+
+    main_match_found:
+      Boolean(mainMatch),
+
+    main_score:
+      mainScore,
+
+    summary_latest_score:
+      summaryLatestScore,
+
+    summary_goal_count:
+      goalEvents.length,
+
+    latest_goal_minute:
+      latestGoal?.minute ||
+      null,
+
+    score_mismatch:
+      scoreMismatch,
+
+    main_feed_behind:
+      mainFeedBehind,
+
+    stale_main_suspected:
+      mainFeedBehind
+  };
+
+  return json(
+    {
+      success: true,
+
+      debug:
+        "FEED_FRESHNESS",
+
+      version:
+        "V3_SCORE_CROSSCHECK",
+
+      mode:
+        "READ_ONLY",
+
+      match_id:
+        matchId,
+
+      checked_at:
+        new Date().toISOString(),
+
+      processing_ms:
+        Date.now() - started,
+
+      main_feed: {
+
+        endpoint:
+          "f_1_0_3_en_1",
+
+        http_status:
+          main.status,
+
+        response_ms:
+          main.ms,
+
+        length:
+          main.text.length,
+
+        match_found:
+          Boolean(mainMatch),
+
+        match:
+          mainMatch
+            ? `${mainRaw.AE || ""} - ${mainRaw.AF || ""}`
+            : null,
+
+        league:
+          mainMatch?.league ||
+          null,
+
+        score:
+          mainScore,
+
+        raw_time_fields: {
+          AB:
+            mainRaw.AB ??
+            null,
+          AC:
+            mainRaw.AC ??
+            null,
+          AO:
+            mainRaw.AO ??
+            null,
+          BC:
+            mainRaw.BC ??
+            null,
+          BD:
+            mainRaw.BD ??
+            null
+        }
+      },
+
+      match_summary_events: {
+
+        endpoint:
+          `df_sui_1_${matchId}`,
+
+        http_status:
+          summary.status,
+
+        response_ms:
+          summary.ms,
+
+        length:
+          summary.text.length,
+
+        parsed_event_count:
+          summaryEvents.events.length,
+
+        likely_goal_count:
+          goalEvents.length,
+
+        latest_goal:
+          latestGoal,
+
+        goals:
+          goalEvents.slice(
+            0,
+            20
+          ),
+
+        type_counts:
+          summaryEvents.typeCounts,
+
+        all_events:
+          summaryEvents.events.slice(
+            0,
+            50
+          )
+      },
+
+      match_statistics: {
+
+        endpoint:
+          `df_st_1_${matchId}`,
+
+        http_status:
+          statistics.status,
+
+        response_ms:
+          statistics.ms,
+
+        length:
+          statistics.text.length,
+
+        parsed:
+          buildDebugStatsSummary(
+            statistics.text
+          )
+      },
+
+      comparison,
+
+      conclusion:
+        mainFeedBehind
+          ? "MAIN_FEED_SCORE_STALE"
+          : scoreMismatch
+            ? "SCORE_MISMATCH_REVIEW"
+            : goalEvents.length > 0
+              ? "SOURCES_AGREE_GOAL"
+              : "NO_STALE_SCORE_DETECTED",
+
+      raw:
+        includeRaw
+          ? {
+
+              main_match_raw:
+                mainMatch ||
+                null,
+
+              summary:
+                limitDebugText(
+                  summary.text,
+                  30000
+                ),
+
+              statistics:
+                limitDebugText(
+                  statistics.text,
+                  15000
+                )
+            }
+          : undefined
+    },
+    200,
+    corsHeaders
+  );
+}
+
+
+// =====================================================
+// DEBUG FETCH
+// =====================================================
+
+async function fetchDebugEndpoint(
+  url,
+  headers
+) {
+
+  const started =
+    Date.now();
+
+  try {
+
+    const separator =
+      url.includes("?")
+        ? "&"
+        : "?";
+
+    const response =
+      await fetch(
+        `${url}${separator}_=${Date.now()}`,
+        {
+          headers,
+          cache: "no-store"
+        }
+      );
+
+    const text =
+      await response.text();
+
+    return {
+      status:
+        response.status,
+      text,
+      ms:
+        Date.now() - started
+    };
+
+  } catch (error) {
+
+    return {
+      status:
+        0,
+      text:
+        "",
+      ms:
+        Date.now() - started,
+      error:
+        error?.message ||
+        String(error)
+    };
+  }
 }
 
 
@@ -3180,45 +3069,84 @@ function buildDebugStatsSummary(
     );
 
   return {
-
     xg:
       parsed.xg,
-
     xgot:
       parsed.xgot,
-
     xa:
       parsed.xa,
-
     occurrences:
       parsed.occurrences,
-
     shots:
-      parsed.stats
-        ?.shots ||
+      parsed.stats?.shots ||
       null,
-
     shots_on_target:
-      parsed.stats
-        ?.shots_on_target ||
+      parsed.stats?.shots_on_target ||
       null,
-
     big_chances:
-      parsed.stats
-        ?.big_chances ||
+      parsed.stats?.big_chances ||
       null,
-
     corners:
-      parsed.stats
-        ?.corners ||
+      parsed.stats?.corners ||
       null
   };
 }
 
 
 // =====================================================
-// DEBUG HELPERS
+// HELPERS
 // =====================================================
+
+function valid(v) {
+
+  return (
+    typeof v === "number" &&
+    Number.isFinite(v)
+  );
+}
+
+
+function toNumber(v) {
+
+  if (
+    v === undefined ||
+    v === null ||
+    v === ""
+  )
+    return null;
+
+  const n =
+    Number(v);
+
+  return Number.isFinite(n)
+    ? n
+    : null;
+}
+
+
+function round(
+  v,
+  decimals = 2
+) {
+
+  if (
+    !Number.isFinite(v)
+  )
+    return 0;
+
+  const p =
+    Math.pow(
+      10,
+      decimals
+    );
+
+  return (
+    Math.round(
+      v * p
+    ) / p
+  );
+}
+
 
 function compactDebugRaw(
   raw
@@ -3289,5 +3217,48 @@ function limitDebugText(
       maxLength
     ) +
     `\n...[TRUNCATED ${text.length - maxLength} chars]`
+  );
+}
+
+
+// =====================================================
+// JSON RESPONSE + CORS
+// =====================================================
+
+function json(
+  data,
+  status = 200,
+  corsHeaders = {}
+) {
+
+  return new Response(
+
+    JSON.stringify(
+      data,
+      null,
+      2
+    ),
+
+    {
+
+      status,
+
+      headers: {
+
+        "Content-Type":
+          "application/json; charset=utf-8",
+
+        "Cache-Control":
+          "no-store, no-cache, must-revalidate",
+
+        "Pragma":
+          "no-cache",
+
+        "Expires":
+          "0",
+
+        ...corsHeaders
+      }
+    }
   );
 }
