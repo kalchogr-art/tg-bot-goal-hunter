@@ -68,14 +68,14 @@
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // created_at / updated_at / entry_time are stored as UTC ISO.
 // Statistics are calculated according to Europe/Sofia.
-// V6.7.9.9: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
+// V6.7.10.0: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
 // ============================================================
 
 const HUNTER_FROM = 5;
 const HUNTER_TO = 42;
 const HUNTER_MIN_SCORE = 60;
 
-// V6.7.9.9 LIVE HUNTER FILTER
+// V6.7.10.0 LIVE HUNTER FILTER
 // 5–9   => 65+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
 // 10–19 => 60+
 // 20–24 => 65+
@@ -91,7 +91,7 @@ const DAILY_REPORT_WINDOW_MINUTES = 10;
 // Theoretical reporting stake per signal. Change only this value if needed.
 const REPORT_STAKE = 10;
 
-// V6.7.9.9 REPORT FILTER
+// V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
 // A normal row enters statistics only after a real entry odds is captured
 // and only if it passes the same dynamic Score threshold used for live ENTRY.
@@ -105,6 +105,12 @@ const REPORT_ELIGIBLE_SQL = `
     OR (entry_minute BETWEEN 30 AND 34 AND hunter_score >= 75)
     OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 80)
   )
+`;
+
+// /stats HUNTER HISTORY: keep the complete historical Hunter sample.
+// Odds are NOT required here. Shadow 5–9 remains excluded from normal history.
+const HUNTER_HISTORY_SQL = `
+  entry_minute BETWEEN 10 AND 42
 `;
 
 // V6.7.4 matcher retry: same strict matcher rules, no relaxed names.
@@ -4020,7 +4026,7 @@ async function getMonthlyStats(
 
         WHERE created_at >= ?
           AND created_at < ?
-          AND ${REPORT_ELIGIBLE_SQL}
+          AND ${HUNTER_HISTORY_SQL}
       `)
       .bind(
         bounds.start,
@@ -4094,7 +4100,7 @@ async function getMonthlyHistory(
         SELECT created_at
         FROM hunter_signals
         WHERE created_at IS NOT NULL
-          AND ${REPORT_ELIGIBLE_SQL}
+          AND ${HUNTER_HISTORY_SQL}
       `)
       .all();
 
@@ -4384,7 +4390,7 @@ async function getCurrentMonthDetails(
 
         WHERE created_at >= ?
           AND created_at < ?
-          AND ${REPORT_ELIGIBLE_SQL}
+          AND ${HUNTER_HISTORY_SQL}
 
         GROUP BY score_group
 
@@ -4449,7 +4455,7 @@ async function getCurrentMonthDetails(
 
         WHERE created_at >= ?
           AND created_at < ?
-          AND ${REPORT_ELIGIBLE_SQL}
+          AND ${HUNTER_HISTORY_SQL}
           AND entry_minute BETWEEN 10 AND 42
 
         GROUP BY minute_group
@@ -4480,7 +4486,7 @@ async function getCurrentMonthDetails(
         FROM hunter_signals
         WHERE created_at >= ?
           AND created_at < ?
-          AND ${REPORT_ELIGIBLE_SQL}
+          AND ${HUNTER_HISTORY_SQL}
       `)
       .bind(
         bounds.start,
@@ -4530,7 +4536,7 @@ async function getCurrentMonthDetails(
 
         WHERE created_at >= ?
           AND created_at < ?
-          AND ${REPORT_ELIGIBLE_SQL}
+          AND ${HUNTER_HISTORY_SQL}
           AND league IS NOT NULL
           AND TRIM(league) <> ''
           AND UPPER(TRIM(league)) <> 'LIVE'
@@ -4912,6 +4918,78 @@ function buildHourMinuteRows(
 // ============================================================
 // DAILY MINUTE STATS
 // ============================================================
+
+async function getHunterMinuteStatsForBounds(env, bounds) {
+  if (!bounds) return [];
+
+  const result = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_minute BETWEEN 10 AND 19 THEN '10–19′'
+          WHEN entry_minute BETWEEN 20 AND 24 THEN '20–24′'
+          WHEN entry_minute BETWEEN 25 AND 29 THEN '25–29′'
+          WHEN entry_minute BETWEEN 30 AND 34 THEN '30–34′'
+          WHEN entry_minute BETWEEN 35 AND 42 THEN '35–42′'
+        END AS minute_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${HUNTER_HISTORY_SQL}
+      GROUP BY minute_group
+      ORDER BY CASE minute_group
+        WHEN '10–19′' THEN 1
+        WHEN '20–24′' THEN 2
+        WHEN '25–29′' THEN 3
+        WHEN '30–34′' THEN 4
+        WHEN '35–42′' THEN 5
+      END
+    `)
+    .bind(bounds.start, bounds.end)
+    .all();
+
+  return result?.results || [];
+}
+
+function formatHunterMinuteStats(rows) {
+  const map = new Map((rows || []).map(row => [row.minute_group, row]));
+  let text = '';
+  for (const group of ENTRY_MINUTE_GROUPS) {
+    const row = map.get(group.label);
+    const total = Number(row?.total || 0);
+    const goals = Number(row?.goals || 0);
+    const noGoals = Number(row?.no_goals || 0);
+    const resolved = goals + noGoals;
+    const rate = resolved > 0 ? goals / resolved * 100 : 0;
+    if (!total) text += `${group.label}: 0 ENTRY\n`;
+    else text += `${group.label}: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%\n`;
+  }
+  return text;
+}
+
+async function getOddsStatsForBounds(env, bounds) {
+  if (!bounds) return null;
+  return await env.DB.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+      AVG(entry_odds) AS avg_entry_odds,
+      SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+      SUM(CASE
+        WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+        WHEN result = 'NO GOAL' THEN -?
+        ELSE 0
+      END) AS profit_loss
+    FROM hunter_signals
+    WHERE created_at >= ?
+      AND created_at < ?
+      AND ${REPORT_ELIGIBLE_SQL}
+  `).bind(REPORT_STAKE, REPORT_STAKE, bounds.start, bounds.end).first();
+}
 
 async function getMinuteStatsForBounds(
   env,
@@ -5390,6 +5468,9 @@ async function buildStats(env) {
       currentMonth
     );
 
+  const currentMonthBounds = getSofiaMonthUtcBounds(currentMonth);
+  const currentOddsStats = await getOddsStatsForBounds(env, currentMonthBounds);
+
 
   const dailyBounds =
     getSofiaDayUtcBounds(
@@ -5433,7 +5514,7 @@ async function buildStats(env) {
 
             WHERE created_at >= ?
               AND created_at < ?
-              AND ${REPORT_ELIGIBLE_SQL}
+              AND ${HUNTER_HISTORY_SQL}
           `)
           .bind(
             dailyBounds.start,
@@ -5444,7 +5525,7 @@ async function buildStats(env) {
 
 
   const dailyMinuteRows =
-    await getMinuteStatsForBounds(
+    await getHunterMinuteStatsForBounds(
       env,
       dailyBounds
     );
@@ -5655,7 +5736,7 @@ async function buildStats(env) {
 
 
   message +=
-    formatMinuteStats(
+    formatHunterMinuteStats(
       currentDetails.minuteRows
     );
 
@@ -5838,6 +5919,30 @@ async function buildStats(env) {
   }
 
 
+  const oddsTotal = Number(currentOddsStats?.total || 0);
+  const oddsGoals = Number(currentOddsStats?.goals || 0);
+  const oddsNoGoals = Number(currentOddsStats?.no_goals || 0);
+  const oddsResolved = oddsGoals + oddsNoGoals;
+  const oddsRate = oddsResolved > 0 ? oddsGoals / oddsResolved * 100 : 0;
+  const oddsAvg = numberOrNull(currentOddsStats?.avg_entry_odds);
+  const oddsBets = Number(currentOddsStats?.financial_bets || 0);
+  const oddsPL = Number(currentOddsStats?.profit_loss || 0);
+  const oddsROI = oddsBets > 0 ? oddsPL / (oddsBets * REPORT_STAKE) * 100 : null;
+
+  message += `
+━━━━━━━━━━━━━━━━
+💰 ${formatMonthLabel(currentMonth)} — ODDS / BET STATISTICS
+━━━━━━━━━━━━━━━━
+🎯 Qualified: ${oddsTotal}
+🟢 GOAL: ${oddsGoals} | 🔴 NO GOAL: ${oddsNoGoals}
+📈 Success: ${oddsRate.toFixed(1)}%
+🎲 Avg odds: ${oddsAvg !== null ? oddsAvg.toFixed(2) : '—'}
+💶 P/L: ${oddsBets > 0 ? (oddsPL >= 0 ? '+' : '') + oddsPL.toFixed(2) + ' EUR' : '—'}
+📈 ROI: ${oddsROI !== null ? (oddsROI >= 0 ? '+' : '') + oddsROI.toFixed(1) + '%' : '—'}
+🎟 bets: ${oddsBets}
+🎯 Filter: entry_odds > 1 + Score 60/65/70/75/80
+`;
+
   message +=
 `
 ━━━━━━━━━━━━━━━━
@@ -5866,13 +5971,13 @@ ${
 ━━━━━━━━━━━━━━━━
 ⏱ ДНЕС — ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
-${formatMinuteStats(
+${formatHunterMinuteStats(
   dailyMinuteRows
 )}
 ━━━━━━━━━━━━━━━━
 💾 Данните са от hunter_signals
-🎲 Филтър: само entry_odds > 1
-🔥 Score: 61 / 65 / 68 / 72 / 75 според минутата
+📚 Hunter history: всички нормални ENTRY 10–42′
+💰 Odds/ROI: отделно само entry_odds > 1 + Score 60/65/70/75/80
 🕐 Daily timezone: Europe/Sofia
 📊 Месеците се изчисляват по Europe/Sofia
 ━━━━━━━━━━━━━━━━
@@ -6013,7 +6118,7 @@ async function buildHourMinuteStatsMessage(
 
   message +=
 `💾 hunter_signals
-🎲 Само мачове с entry odds + динамичен Score filter
+📚 Всички Hunter ENTRY 10–42′ (без shadow 5–9′)
 🕐 Europe/Sofia`;
 
 
@@ -6224,7 +6329,7 @@ async function sendDailyReport(
       : null;
 
 
-  // V6.7.9.9: the automatic midnight report uses the exact same
+  // V6.7.10.0: the automatic midnight report uses the exact same
   // formatter, filters and minute/score groups as /today.
   const message = await buildTodayStats(
     env,
