@@ -47,6 +47,36 @@ export default {
         "no-cache"
     };
 
+    // =================================================
+    // DEBUG FEED FRESHNESS
+    // =================================================
+    //
+    // READ ONLY. Runs ONLY when called manually:
+    // /debug-feed-freshness?matchId=XXXXXXXX
+    // /debug-feed-freshness?matchId=XXXXXXXX&raw=1
+    //
+    // Compares:
+    // - main live feed f_1_0_3_en_1
+    // - match summary/events df_sui_1_<ID>
+    // - match statistics df_st_1_<ID>
+    // =================================================
+
+    const requestUrl =
+      new URL(request.url);
+
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/debug-feed-freshness"
+    ) {
+
+      return debugFeedFreshness(
+        requestUrl,
+        MAIN_URL,
+        headers,
+        corsHeaders
+      );
+    }
+
     try {
 
       // =================================================
@@ -2394,5 +2424,638 @@ function json(
         ...corsHeaders
       }
     }
+  );
+}
+// =====================================================
+// DEBUG: FEED FRESHNESS COMPARISON
+// =====================================================
+//
+// READ ONLY.
+// No production behavior is changed.
+// =====================================================
+
+async function debugFeedFreshness(
+  requestUrl,
+  mainUrl,
+  headers,
+  corsHeaders
+) {
+
+  const matchId =
+    String(
+      requestUrl.searchParams.get("matchId") ||
+      ""
+    ).trim();
+
+  const includeRaw =
+    requestUrl.searchParams.get("raw") ===
+    "1";
+
+  if (!matchId) {
+
+    return json(
+      {
+        success: false,
+        debug: "FEED_FRESHNESS",
+        mode: "READ_ONLY",
+        error: "MATCH_ID_REQUIRED",
+        usage:
+          "/debug-feed-freshness?matchId=FLASHCORE_MATCH_ID",
+        raw_usage:
+          "/debug-feed-freshness?matchId=FLASHCORE_MATCH_ID&raw=1"
+      },
+      400,
+      corsHeaders
+    );
+  }
+
+  const started =
+    Date.now();
+
+  const [
+    main,
+    summary,
+    statistics
+  ] =
+    await Promise.all([
+      fetchDebugEndpoint(
+        mainUrl,
+        headers
+      ),
+      fetchDebugEndpoint(
+        `https://www.flashscore.com/x/feed/df_sui_1_${encodeURIComponent(matchId)}`,
+        headers
+      ),
+      fetchDebugEndpoint(
+        `https://www.flashscore.com/x/feed/df_st_1_${encodeURIComponent(matchId)}`,
+        headers
+      )
+    ]);
+
+  const parsedMain =
+    parse(main.text);
+
+  const mainMatch =
+    parsedMain.find(
+      item =>
+        String(item?.id || "") ===
+        matchId
+    ) || null;
+
+  const mainRaw =
+    mainMatch?.raw ||
+    {};
+
+  const mainScore = {
+    home:
+      toNumber(
+        mainRaw.AG
+      ),
+
+    away:
+      toNumber(
+        mainRaw.AH
+      )
+  };
+
+  const mainZeroZero =
+    mainScore.home === 0 &&
+    mainScore.away === 0;
+
+  const summaryEvents =
+    parseDebugSummaryEvents(
+      summary.text
+    );
+
+  const goalEvents =
+    summaryEvents.events.filter(
+      event =>
+        isLikelyGoalEvent(event)
+    );
+
+  const comparison = {
+
+    main_match_found:
+      Boolean(mainMatch),
+
+    main_says_zero_zero:
+      mainZeroZero,
+
+    summary_has_goal:
+      goalEvents.length > 0,
+
+    stale_main_suspected:
+      mainZeroZero &&
+      goalEvents.length > 0
+  };
+
+  return json(
+    {
+      success: true,
+
+      debug:
+        "FEED_FRESHNESS",
+
+      version:
+        "V1",
+
+      mode:
+        "READ_ONLY",
+
+      match_id:
+        matchId,
+
+      checked_at:
+        new Date().toISOString(),
+
+      processing_ms:
+        Date.now() - started,
+
+      main_feed: {
+
+        endpoint:
+          "f_1_0_3_en_1",
+
+        http_status:
+          main.status,
+
+        response_ms:
+          main.ms,
+
+        length:
+          main.text.length,
+
+        match_found:
+          Boolean(mainMatch),
+
+        match:
+          mainMatch
+            ? `${mainRaw.AE || ""} - ${mainRaw.AF || ""}`
+            : null,
+
+        league:
+          mainMatch?.league ||
+          null,
+
+        score:
+          mainScore,
+
+        raw_time_fields: {
+
+          AB:
+            mainRaw.AB ??
+            null,
+
+          AC:
+            mainRaw.AC ??
+            null,
+
+          AO:
+            mainRaw.AO ??
+            null,
+
+          BC:
+            mainRaw.BC ??
+            null,
+
+          BD:
+            mainRaw.BD ??
+            null
+        }
+      },
+
+      match_summary_events: {
+
+        endpoint:
+          `df_sui_1_${matchId}`,
+
+        http_status:
+          summary.status,
+
+        response_ms:
+          summary.ms,
+
+        length:
+          summary.text.length,
+
+        parsed_event_count:
+          summaryEvents.events.length,
+
+        likely_goal_count:
+          goalEvents.length,
+
+        goals:
+          goalEvents.slice(
+            0,
+            20
+          ),
+
+        type_counts:
+          summaryEvents.typeCounts
+      },
+
+      match_statistics: {
+
+        endpoint:
+          `df_st_1_${matchId}`,
+
+        http_status:
+          statistics.status,
+
+        response_ms:
+          statistics.ms,
+
+        length:
+          statistics.text.length,
+
+        parsed:
+          buildDebugStatsSummary(
+            statistics.text
+          )
+      },
+
+      comparison,
+
+      conclusion:
+        comparison.stale_main_suspected
+          ? "STALE_MAIN_FEED_SUSPECTED"
+          : comparison.summary_has_goal
+            ? "SUMMARY_HAS_GOAL"
+            : "NO_STALE_SCORE_DETECTED",
+
+      raw:
+        includeRaw
+          ? {
+              main_match_raw:
+                mainMatch ||
+                null,
+
+              summary:
+                limitDebugText(
+                  summary.text,
+                  30000
+                ),
+
+              statistics:
+                limitDebugText(
+                  statistics.text,
+                  15000
+                )
+            }
+          : undefined
+    },
+    200,
+    corsHeaders
+  );
+}
+
+
+// =====================================================
+// DEBUG FETCH
+// =====================================================
+
+async function fetchDebugEndpoint(
+  url,
+  headers
+) {
+
+  const started =
+    Date.now();
+
+  try {
+
+    const separator =
+      url.includes("?")
+        ? "&"
+        : "?";
+
+    const response =
+      await fetch(
+        `${url}${separator}_=${Date.now()}`,
+        {
+          headers,
+          cache: "no-store"
+        }
+      );
+
+    const text =
+      await response.text();
+
+    return {
+
+      status:
+        response.status,
+
+      text,
+
+      ms:
+        Date.now() - started
+    };
+
+  } catch (error) {
+
+    return {
+
+      status:
+        0,
+
+      text:
+        "",
+
+      ms:
+        Date.now() - started,
+
+      error:
+        error?.message ||
+        String(error)
+    };
+  }
+}
+
+
+// =====================================================
+// DEBUG DF_SUI PARSER
+// =====================================================
+//
+// We intentionally expose raw IA/IB-style fields.
+// First live tests will confirm the exact goal event mapping
+// before this is ever used as a production guard.
+// =====================================================
+
+function parseDebugSummaryEvents(
+  text
+) {
+
+  const events = [];
+  const typeCounts = {};
+
+  const chunks =
+    String(text || "")
+      .split("~");
+
+  for (
+    const chunk of chunks
+  ) {
+
+    const raw =
+      parseDebugChunk(
+        chunk
+      );
+
+    const type =
+      cleanDebugValue(
+        raw.IA
+      );
+
+    const minute =
+      cleanDebugValue(
+        raw.IB
+      );
+
+    if (
+      !type &&
+      !minute
+    ) {
+      continue;
+    }
+
+    const typeKey =
+      type ||
+      "UNKNOWN";
+
+    typeCounts[
+      typeKey
+    ] =
+      (
+        typeCounts[
+          typeKey
+        ] ||
+        0
+      ) + 1;
+
+    events.push({
+
+      type,
+
+      minute,
+
+      participant:
+        raw.IE ||
+        raw.IF ||
+        raw.IH ||
+        null,
+
+      score:
+        raw.IJ ||
+        raw.IK ||
+        raw.IL ||
+        null,
+
+      raw:
+        compactDebugRaw(
+          raw
+        )
+    });
+  }
+
+  return {
+    events,
+    typeCounts
+  };
+}
+
+
+// =====================================================
+// DEBUG EVENT HEURISTIC
+// =====================================================
+//
+// IA=1 is a commonly observed goal marker in df_sui.
+// This remains diagnostic ONLY until verified on live output.
+// =====================================================
+
+function isLikelyGoalEvent(
+  event
+) {
+
+  return (
+    String(
+      event?.type ||
+      ""
+    ) === "1"
+  );
+}
+
+
+// =====================================================
+// DEBUG CHUNK PARSER
+// =====================================================
+
+function parseDebugChunk(
+  chunk
+) {
+
+  const raw = {};
+
+  for (
+    const field of
+    String(chunk || "")
+      .split("¬")
+  ) {
+
+    if (!field) {
+      continue;
+    }
+
+    const i =
+      field.indexOf("÷");
+
+    if (i === -1) {
+      continue;
+    }
+
+    const key =
+      field
+        .slice(0, i)
+        .replace(/^~/, "")
+        .trim();
+
+    const value =
+      field.slice(
+        i + 1
+      );
+
+    if (key) {
+      raw[key] =
+        value;
+    }
+  }
+
+  return raw;
+}
+
+
+// =====================================================
+// DEBUG STATS SUMMARY
+// =====================================================
+
+function buildDebugStatsSummary(
+  text
+) {
+
+  const parsed =
+    parseStatistics(
+      String(text || "")
+    );
+
+  return {
+
+    xg:
+      parsed.xg,
+
+    xgot:
+      parsed.xgot,
+
+    xa:
+      parsed.xa,
+
+    occurrences:
+      parsed.occurrences,
+
+    shots:
+      parsed.stats
+        ?.shots ||
+      null,
+
+    shots_on_target:
+      parsed.stats
+        ?.shots_on_target ||
+      null,
+
+    big_chances:
+      parsed.stats
+        ?.big_chances ||
+      null,
+
+    corners:
+      parsed.stats
+        ?.corners ||
+      null
+  };
+}
+
+
+// =====================================================
+// DEBUG HELPERS
+// =====================================================
+
+function compactDebugRaw(
+  raw
+) {
+
+  const out = {};
+
+  for (
+    const [
+      key,
+      value
+    ] of Object.entries(
+      raw || {}
+    )
+  ) {
+
+    if (
+      value !== "" &&
+      value !== null &&
+      value !== undefined
+    ) {
+
+      out[key] =
+        value;
+    }
+  }
+
+  return out;
+}
+
+
+function cleanDebugValue(
+  value
+) {
+
+  const text =
+    String(
+      value ??
+      ""
+    ).trim();
+
+  return text || null;
+}
+
+
+function limitDebugText(
+  value,
+  maxLength
+) {
+
+  const text =
+    String(
+      value ||
+      ""
+    );
+
+  if (
+    text.length <=
+    maxLength
+  ) {
+
+    return text;
+  }
+
+  return (
+    text.slice(
+      0,
+      maxLength
+    ) +
+    `\n...[TRUNCATED ${text.length - maxLength} chars]`
   );
 }
