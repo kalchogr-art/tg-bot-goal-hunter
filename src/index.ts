@@ -1,5 +1,5 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.1 DF_SUI GOAL VERIFY
+// GOAL WATCH — HUNTER TRACKER V6.7.10.2 ODDS REACTIVATION + DF_SUI
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -78,6 +78,12 @@
 // - Existing V27 score increase remains as fallback.
 // - Telegram GOAL HIT shows the confirmation source.
 // - NO_GOAL/report/matcher/bet logic is unchanged.
+// V6.7.10.2 ODDS REACTIVATION:
+// - /internal/odds-found atomically saves event_id + entry_odds + odds_available=1.
+// - /entries exposes READY_TO_BET immediately after that save.
+// - No new matcher is called; the SAME locked Cloudbet event_id is preserved.
+// - Adds top-level bet_ready / bet_status / entry_odds / cloudbet_event_id for consumers.
+// - TRACKING remains the football result-tracking status; betting readiness is separate.
 // ============================================================
 
 const HUNTER_FROM = 5;
@@ -460,11 +466,59 @@ export default {
                   )
                 : null;
 
+            // V6.7.10.2:
+            // Betting readiness is independent from football TRACKING status.
+            // As soon as /internal/odds-found stores the real odds, /entries
+            // must expose the signal as READY_TO_BET on the very next read.
+            const readyEventId =
+              row?.cloudbet_event_id !== null &&
+              row?.cloudbet_event_id !== undefined &&
+              String(row.cloudbet_event_id).trim() !== "";
+
+            const readyEntryOdds =
+              numberOrNull(
+                row?.entry_odds
+              );
+
+            const readyOddsAvailable =
+              Number(
+                row?.odds_available || 0
+              ) === 1 ||
+              (
+                readyEntryOdds !== null &&
+                readyEntryOdds > 1
+              );
+
+            const betReady =
+              readyEventId &&
+              readyOddsAvailable &&
+              readyEntryOdds !== null &&
+              readyEntryOdds > 1;
+
             return {
             type: "HUNTER_ENTRY",
             signal: "HUNTER_ENTRY",
             action: "ENTRY",
             status: "TRACKING",
+
+            // V6.7.10.2 — explicit betting state for dashboard / Bet Worker.
+            bet_ready:
+              betReady,
+            bet_status:
+              betReady
+                ? "READY_TO_BET"
+                : (
+                    readyEventId
+                      ? "WAITING_ODDS"
+                      : "UNMATCHED"
+                  ),
+            cloudbet_event_id:
+              row?.cloudbet_event_id ?? null,
+            entry_odds:
+              readyEntryOdds,
+            odds_available:
+              readyOddsAvailable,
+
             id: row?.id ?? null,
             match_id: row?.match_id ?? null,
             match_name: row?.match_name ?? "",
@@ -613,7 +667,12 @@ export default {
                   COALESCE(?, cloudbet_match),
                 updated_at = ?
               WHERE match_id = ?
+                AND status = 'TRACKING'
                 AND entry_odds IS NULL
+                AND (
+                  cloudbet_event_id IS NULL
+                  OR cloudbet_event_id = ?
+                )
             `)
             .bind(
               eventId,
@@ -624,7 +683,8 @@ export default {
               body?.cloudbet_match ??
               null,
               nowIso,
-              matchId
+              matchId,
+              eventId
             )
             .run();
 
@@ -736,7 +796,7 @@ export default {
               eventId,
 
             "",
-            "✅ PENDING → ODDS FOUND"
+            "✅ PENDING → READY_TO_BET\n🟢 Сигналът е АКТИВЕН"
           ]
             .filter(
               value =>
@@ -764,6 +824,14 @@ export default {
           event_id:
             eventId,
           odds,
+          bet_ready:
+            true,
+          bet_status:
+            "READY_TO_BET",
+          odds_available:
+            true,
+          activation:
+            "IMMEDIATE_ON_NEXT_ENTRIES_READ",
           reply_to:
             row?.telegram_message_id ??
             null,
