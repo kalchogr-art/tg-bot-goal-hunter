@@ -51,14 +51,21 @@ export default {
     // DEBUG FEED FRESHNESS
     // =================================================
     //
-    // READ ONLY. Runs ONLY when called manually:
+    // READ ONLY.
+    //
     // /debug-feed-freshness?matchId=XXXXXXXX
     // /debug-feed-freshness?matchId=XXXXXXXX&raw=1
     //
     // Compares:
-    // - main live feed f_1_0_3_en_1
-    // - match summary/events df_sui_1_<ID>
-    // - match statistics df_st_1_<ID>
+    // - main live feed
+    // - df_sui match events
+    // - df_st match statistics
+    //
+    // V2 FIX:
+    // - IA is NOT treated as event type
+    // - IK÷Goal is the real goal marker
+    // - Goal + Assistance inside same event are separated
+    // - INX / IOX parsed as score
     // =================================================
 
     const requestUrl =
@@ -107,7 +114,6 @@ export default {
           503,
           corsHeaders
         );
-
       }
 
       // =================================================
@@ -130,12 +136,7 @@ export default {
       const output = [];
 
       // =================================================
-      // FIX: ONE TIME SNAPSHOT FOR THE WHOLE FEED
-      // =================================================
-      //
-      // All matches from this Flashscore feed are evaluated
-      // against the SAME unix second. This prevents matches
-      // processed later from gaining 1-3 artificial minutes.
+      // ONE TIME SNAPSHOT
       // =================================================
 
       const snapshotUnix =
@@ -144,16 +145,7 @@ export default {
         );
 
       // =================================================
-      // FIX: FETCH STATISTICS IN PARALLEL BATCHES
-      // =================================================
-      //
-      // Old behavior:
-      // match 1 -> await -> match 2 -> await -> ...
-      //
-      // New behavior:
-      // 10 matches in parallel, then the next 10.
-      //
-      // Hunter logic is NOT changed.
+      // FETCH STATISTICS IN PARALLEL BATCHES
       // =================================================
 
       const STATISTICS_BATCH_SIZE =
@@ -215,7 +207,7 @@ export default {
           scoreAway === 0;
 
         // =================================================
-        // FLASHscore STATISTICS
+        // STATISTICS
         // =================================================
 
         const statistics =
@@ -502,7 +494,7 @@ export default {
           });
 
         // =================================================
-        // XG / MINUTE
+        // DERIVED
         // =================================================
 
         const xgPerMinute =
@@ -514,10 +506,6 @@ export default {
               )
             : 0;
 
-        // =================================================
-        // PROJECTED 90 XG
-        // =================================================
-
         const projected90XG =
           valid(xgTotal) &&
           minute > 0
@@ -527,10 +515,6 @@ export default {
               )
             : 0;
 
-        // =================================================
-        // SHOTS / MINUTE
-        // =================================================
-
         const shotsPerMinute =
           minute > 0
             ? round(
@@ -538,10 +522,6 @@ export default {
                 3
               )
             : 0;
-
-        // =================================================
-        // SOT / MINUTE
-        // =================================================
 
         const shotsOnTargetPerMinute =
           minute > 0
@@ -551,10 +531,6 @@ export default {
               )
             : 0;
 
-        // =================================================
-        // CORNERS / MINUTE
-        // =================================================
-
         const cornersPerMinute =
           minute > 0
             ? round(
@@ -562,10 +538,6 @@ export default {
                 3
               )
             : 0;
-
-        // =================================================
-        // BOX TOUCHES / MINUTE
-        // =================================================
 
         const boxTouchesPerMinute =
           minute > 0
@@ -587,13 +559,9 @@ export default {
           match:
             `${r.AE || ""} - ${r.AF || ""}`,
 
-          // LEAGUE
-
           league:
             match.league ||
             "LIVE",
-
-          // TIME
 
           minute,
 
@@ -607,8 +575,6 @@ export default {
 
           time_debug:
             timeInfo.debug,
-
-          // SCORE
 
           score: {
 
@@ -625,8 +591,6 @@ export default {
               isZeroZero
           },
 
-          // XG
-
           xg: {
 
             home:
@@ -642,8 +606,6 @@ export default {
           xg_share:
             xgShare,
 
-          // XGOT
-
           xgot: {
 
             home:
@@ -655,8 +617,6 @@ export default {
             total:
               xgotTotal
           },
-
-          // XA
 
           xa: {
 
@@ -670,12 +630,8 @@ export default {
               xaTotal
           },
 
-          // STATS
-
           key_stats:
             keyStats,
-
-          // DERIVED
 
           derived: {
 
@@ -707,12 +663,8 @@ export default {
               goalPressure
           },
 
-          // SIGNAL
-
           goal_signal:
             signal,
-
-          // DATA QUALITY
 
           data_quality: {
 
@@ -744,7 +696,7 @@ export default {
       }
 
       // =================================================
-      // SORT BY SIGNAL
+      // SORT
       // =================================================
 
       output.sort(
@@ -873,7 +825,6 @@ export default {
           e.stack || null
 
       }, 500, corsHeaders);
-
     }
   }
 };
@@ -926,15 +877,6 @@ async function fetchEndpoint(
 
 // =====================================================
 // FETCH STATISTICS IN PARALLEL BATCHES
-// =====================================================
-//
-// Keeps concurrency controlled. A batch size of 10 avoids
-// the old sequential 1-by-1 delay without firing every live
-// request at once.
-//
-// Returns:
-// Map<matchId, { status, text }>
-//
 // =====================================================
 
 async function fetchStatisticsInBatches(
@@ -1005,17 +947,6 @@ async function fetchStatisticsInBatches(
 // =====================================================
 // MAIN FEED PARSER
 // =====================================================
-//
-// LEAGUE FIX:
-//
-// Flashscore tournament/league name is carried in ZA.
-//
-// ZA appears before the AA match records belonging to that
-// competition. We preserve the most recent ZA value and attach
-// it to every following AA match until the next ZA.
-//
-// Existing "latest record per match ID" behavior is preserved.
-// =====================================================
 
 function parse(text) {
 
@@ -1043,10 +974,6 @@ function parse(text) {
 
     const value =
       field.slice(i + 1);
-
-    // =================================================
-    // LEAGUE / TOURNAMENT CONTEXT
-    // =================================================
 
     if (key === "ZA") {
 
@@ -1087,10 +1014,6 @@ function parse(text) {
 
   if (current)
     result.push(current);
-
-  // =================================================
-  // KEEP LATEST RECORD PER MATCH
-  // =================================================
 
   const latest =
     new Map();
@@ -1887,22 +1810,18 @@ function getHunterMinScore(
   }
 
   if (minute <= 29) {
-
     return 61;
   }
 
   if (minute <= 34) {
-
     return 65;
   }
 
   if (minute <= 37) {
-
     return 68;
   }
 
   if (minute <= 39) {
-
     return 72;
   }
 
@@ -2426,12 +2345,10 @@ function json(
     }
   );
 }
+
+
 // =====================================================
-// DEBUG: FEED FRESHNESS COMPARISON
-// =====================================================
-//
-// READ ONLY.
-// No production behavior is changed.
+// DEBUG: FEED FRESHNESS COMPARISON V2
 // =====================================================
 
 async function debugFeedFreshness(
@@ -2457,12 +2374,14 @@ async function debugFeedFreshness(
       {
         success: false,
         debug: "FEED_FRESHNESS",
+        version:
+          "V2_DF_SUI_REAL_EVENT_PARSER",
         mode: "READ_ONLY",
         error: "MATCH_ID_REQUIRED",
         usage:
-          "/debug-feed-freshness?matchId=FLASHCORE_MATCH_ID",
+          "/debug-feed-freshness?matchId=FLASHSCORE_MATCH_ID",
         raw_usage:
-          "/debug-feed-freshness?matchId=FLASHCORE_MATCH_ID&raw=1"
+          "/debug-feed-freshness?matchId=FLASHSCORE_MATCH_ID&raw=1"
       },
       400,
       corsHeaders
@@ -2482,10 +2401,12 @@ async function debugFeedFreshness(
         mainUrl,
         headers
       ),
+
       fetchDebugEndpoint(
         `https://www.flashscore.com/x/feed/df_sui_1_${encodeURIComponent(matchId)}`,
         headers
       ),
+
       fetchDebugEndpoint(
         `https://www.flashscore.com/x/feed/df_st_1_${encodeURIComponent(matchId)}`,
         headers
@@ -2507,6 +2428,7 @@ async function debugFeedFreshness(
     {};
 
   const mainScore = {
+
     home:
       toNumber(
         mainRaw.AG
@@ -2557,7 +2479,7 @@ async function debugFeedFreshness(
         "FEED_FRESHNESS",
 
       version:
-        "V1",
+        "V2_DF_SUI_REAL_EVENT_PARSER",
 
       mode:
         "READ_ONLY",
@@ -2651,7 +2573,13 @@ async function debugFeedFreshness(
           ),
 
         type_counts:
-          summaryEvents.typeCounts
+          summaryEvents.typeCounts,
+
+        all_events:
+          summaryEvents.events.slice(
+            0,
+            50
+          )
       },
 
       match_statistics: {
@@ -2686,6 +2614,7 @@ async function debugFeedFreshness(
       raw:
         includeRaw
           ? {
+
               main_match_raw:
                 mainMatch ||
                 null,
@@ -2774,12 +2703,37 @@ async function fetchDebugEndpoint(
 
 
 // =====================================================
-// DEBUG DF_SUI PARSER
+// DEBUG DF_SUI PARSER V2
 // =====================================================
 //
-// We intentionally expose raw IA/IB-style fields.
-// First live tests will confirm the exact goal event mapping
-// before this is ever used as a production guard.
+// VERIFIED REAL FORMAT:
+//
+// IA÷2
+// IB÷21'
+// IE÷3
+// INX÷0
+// IOX÷1
+// IF÷Nusken S.
+// IK÷Goal
+// IM÷xODAAUJh
+//
+// IE÷8
+// IF÷Kaptein W.
+// IK÷Assistance
+// IM÷O21mPSNT
+//
+// IMPORTANT:
+//
+// IA IS NOT THE GOAL TYPE.
+//
+// IK IS THE EVENT KIND:
+//
+// IK÷Goal
+// IK÷Assistance
+// etc.
+//
+// Multiple IK entries can appear in the same main event.
+// Therefore each sub-event must be stored separately.
 // =====================================================
 
 function parseDebugSummaryEvents(
@@ -2787,40 +2741,130 @@ function parseDebugSummaryEvents(
 ) {
 
   const events = [];
+
   const typeCounts = {};
 
-  const chunks =
+  const fields =
     String(text || "")
-      .split("~");
+      .split("¬");
 
-  for (
-    const chunk of chunks
-  ) {
+  // ===================================================
+  // EVENT CONTEXT
+  // ===================================================
 
-    const raw =
-      parseDebugChunk(
-        chunk
-      );
+  let context = {
 
-    const type =
+    section:
+      null,
+
+    ia:
+      null,
+
+    minute:
+      null,
+
+    home_score:
+      null,
+
+    away_score:
+      null
+  };
+
+  // ===================================================
+  // CURRENT SUB EVENT
+  // ===================================================
+
+  let current = {};
+
+  function finishCurrent() {
+
+    const kind =
       cleanDebugValue(
-        raw.IA
+        current.IK
       );
 
-    const minute =
-      cleanDebugValue(
-        raw.IB
-      );
+    if (!kind) {
 
-    if (
-      !type &&
-      !minute
-    ) {
-      continue;
+      current = {};
+
+      return;
     }
 
+    const event = {
+
+      kind,
+
+      type:
+        kind,
+
+      minute:
+        context.minute,
+
+      section:
+        context.section,
+
+      ia:
+        context.ia,
+
+      participant:
+        cleanDebugValue(
+          current.IF
+        ),
+
+      participant_code:
+        cleanDebugValue(
+          current.IE
+        ),
+
+      participant_id:
+        cleanDebugValue(
+          current.IM
+        ),
+
+      participant_url:
+        cleanDebugValue(
+          current.IU
+        ),
+
+      score: {
+
+        home:
+          toNumber(
+            context.home_score
+          ),
+
+        away:
+          toNumber(
+            context.away_score
+          )
+      },
+
+      raw: {
+
+        IA:
+          context.ia,
+
+        IB:
+          context.minute,
+
+        INX:
+          context.home_score,
+
+        IOX:
+          context.away_score,
+
+        ...compactDebugRaw(
+          current
+        )
+      }
+    };
+
+    events.push(
+      event
+    );
+
     const typeKey =
-      type ||
+      kind ||
       "UNKNOWN";
 
     typeCounts[
@@ -2833,61 +2877,248 @@ function parseDebugSummaryEvents(
         0
       ) + 1;
 
-    events.push({
+    current = {};
+  }
 
-      type,
+  // ===================================================
+  // SEQUENTIAL PARSER
+  // ===================================================
 
-      minute,
+  for (
+    const rawField of fields
+  ) {
 
-      participant:
-        raw.IE ||
-        raw.IF ||
-        raw.IH ||
-        null,
+    if (!rawField) {
+      continue;
+    }
 
-      score:
-        raw.IJ ||
-        raw.IK ||
-        raw.IL ||
-        null,
+    const field =
+      String(rawField)
+        .replace(/^~/, "");
 
-      raw:
-        compactDebugRaw(
-          raw
-        )
-    });
+    const i =
+      field.indexOf("÷");
+
+    if (i === -1) {
+      continue;
+    }
+
+    const key =
+      field
+        .slice(0, i)
+        .trim();
+
+    const value =
+      field.slice(
+        i + 1
+      );
+
+    // =================================================
+    // SECTION
+    // =================================================
+
+    if (
+      key === "AC"
+    ) {
+
+      if (current.IK) {
+
+        finishCurrent();
+      }
+
+      context.section =
+        cleanDebugValue(
+          value
+        );
+
+      continue;
+    }
+
+    // =================================================
+    // NEW MAIN EVENT
+    // =================================================
+
+    if (
+      key === "IA"
+    ) {
+
+      if (current.IK) {
+
+        finishCurrent();
+      }
+
+      context.ia =
+        cleanDebugValue(
+          value
+        );
+
+      continue;
+    }
+
+    // =================================================
+    // MINUTE
+    // =================================================
+
+    if (
+      key === "IB"
+    ) {
+
+      if (current.IK) {
+
+        finishCurrent();
+      }
+
+      context.minute =
+        cleanDebugValue(
+          value
+        );
+
+      continue;
+    }
+
+    // =================================================
+    // SCORE
+    // =================================================
+
+    if (
+      key === "INX"
+    ) {
+
+      context.home_score =
+        cleanDebugValue(
+          value
+        );
+
+      continue;
+    }
+
+    if (
+      key === "IOX"
+    ) {
+
+      context.away_score =
+        cleanDebugValue(
+          value
+        );
+
+      continue;
+    }
+
+    // =================================================
+    // NEW PARTICIPANT
+    // =================================================
+
+    if (
+      key === "IE" &&
+      current.IK
+    ) {
+
+      finishCurrent();
+    }
+
+    // =================================================
+    // STORE SUB EVENT
+    // =================================================
+
+    if (
+      key === "IE" ||
+      key === "IF" ||
+      key === "IU" ||
+      key === "ICT" ||
+      key === "IK" ||
+      key === "IM"
+    ) {
+
+      current[
+        key
+      ] =
+        value;
+
+      continue;
+    }
+  }
+
+  // ===================================================
+  // FINAL SUB EVENT
+  // ===================================================
+
+  if (
+    current.IK
+  ) {
+
+    finishCurrent();
   }
 
   return {
+
     events,
+
     typeCounts
   };
 }
 
 
 // =====================================================
-// DEBUG EVENT HEURISTIC
+// DEBUG EVENT HEURISTIC V2
 // =====================================================
 //
-// IA=1 is a commonly observed goal marker in df_sui.
-// This remains diagnostic ONLY until verified on live output.
+// REAL GOAL:
+//
+// IK÷Goal
+//
+// IA MUST NOT BE USED FOR GOAL DETECTION.
 // =====================================================
 
 function isLikelyGoalEvent(
   event
 ) {
 
-  return (
+  const kind =
     String(
+      event?.kind ||
       event?.type ||
       ""
-    ) === "1"
+    )
+      .trim()
+      .toLowerCase();
+
+  if (!kind) {
+
+    return false;
+  }
+
+  if (
+    kind.includes(
+      "disallowed"
+    ) ||
+    kind.includes(
+      "cancelled"
+    ) ||
+    kind.includes(
+      "canceled"
+    ) ||
+    kind.includes(
+      "var overturn"
+    )
+  ) {
+
+    return false;
+  }
+
+  return (
+    kind === "goal" ||
+    kind === "own goal" ||
+    kind === "penalty goal"
   );
 }
 
 
 // =====================================================
-// DEBUG CHUNK PARSER
+// OLD DEBUG CHUNK PARSER
+// =====================================================
+//
+// Kept for compatibility/debugging.
+// V2 goal parser no longer depends on this function.
 // =====================================================
 
 function parseDebugChunk(
@@ -2925,6 +3156,7 @@ function parseDebugChunk(
       );
 
     if (key) {
+
       raw[key] =
         value;
     }
