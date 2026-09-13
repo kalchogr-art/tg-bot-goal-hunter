@@ -1,7 +1,14 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.2 ODDS REACTIVATION + DF_SUI
+// GOAL WATCH — HUNTER TRACKER V6.7.10.3 1H PERIOD GUARD + FAST HT NO_GOAL
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
+//
+// V6.7.10.3:
+// - DF_SUI goals are accepted only when they belong to the FIRST HALF.
+// - 45+N is valid first-half stoppage time; direct 46/47/50 from 2H is rejected.
+// - 2H can never create a GOAL HIT unless a valid 1H DF_SUI goal was already found.
+// - HT/2H closes 0:0 signals immediately as NO_GOAL.
+// - Missing-feed fallback closes near expected HT after a short safety grace, not ~20 min later.
 //
 // V6.7.9.2:
 // - Mechanical Matcher and AI Matcher start in parallel.
@@ -1377,16 +1384,9 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // GOAL — V6.7.10.1 DF_SUI FIRST, V27 SCORE FALLBACK
+  // 1) DF_SUI — ONLY CONFIRMED FIRST-HALF GOAL AFTER ENTRY
   // ==========================================================
 
-  // df_sui is an independent event source. It often receives the
-  // Goal event before the main live score in V27 catches up.
-  //
-  // IMPORTANT:
-  // - only a confirmed Goal strictly AFTER entry_minute is accepted;
-  // - pre-entry goals can never resolve this signal;
-  // - if df_sui is unavailable, the old V27 score logic still works.
   let summaryGoal = null;
 
   try {
@@ -1456,15 +1456,104 @@ async function processTrackingMatch(
       now,
       goalMinute,
       afterMinutes,
-      "DF_SUI"
+      "DF_SUI_1H"
     );
 
     return;
   }
 
 
-  // Old reliable fallback:
-  // if V27 itself already shows a score increase, resolve normally.
+  // ==========================================================
+  // 2) HALF TIME
+  // ==========================================================
+  // At official HT, any score increase necessarily happened in 1H.
+  // This is the only post-1H place where V27 score fallback is safe.
+
+  if (
+    isFirstHalfFinished(m)
+  ) {
+
+    if (
+      home > entryHome ||
+      away > entryAway
+    ) {
+
+      const goalMinute =
+        getRealGoalMinute(
+          m,
+          entryHome,
+          entryAway,
+          entryMinute,
+          currentMinute
+        );
+
+      const afterMinutes =
+        goalMinute !== null
+          ? Math.max(
+              0,
+              goalMinute -
+              entryMinute
+            )
+          : null;
+
+      await resolveTrackingGoal(
+        env,
+        existing,
+        m,
+        trackingMap,
+        id,
+        now,
+        goalMinute,
+        afterMinutes,
+        "V27_HT_SCORE"
+      );
+
+      return;
+    }
+
+    await resolveTrackingNoGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      "HALF_TIME"
+    );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // 3) SECOND HALF STARTED
+  // ==========================================================
+  // IMPORTANT: A score increase first observed in 2H is NOT enough
+  // to prove a 1H goal. If df_sui did not confirm a 1H goal above,
+  // the 1H O0.5 signal is a NO_GOAL.
+
+  if (
+    isSecondHalfStarted(m)
+  ) {
+
+    await resolveTrackingNoGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      "SECOND_HALF_STARTED"
+    );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // 4) STILL FIRST HALF — V27 SCORE FALLBACK IS SAFE
+  // ==========================================================
+
   if (
     home > entryHome ||
     away > entryAway
@@ -1488,7 +1577,6 @@ async function processTrackingMatch(
           )
         : null;
 
-
     await resolveTrackingGoal(
       env,
       existing,
@@ -1498,124 +1586,8 @@ async function processTrackingMatch(
       now,
       goalMinute,
       afterMinutes,
-      "V27_SCORE"
+      "V27_1H_SCORE"
     );
-
-    return;
-  }
-
-
-  // ==========================================================
-  // SECOND HALF STARTED
-  // ==========================================================
-
-  if (
-    isSecondHalfStarted(m)
-  ) {
-
-    const update =
-      await env.DB
-        .prepare(`
-          UPDATE hunter_signals
-          SET
-            status = 'NO_GOAL',
-            result = 'NO GOAL',
-            updated_at = ?
-          WHERE id = ?
-            AND status = 'TRACKING'
-        `)
-        .bind(
-          now.toISOString(),
-          existing.id
-        )
-        .run();
-
-
-    const changes =
-      Number(
-        update?.meta?.changes ||
-        0
-      );
-
-    if (
-      changes < 1
-    ) {
-      return;
-    }
-
-
-    trackingMap.delete(id);
-
-
-    if (!isShadowSignal(existing)) {
-      await sendTelegram(
-        env,
-        formatNoGoalMessage(
-          existing,
-          m
-        ),
-        existing.telegram_message_id
-      );
-    }
-
-    return;
-  }
-
-
-  // ==========================================================
-  // HT 0:0
-  // ==========================================================
-
-  if (
-    home === 0 &&
-    away === 0 &&
-    isFirstHalfFinished(m)
-  ) {
-
-    const update =
-      await env.DB
-        .prepare(`
-          UPDATE hunter_signals
-          SET
-            status = 'NO_GOAL',
-            result = 'NO GOAL',
-            updated_at = ?
-          WHERE id = ?
-            AND status = 'TRACKING'
-        `)
-        .bind(
-          now.toISOString(),
-          existing.id
-        )
-        .run();
-
-
-    const changes =
-      Number(
-        update?.meta?.changes ||
-        0
-      );
-
-    if (
-      changes < 1
-    ) {
-      return;
-    }
-
-
-    trackingMap.delete(id);
-
-
-    if (!isShadowSignal(existing)) {
-      await sendTelegram(
-        env,
-        formatNoGoalMessage(
-          existing,
-          m
-        ),
-        existing.telegram_message_id
-      );
-    }
 
     return;
   }
@@ -1623,19 +1595,17 @@ async function processTrackingMatch(
 
 
 // ============================================================
-// RESOLVE TRACKING GOAL
+// NO_GOAL RESOLVER — ATOMIC / IMMEDIATE HT + 2H
 // ============================================================
 
-async function resolveTrackingGoal(
+async function resolveTrackingNoGoal(
   env,
   existing,
   m,
   trackingMap,
   id,
   now,
-  goalMinute,
-  afterMinutes,
-  source
+  source = "UNKNOWN"
 ) {
 
   const update =
@@ -1643,22 +1613,17 @@ async function resolveTrackingGoal(
       .prepare(`
         UPDATE hunter_signals
         SET
-          status = 'GOAL',
-          goal_minute = ?,
-          goal_after_minutes = ?,
-          result = 'GOAL HIT',
+          status = 'NO_GOAL',
+          result = 'NO GOAL',
           updated_at = ?
         WHERE id = ?
           AND status = 'TRACKING'
       `)
       .bind(
-        goalMinute,
-        afterMinutes,
         now.toISOString(),
         existing.id
       )
       .run();
-
 
   const changes =
     Number(
@@ -1666,31 +1631,23 @@ async function resolveTrackingGoal(
       0
     );
 
-  if (
-    changes < 1
-  ) {
+  if (changes < 1) {
     return false;
   }
 
-
-  trackingMap.delete(id);
-
+  trackingMap?.delete?.(id);
 
   if (!isShadowSignal(existing)) {
-
     await sendTelegram(
       env,
-      formatGoalMessage(
+      formatNoGoalMessage(
         existing,
         m,
-        goalMinute,
-        afterMinutes,
         source
       ),
       existing.telegram_message_id
     );
   }
-
 
   return true;
 }
@@ -1768,14 +1725,17 @@ async function getPostEntryDfSuiGoal(
       .map(
         event => {
 
-          const minute =
-            parseDfSuiMinute(
+          const minuteInfo =
+            parseDfSuiMinuteInfo(
               event?.minute
             );
 
           return {
             event,
-            minute
+            minute:
+              minuteInfo?.effective ??
+              null,
+            minuteInfo
           };
         }
       )
@@ -1783,7 +1743,10 @@ async function getPostEntryDfSuiGoal(
         item =>
           item.minute !== null &&
           item.minute > entryMinute &&
-          item.minute <= 60
+          isFirstHalfDfSuiEvent(
+            item.event,
+            item.minuteInfo
+          )
       )
       .sort(
         (a, b) =>
@@ -2134,71 +2097,136 @@ function isConfirmedDfSuiGoal(
 // Examples: 32' => 32, 45+2' => 47
 // ============================================================
 
-function parseDfSuiMinute(
+function parseDfSuiMinuteInfo(
   value
 ) {
 
-  const text =
+  const raw =
     String(
       value ?? ""
-    )
-      .trim()
-      .replace(
-        /['’"]/g,
-        ""
-      );
+    ).trim();
 
+  const text =
+    raw.replace(
+      /['’"]/g,
+      ""
+    );
 
   if (!text) {
     return null;
   }
-
 
   const plus =
     text.match(
       /^(\d+)\s*\+\s*(\d+)$/
     );
 
-
   if (plus) {
 
     const base =
-      Number(
-        plus[1]
-      );
+      Number(plus[1]);
 
     const added =
-      Number(
-        plus[2]
-      );
-
+      Number(plus[2]);
 
     if (
       Number.isFinite(base) &&
       Number.isFinite(added)
     ) {
-
-      return (
-        base +
-        added
-      );
+      return {
+        raw,
+        base,
+        added,
+        effective:
+          base + added,
+        stoppage: true
+      };
     }
   }
 
-
   const direct =
     Number(
-      text.match(
-        /\d+/
-      )?.[0]
+      text.match(/\d+/)?.[0]
     );
 
+  if (!Number.isFinite(direct)) {
+    return null;
+  }
 
-  return Number.isFinite(
-    direct
-  )
-    ? direct
-    : null;
+  return {
+    raw,
+    base: direct,
+    added: 0,
+    effective: direct,
+    stoppage: false
+  };
+}
+
+
+function isFirstHalfDfSuiEvent(
+  event,
+  minuteInfo
+) {
+
+  if (!minuteInfo) {
+    return false;
+  }
+
+  const sectionText =
+    [
+      event?.section,
+      event?.ia
+    ]
+      .map(
+        value =>
+          String(value ?? "")
+            .trim()
+            .toUpperCase()
+      )
+      .filter(Boolean)
+      .join(" ");
+
+  // Explicit second-half context always wins.
+  if (
+    /(^|\s)(2H|2ND HALF|SECOND HALF|2P)(\s|$)/.test(
+      sectionText
+    )
+  ) {
+    return false;
+  }
+
+  // Flashscore-style 45+N is first-half stoppage time.
+  if (
+    minuteInfo.stoppage === true &&
+    minuteInfo.base === 45
+  ) {
+    return true;
+  }
+
+  // Normal first-half clock.
+  if (
+    minuteInfo.stoppage === false &&
+    minuteInfo.effective <= 45
+  ) {
+    return true;
+  }
+
+  // A direct 46/47/50 is intentionally NOT treated as 1H.
+  // This prevents 2H events from becoming false 1H GOAL HITs.
+  return false;
+}
+
+
+function parseDfSuiMinute(
+  value
+) {
+
+  return (
+    parseDfSuiMinuteInfo(
+      value
+    )?.effective ??
+    null
+  );
 }
 
 
@@ -4162,16 +4190,21 @@ async function finalizeMissingTracking(
     );
 
 
-  const requiredMinutes =
+  // Missing from V27 usually means HT / feed transition.
+  // Estimate the end of 1H from the ENTRY minute and allow a short
+  // safety grace for stoppage time / feed delay. The old formula
+  // waited deep into the match and produced NO_GOAL ~20 min late.
+  const estimatedToHalfTime =
     Math.max(
-      68,
-      (
-        90 -
-        safeEntryMinute
-      ) +
-      15 +
-      20
+      0,
+      45 - safeEntryMinute
     );
+
+  const MISSING_HT_GRACE_MINUTES = 8;
+
+  const requiredMinutes =
+    estimatedToHalfTime +
+    MISSING_HT_GRACE_MINUTES;
 
 
   const entryTime =
@@ -4204,6 +4237,69 @@ async function finalizeMissingTracking(
       requiredMinutes
   ) {
     return;
+  }
+
+
+  // One final first-half event check before closing a missing match.
+  // This catches 45+N goals even if the main V27 match disappeared.
+  try {
+    const lateFirstHalfGoal =
+      await getPostEntryDfSuiGoal(
+        String(
+          signal?.match_id ||
+          ""
+        ),
+        safeEntryMinute
+      );
+
+    if (lateFirstHalfGoal) {
+      const goalMinute =
+        lateFirstHalfGoal.minute;
+
+      const afterMinutes =
+        Math.max(
+          0,
+          goalMinute - safeEntryMinute
+        );
+
+      const fakeTrackingMap =
+        new Map([
+          [
+            String(signal?.match_id || ""),
+            signal
+          ]
+        ]);
+
+      await resolveTrackingGoal(
+        env,
+        signal,
+        {
+          id: signal?.match_id,
+          score:
+            lateFirstHalfGoal.score ||
+            {
+              home:
+                Number(signal?.entry_home_score || 0),
+              away:
+                Number(signal?.entry_away_score || 0)
+            }
+        },
+        fakeTrackingMap,
+        String(signal?.match_id || ""),
+        now,
+        goalMinute,
+        afterMinutes,
+        "DF_SUI_1H_MISSING"
+      );
+
+      return;
+    }
+  } catch (error) {
+    console.error(
+      "MISSING DF_SUI ERROR",
+      signal?.match_id,
+      error?.message || String(error)
+    );
   }
 
 
