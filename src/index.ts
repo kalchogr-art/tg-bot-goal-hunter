@@ -1,5 +1,5 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.9.5 AI 0% HARD GUARD
+// GOAL WATCH — HUNTER TRACKER V6.7.10.1 DF_SUI GOAL VERIFY
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -69,6 +69,15 @@
 // created_at / updated_at / entry_time are stored as UTC ISO.
 // Statistics are calculated according to Europe/Sofia.
 // V6.7.10.0: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
+//
+// V6.7.10.1 DF_SUI GOAL VERIFY:
+// - TRACKING checks Flashscore df_sui for confirmed post-ENTRY goals.
+// - A df_sui Goal can resolve GOAL HIT before the main V27 score catches up.
+// - Only goals strictly AFTER entry_minute are accepted.
+// - Disallowed/cancelled/VAR-overturned goals are ignored.
+// - Existing V27 score increase remains as fallback.
+// - Telegram GOAL HIT shows the confirmation source.
+// - NO_GOAL/report/matcher/bet logic is unchanged.
 // ============================================================
 
 const HUNTER_FROM = 5;
@@ -90,6 +99,21 @@ const DAILY_REPORT_WINDOW_MINUTES = 10;
 
 // Theoretical reporting stake per signal. Change only this value if needed.
 const REPORT_STAKE = 10;
+
+// V6.7.10.1 — Flashscore event feed used only for TRACKING verification.
+const FLASHSCORE_DF_SUI_BASE =
+  "https://www.flashscore.com/x/feed/df_sui_1_";
+
+const FLASHSCORE_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36",
+  "Accept": "*/*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://www.flashscore.com/",
+  "Origin": "https://www.flashscore.com",
+  "x-fsign": "SW9D1eZo",
+  "Cache-Control": "no-cache"
+};
 
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -1285,9 +1309,94 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // GOAL
+  // GOAL — V6.7.10.1 DF_SUI FIRST, V27 SCORE FALLBACK
   // ==========================================================
 
+  // df_sui is an independent event source. It often receives the
+  // Goal event before the main live score in V27 catches up.
+  //
+  // IMPORTANT:
+  // - only a confirmed Goal strictly AFTER entry_minute is accepted;
+  // - pre-entry goals can never resolve this signal;
+  // - if df_sui is unavailable, the old V27 score logic still works.
+  let summaryGoal = null;
+
+  try {
+
+    summaryGoal =
+      await getPostEntryDfSuiGoal(
+        id,
+        entryMinute
+      );
+
+  } catch (error) {
+
+    console.error(
+      "DF_SUI TRACKING ERROR",
+      id,
+      error?.message ||
+      String(error)
+    );
+  }
+
+
+  if (summaryGoal) {
+
+    const goalMinute =
+      summaryGoal.minute;
+
+    const afterMinutes =
+      Math.max(
+        0,
+        goalMinute -
+        entryMinute
+      );
+
+    const matchForMessage = {
+      ...m,
+      score:
+        summaryGoal.score &&
+        Number.isFinite(
+          Number(
+            summaryGoal.score.home
+          )
+        ) &&
+        Number.isFinite(
+          Number(
+            summaryGoal.score.away
+          )
+        )
+          ? {
+              home:
+                Number(
+                  summaryGoal.score.home
+                ),
+              away:
+                Number(
+                  summaryGoal.score.away
+                )
+            }
+          : m?.score
+    };
+
+    await resolveTrackingGoal(
+      env,
+      existing,
+      matchForMessage,
+      trackingMap,
+      id,
+      now,
+      goalMinute,
+      afterMinutes,
+      "DF_SUI"
+    );
+
+    return;
+  }
+
+
+  // Old reliable fallback:
+  // if V27 itself already shows a score increase, resolve normally.
   if (
     home > entryHome ||
     away > entryAway
@@ -1312,56 +1421,17 @@ async function processTrackingMatch(
         : null;
 
 
-    const update =
-      await env.DB
-        .prepare(`
-          UPDATE hunter_signals
-          SET
-            status = 'GOAL',
-            goal_minute = ?,
-            goal_after_minutes = ?,
-            result = 'GOAL HIT',
-            updated_at = ?
-          WHERE id = ?
-            AND status = 'TRACKING'
-        `)
-        .bind(
-          goalMinute,
-          afterMinutes,
-          now.toISOString(),
-          existing.id
-        )
-        .run();
-
-
-    const changes =
-      Number(
-        update?.meta?.changes ||
-        0
-      );
-
-    if (
-      changes < 1
-    ) {
-      return;
-    }
-
-
-    trackingMap.delete(id);
-
-
-    if (!isShadowSignal(existing)) {
-      await sendTelegram(
-        env,
-        formatGoalMessage(
-          existing,
-          m,
-          goalMinute,
-          afterMinutes
-        ),
-        existing.telegram_message_id
-      );
-    }
+    await resolveTrackingGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      goalMinute,
+      afterMinutes,
+      "V27_SCORE"
+    );
 
     return;
   }
@@ -1481,6 +1551,601 @@ async function processTrackingMatch(
 
     return;
   }
+}
+
+
+// ============================================================
+// RESOLVE TRACKING GOAL
+// ============================================================
+
+async function resolveTrackingGoal(
+  env,
+  existing,
+  m,
+  trackingMap,
+  id,
+  now,
+  goalMinute,
+  afterMinutes,
+  source
+) {
+
+  const update =
+    await env.DB
+      .prepare(`
+        UPDATE hunter_signals
+        SET
+          status = 'GOAL',
+          goal_minute = ?,
+          goal_after_minutes = ?,
+          result = 'GOAL HIT',
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'TRACKING'
+      `)
+      .bind(
+        goalMinute,
+        afterMinutes,
+        now.toISOString(),
+        existing.id
+      )
+      .run();
+
+
+  const changes =
+    Number(
+      update?.meta?.changes ||
+      0
+    );
+
+  if (
+    changes < 1
+  ) {
+    return false;
+  }
+
+
+  trackingMap.delete(id);
+
+
+  if (!isShadowSignal(existing)) {
+
+    await sendTelegram(
+      env,
+      formatGoalMessage(
+        existing,
+        m,
+        goalMinute,
+        afterMinutes,
+        source
+      ),
+      existing.telegram_message_id
+    );
+  }
+
+
+  return true;
+}
+
+
+// ============================================================
+// DF_SUI — FIRST CONFIRMED GOAL AFTER ENTRY
+// ============================================================
+
+async function getPostEntryDfSuiGoal(
+  matchId,
+  entryMinute
+) {
+
+  if (!matchId) {
+    return null;
+  }
+
+
+  const url =
+    FLASHSCORE_DF_SUI_BASE +
+    encodeURIComponent(
+      String(matchId)
+    ) +
+    "?_=" +
+    Date.now();
+
+
+  let response;
+
+  try {
+
+    response =
+      await fetch(
+        url,
+        {
+          method: "GET",
+          headers:
+            FLASHSCORE_HEADERS,
+          cache: "no-store"
+        }
+      );
+
+  } catch (error) {
+
+    return null;
+  }
+
+
+  if (!response.ok) {
+    return null;
+  }
+
+
+  const text =
+    await response.text();
+
+
+  if (!text) {
+    return null;
+  }
+
+
+  const parsed =
+    parseDfSuiEvents(
+      text
+    );
+
+
+  const goals =
+    parsed.events
+      .filter(
+        isConfirmedDfSuiGoal
+      )
+      .map(
+        event => {
+
+          const minute =
+            parseDfSuiMinute(
+              event?.minute
+            );
+
+          return {
+            event,
+            minute
+          };
+        }
+      )
+      .filter(
+        item =>
+          item.minute !== null &&
+          item.minute > entryMinute &&
+          item.minute <= 60
+      )
+      .sort(
+        (a, b) =>
+          a.minute -
+          b.minute
+      );
+
+
+  if (
+    goals.length < 1
+  ) {
+    return null;
+  }
+
+
+  const first =
+    goals[0];
+
+
+  return {
+    minute:
+      first.minute,
+
+    minute_display:
+      first.event?.minute ??
+      null,
+
+    score:
+      first.event?.score ??
+      null,
+
+    participant:
+      first.event?.participant ??
+      null,
+
+    kind:
+      first.event?.kind ??
+      first.event?.type ??
+      "Goal"
+  };
+}
+
+
+// ============================================================
+// DF_SUI EVENT PARSER
+// ============================================================
+
+function parseDfSuiEvents(
+  text
+) {
+
+  const events = [];
+
+  const fields =
+    String(
+      text || ""
+    ).split("¬");
+
+
+  let context = {
+    section: null,
+    ia: null,
+    minute: null,
+    home_score: null,
+    away_score: null
+  };
+
+
+  let current = {};
+
+
+  function finishCurrent() {
+
+    const kind =
+      cleanDfSuiValue(
+        current.IK
+      );
+
+
+    if (!kind) {
+
+      current = {};
+
+      return;
+    }
+
+
+    events.push(
+      {
+        kind,
+        type:
+          kind,
+        minute:
+          context.minute,
+        section:
+          context.section,
+        ia:
+          context.ia,
+        participant:
+          cleanDfSuiValue(
+            current.IF
+          ),
+        participant_code:
+          cleanDfSuiValue(
+            current.IE
+          ),
+        participant_id:
+          cleanDfSuiValue(
+            current.IM
+          ),
+        participant_url:
+          cleanDfSuiValue(
+            current.IU
+          ),
+        score: {
+          home:
+            numberOrNull(
+              context.home_score
+            ),
+          away:
+            numberOrNull(
+              context.away_score
+            )
+        }
+      }
+    );
+
+
+    current = {};
+  }
+
+
+  for (
+    const rawField of fields
+  ) {
+
+    if (!rawField) {
+      continue;
+    }
+
+
+    const field =
+      String(
+        rawField
+      ).replace(
+        /^~/,
+        ""
+      );
+
+
+    const i =
+      field.indexOf(
+        "÷"
+      );
+
+
+    if (
+      i === -1
+    ) {
+      continue;
+    }
+
+
+    const key =
+      field
+        .slice(
+          0,
+          i
+        )
+        .trim();
+
+
+    const value =
+      field.slice(
+        i + 1
+      );
+
+
+    if (
+      key === "AC"
+    ) {
+
+      if (current.IK) {
+        finishCurrent();
+      }
+
+      context.section =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IA"
+    ) {
+
+      if (current.IK) {
+        finishCurrent();
+      }
+
+      context.ia =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IB"
+    ) {
+
+      if (current.IK) {
+        finishCurrent();
+      }
+
+      context.minute =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "INX"
+    ) {
+
+      context.home_score =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IOX"
+    ) {
+
+      context.away_score =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IE" &&
+      current.IK
+    ) {
+
+      finishCurrent();
+    }
+
+
+    if (
+      key === "IE" ||
+      key === "IF" ||
+      key === "IU" ||
+      key === "ICT" ||
+      key === "IK" ||
+      key === "IM"
+    ) {
+
+      current[
+        key
+      ] =
+        value;
+    }
+  }
+
+
+  if (
+    current.IK
+  ) {
+
+    finishCurrent();
+  }
+
+
+  return {
+    events
+  };
+}
+
+
+// ============================================================
+// DF_SUI GOAL FILTER
+// ============================================================
+
+function isConfirmedDfSuiGoal(
+  event
+) {
+
+  const kind =
+    String(
+      event?.kind ||
+      event?.type ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+  if (!kind) {
+    return false;
+  }
+
+
+  if (
+    kind.includes(
+      "disallowed"
+    ) ||
+    kind.includes(
+      "cancelled"
+    ) ||
+    kind.includes(
+      "canceled"
+    ) ||
+    kind.includes(
+      "var overturn"
+    )
+  ) {
+
+    return false;
+  }
+
+
+  return (
+    kind === "goal" ||
+    kind === "own goal" ||
+    kind === "penalty goal"
+  );
+}
+
+
+// ============================================================
+// DF_SUI MINUTE PARSER
+// Examples: 32' => 32, 45+2' => 47
+// ============================================================
+
+function parseDfSuiMinute(
+  value
+) {
+
+  const text =
+    String(
+      value ?? ""
+    )
+      .trim()
+      .replace(
+        /['’"]/g,
+        ""
+      );
+
+
+  if (!text) {
+    return null;
+  }
+
+
+  const plus =
+    text.match(
+      /^(\d+)\s*\+\s*(\d+)$/
+    );
+
+
+  if (plus) {
+
+    const base =
+      Number(
+        plus[1]
+      );
+
+    const added =
+      Number(
+        plus[2]
+      );
+
+
+    if (
+      Number.isFinite(base) &&
+      Number.isFinite(added)
+    ) {
+
+      return (
+        base +
+        added
+      );
+    }
+  }
+
+
+  const direct =
+    Number(
+      text.match(
+        /\d+/
+      )?.[0]
+    );
+
+
+  return Number.isFinite(
+    direct
+  )
+    ? direct
+    : null;
+}
+
+
+function cleanDfSuiValue(
+  value
+) {
+
+  const text =
+    String(
+      value ??
+      ""
+    ).trim();
+
+
+  return text || null;
 }
 
 
@@ -6943,7 +7608,8 @@ function formatGoalMessage(
   existing,
   m,
   goalMinute,
-  afterMinutes
+  afterMinutes,
+  source = "V27_SCORE"
 ) {
 
   return `🟢 GOAL HIT
@@ -6975,6 +7641,9 @@ ${existing.hunter_score}/100
 
 📊 Резултат:
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
+
+🔎 Потвърждение:
+${source === "DF_SUI" ? "DF_SUI EVENT" : "V27 SCORE"}
 
 RESULT: GOAL HIT`;
 }
