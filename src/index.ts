@@ -68,14 +68,14 @@
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // created_at / updated_at / entry_time are stored as UTC ISO.
 // Statistics are calculated according to Europe/Sofia.
-// V6.7.9.6: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
+// V6.7.9.7: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
 // ============================================================
 
 const HUNTER_FROM = 5;
 const HUNTER_TO = 42;
 const HUNTER_MIN_SCORE = 60;
 
-// V6.7.9.6 LIVE HUNTER FILTER
+// V6.7.9.7 LIVE HUNTER FILTER
 // 5–9   => 65+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
 // 10–19 => 60+
 // 20–24 => 65+
@@ -91,7 +91,7 @@ const DAILY_REPORT_WINDOW_MINUTES = 10;
 // Theoretical reporting stake per signal. Change only this value if needed.
 const REPORT_STAKE = 10;
 
-// V6.7.9.6 REPORT FILTER
+// V6.7.9.7 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
 // A normal row enters statistics only after a real entry odds is captured
 // and only if it passes the same dynamic Score threshold used for live ENTRY.
@@ -784,6 +784,23 @@ export default {
           String(
             message?.text || ""
           ).trim();
+
+        if (
+          text === "/today" ||
+          text.startsWith("/today@")
+        ) {
+
+          await sendTelegram(
+            env,
+            await buildTodayStats(env)
+          );
+
+          return json({
+            success: true,
+            action: "TODAY"
+          });
+        }
+
 
         if (
           text === "/stats" ||
@@ -5203,6 +5220,143 @@ function formatMinuteStats(
 
 
   return text;
+}
+
+
+// ============================================================
+// TODAY COMMAND
+// ============================================================
+
+async function buildTodayStats(env) {
+
+  const now = new Date();
+  const local = getSofiaTime(now);
+  const today = local.date;
+  const bounds = getSofiaDayUtcBounds(today);
+
+  if (!bounds) {
+    return `📊 HUNTER TODAY\n\n📅 ${today}\n\n❌ Не успях да изчисля дневните граници.`;
+  }
+
+  const overall = await env.DB
+    .prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(CASE WHEN result = 'GOAL HIT' AND goal_after_minutes IS NOT NULL THEN goal_after_minutes END) AS avg_goal_after,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${REPORT_ELIGIBLE_SQL}
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      bounds.start,
+      bounds.end
+    )
+    .first();
+
+  const scoreResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN hunter_score BETWEEN 60 AND 69 THEN '60–69'
+          WHEN hunter_score BETWEEN 70 AND 79 THEN '70–79'
+          WHEN hunter_score BETWEEN 80 AND 89 THEN '80–89'
+          WHEN hunter_score BETWEEN 90 AND 100 THEN '90–100'
+        END AS score_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${REPORT_ELIGIBLE_SQL}
+      GROUP BY score_group
+    `)
+    .bind(bounds.start, bounds.end)
+    .all();
+
+  const minuteRows = await getMinuteStatsForBounds(env, bounds);
+
+  const total = Number(overall?.total || 0);
+  const goals = Number(overall?.goals || 0);
+  const noGoals = Number(overall?.no_goals || 0);
+  const resolved = goals + noGoals;
+  const open = Math.max(0, total - resolved);
+  const rate = resolved > 0 ? goals / resolved * 100 : 0;
+
+  const avgGoalAfter = numberOrNull(overall?.avg_goal_after);
+  const avgOdds = numberOrNull(overall?.avg_entry_odds);
+  const financialBets = Number(overall?.financial_bets || 0);
+  const profitLoss = Number(overall?.profit_loss || 0);
+  const roi = financialBets > 0
+    ? profitLoss / (financialBets * REPORT_STAKE) * 100
+    : null;
+
+  let message =
+`📊 HUNTER TODAY
+
+📅 ${today}
+
+🎯 ENTRY: ${total}
+🟢 GOAL HIT: ${goals}
+🔴 NO GOAL: ${noGoals}${open > 0 ? `\n⏳ OPEN: ${open}` : ""}
+
+📈 Успеваемост: ${rate.toFixed(1)}%
+⏱ Средно до гол: ${avgGoalAfter !== null ? avgGoalAfter.toFixed(1) + " мин." : "—"}
+🎲 Avg odds: ${avgOdds !== null ? avgOdds.toFixed(2) : "—"}
+💶 P/L: ${financialBets > 0 ? formatMoney(profitLoss) + " EUR" : "—"}
+📈 ROI: ${roi !== null ? (roi > 0 ? "+" : "") + roi.toFixed(1) + "%" : "—"}
+
+━━━━━━━━━━━━━━━━
+⏱ ДНЕС — ПО ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+${formatMinuteStats(minuteRows)}
+━━━━━━━━━━━━━━━━
+🔥 ДНЕС — ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+  const scoreMap = new Map();
+  for (const row of scoreResult?.results || []) {
+    scoreMap.set(row.score_group, row);
+  }
+
+  for (const group of ["60–69", "70–79", "80–89", "90–100"]) {
+    const row = scoreMap.get(group);
+    if (!row) {
+      message += `${group}: 0 ENTRY\n`;
+      continue;
+    }
+
+    const rowTotal = Number(row.total || 0);
+    const rowGoals = Number(row.goals || 0);
+    const rowNoGoals = Number(row.no_goals || 0);
+    const rowResolved = rowGoals + rowNoGoals;
+    const rowRate = rowResolved > 0 ? rowGoals / rowResolved * 100 : 0;
+
+    message += `${group}: ${rowTotal} ENTRY | ${rowGoals} GOAL | ${rowNoGoals} NO GOAL | ${rowRate.toFixed(1)}%\n`;
+  }
+
+  message +=
+`\n━━━━━━━━━━━━━━━━
+🎲 Само мачове с реален entry odds
+🎯 Dynamic Score filter
+🕐 Europe/Sofia`;
+
+  return message;
 }
 
 
