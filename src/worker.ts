@@ -51,7 +51,7 @@ export default {
       new URL(request.url);
 
     // =================================================
-    // DEBUG FEED FRESHNESS V3
+    // DEBUG FEED FRESHNESS V4
     // =================================================
 
     if (
@@ -175,21 +175,21 @@ export default {
           toNumber(r.AH);
 
         // =================================================
-        // V3 SCORE CROSS-CHECK
+        // V4 DF_SUI STATE — NO REQUEST YET
         // =================================================
         //
-        // Only check df_sui when this match could potentially
-        // become a Hunter ENTRY:
-        // - 1H
-        // - 10..42
-        // - main feed currently says 0:0
+        // Important optimization:
+        // We first calculate the normal Hunter signal from the
+        // main feed + df_st statistics.
         //
-        // This avoids fetching df_sui for every live match.
+        // df_sui is requested ONLY if the match is already a
+        // real Hunter candidate and the main feed still says 0:0.
         // =================================================
 
         let summaryCheck = {
           checked: false,
           status: 0,
+          available: false,
           goal_count: 0,
           latest_goal_minute: null,
           latest_score: null,
@@ -197,32 +197,6 @@ export default {
           main_feed_behind: false
         };
 
-        if (
-          period === "1H" &&
-          minute >= 10 &&
-          minute <= 42 &&
-          mainScoreHome === 0 &&
-          mainScoreAway === 0
-        ) {
-
-          summaryCheck =
-            await getSummaryScoreCheck(
-              match.id,
-              headers,
-              mainScoreHome,
-              mainScoreAway
-            );
-        }
-
-        // =================================================
-        // EFFECTIVE SCORE
-        // =================================================
-        //
-        // If df_sui has a confirmed goal and a score that is
-        // ahead of the main feed, use df_sui score.
-        //
-        // Otherwise keep AG/AH from main feed.
-        // =================================================
 
         let scoreHome =
           mainScoreHome;
@@ -233,33 +207,18 @@ export default {
         let scoreSource =
           "MAIN_FEED";
 
-        if (
-          summaryCheck.checked &&
-          summaryCheck.main_feed_behind &&
-          summaryCheck.latest_score &&
-          valid(summaryCheck.latest_score.home) &&
-          valid(summaryCheck.latest_score.away)
-        ) {
 
-          scoreHome =
-            summaryCheck.latest_score.home;
-
-          scoreAway =
-            summaryCheck.latest_score.away;
-
-          scoreSource =
-            "DF_SUI_CROSSCHECK";
-        }
-
-        const totalGoals =
+        let totalGoals =
           valid(scoreHome) &&
           valid(scoreAway)
             ? scoreHome + scoreAway
             : 0;
 
-        const isZeroZero =
+
+        let isZeroZero =
           scoreHome === 0 &&
           scoreAway === 0;
+
 
         // =================================================
         // FLASHCORE STATISTICS
@@ -509,30 +468,80 @@ export default {
           });
 
         // =================================================
-        // EXTRA ENTRY GUARD
+        // V4 FINAL ENTRY GUARD — DF_SUI ONLY FOR REAL HUNTER
         // =================================================
         //
-        // If main says 0:0 but df_sui already has a goal,
-        // Hunter must NOT be eligible.
+        // Request df_sui ONLY after the normal Hunter calculation
+        // says this match is eligible.
+        //
+        // Flow:
+        // main 0:0 + stats -> Hunter eligible -> df_sui check
+        // -> if df_sui already has a goal, ENTRY is blocked.
         // =================================================
 
         if (
-          summaryCheck.checked &&
-          summaryCheck.goal_count > 0 &&
+          signal.hunter_eligible === true &&
+          period === "1H" &&
+          minute >= 10 &&
+          minute <= 42 &&
           mainScoreHome === 0 &&
           mainScoreAway === 0
         ) {
 
-          signal.hunter_eligible =
-            false;
+          summaryCheck =
+            await getSummaryScoreCheck(
+              match.id,
+              headers,
+              mainScoreHome,
+              mainScoreAway
+            );
 
-          signal.target =
-            "NONE";
 
-          signal.reasons.push(
-            "df_sui_goal_guard"
-          );
+          if (
+            summaryCheck.available &&
+            summaryCheck.latest_score &&
+            valid(summaryCheck.latest_score.home) &&
+            valid(summaryCheck.latest_score.away) &&
+            summaryCheck.main_feed_behind
+          ) {
+
+            scoreHome =
+              summaryCheck.latest_score.home;
+
+            scoreAway =
+              summaryCheck.latest_score.away;
+
+            scoreSource =
+              "DF_SUI_CROSSCHECK";
+
+
+            totalGoals =
+              scoreHome +
+              scoreAway;
+
+            isZeroZero =
+              scoreHome === 0 &&
+              scoreAway === 0;
+          }
+
+
+          if (
+            summaryCheck.available &&
+            summaryCheck.goal_count > 0
+          ) {
+
+            signal.hunter_eligible =
+              false;
+
+            signal.target =
+              "NONE";
+
+            signal.reasons.push(
+              "df_sui_goal_guard"
+            );
+          }
         }
+
 
         // =================================================
         // DERIVED
@@ -806,7 +815,7 @@ export default {
           "flashscore_only_v27_score_crosscheck_v3",
 
         version:
-          "V3_DF_SUI_SCORE_CROSSCHECK",
+          "V4_HUNTER_FINAL_DF_SUI_GUARD",
 
         success:
           true,
@@ -883,7 +892,7 @@ export default {
           "flashscore_only_v27_score_crosscheck_v3",
 
         version:
-          "V3_DF_SUI_SCORE_CROSSCHECK",
+          "V4_HUNTER_FINAL_DF_SUI_GUARD",
 
         success:
           false,
@@ -1037,17 +1046,42 @@ async function getSummaryScoreCheck(
   let latestGoal =
     null;
 
-  for (const goal of goals) {
+  const scoredGoals =
+    goals
+      .filter(
+        goal =>
+          goal?.score &&
+          valid(goal.score.home) &&
+          valid(goal.score.away)
+      )
+      .map(
+        goal => ({
+          goal,
+          minute:
+            parseSummaryMinute(
+              goal?.minute
+            )
+        })
+      )
+      .sort(
+        (a, b) =>
+          (
+            a.minute ?? -1
+          ) -
+          (
+            b.minute ?? -1
+          )
+      );
 
-    if (
-      goal.score &&
-      valid(goal.score.home) &&
-      valid(goal.score.away)
-    ) {
 
-      latestGoal =
-        goal;
-    }
+  if (
+    scoredGoals.length > 0
+  ) {
+
+    latestGoal =
+      scoredGoals[
+        scoredGoals.length - 1
+      ].goal;
   }
 
   const latestScore =
@@ -1100,6 +1134,9 @@ async function getSummaryScoreCheck(
 
     status:
       response.status,
+
+    available:
+      response.status === 200,
 
     goal_count:
       goals.length,
@@ -1445,9 +1482,20 @@ function normalizeStat(value) {
   )
     return "xg";
 
+  // IMPORTANT:
+  // "xGOT faced" must NOT be classified as attacking xGOT.
+  // Check it first because the text also contains "xgot".
+  if (
+    v.includes("xgot faced")
+  )
+    return "xgot_faced";
+
   if (
     v.includes("xg on target") ||
-    v.includes("xgot")
+    (
+      v.includes("xgot") &&
+      !v.includes("faced")
+    )
   )
     return "xgot";
 
@@ -1519,10 +1567,6 @@ function normalizeStat(value) {
   )
     return "goalkeeper_saves";
 
-  if (
-    v.includes("xgot faced")
-  )
-    return "xgot_faced";
 
   if (
     v.includes("goals prevented")
@@ -2593,6 +2637,76 @@ function parseSummaryEvents(
 
 
 // =====================================================
+// DF_SUI MINUTE PARSER
+// Examples: 32' => 32, 45+2' => 47
+// =====================================================
+
+function parseSummaryMinute(
+  value
+) {
+
+  const text =
+    String(
+      value ?? ""
+    )
+      .trim()
+      .replace(
+        /['’"]/g,
+        ""
+      );
+
+
+  if (!text) {
+    return null;
+  }
+
+
+  const plus =
+    text.match(
+      /^(\d+)\s*\+\s*(\d+)$/
+    );
+
+
+  if (plus) {
+
+    const base =
+      Number(
+        plus[1]
+      );
+
+    const added =
+      Number(
+        plus[2]
+      );
+
+
+    if (
+      Number.isFinite(base) &&
+      Number.isFinite(added)
+    ) {
+
+      return base + added;
+    }
+  }
+
+
+  const direct =
+    Number(
+      text.match(
+        /\d+/
+      )?.[0]
+    );
+
+
+  return Number.isFinite(
+    direct
+  )
+    ? direct
+    : null;
+}
+
+
+// =====================================================
 // GOAL EVENT CHECK
 // =====================================================
 
@@ -2640,7 +2754,7 @@ function isLikelyGoalEvent(
 
 
 // =====================================================
-// DEBUG FEED FRESHNESS V3
+// DEBUG FEED FRESHNESS V4
 // =====================================================
 
 async function debugFeedFreshness(
@@ -2667,7 +2781,7 @@ async function debugFeedFreshness(
         success: false,
         debug: "FEED_FRESHNESS",
         version:
-          "V3_SCORE_CROSSCHECK",
+          "V4_HUNTER_FINAL_GUARD",
         mode: "READ_ONLY",
         error: "MATCH_ID_REQUIRED",
         usage:
@@ -2839,7 +2953,7 @@ async function debugFeedFreshness(
         "FEED_FRESHNESS",
 
       version:
-        "V3_SCORE_CROSSCHECK",
+        "V4_HUNTER_FINAL_GUARD",
 
       mode:
         "READ_ONLY",
