@@ -1,7 +1,16 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.3 1H PERIOD GUARD + FAST HT NO_GOAL
+// GOAL WATCH — HUNTER TRACKER V6.7.10.4 SAFE GOAL RESOLUTION
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
+//
+// V6.7.10.4:
+// - FIX: V27 score increase is checked BEFORE HT/2H NO_GOAL resolution again.
+// - Keeps the V6.7.10.3 DF_SUI first-half guard (45+N allowed; direct 46/47/50 rejected).
+// - Prevents a valid 1H goal from being lost when DF_SUI temporarily misses the event.
+// - HT/2H can close NO_GOAL only after DF_SUI + V27 score checks did not find a goal.
+// - Missing-feed finalization is conservative again; it no longer creates fast false NO_GOALs.
+// - Final DF_SUI check before missing-feed NO_GOAL is preserved.
+// - Hunter / Matcher / AI Matcher / odds / Bet Worker / reports are unchanged.
 //
 // V6.7.10.3:
 // - DF_SUI goals are accepted only when they belong to the FIRST HALF.
@@ -1384,8 +1393,11 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // 1) DF_SUI — ONLY CONFIRMED FIRST-HALF GOAL AFTER ENTRY
+  // 1) DF_SUI — CONFIRMED FIRST-HALF GOAL AFTER ENTRY
   // ==========================================================
+  // V6.7.10.4 keeps the 1H period guard from V6.7.10.3.
+  // This is the preferred source because it can expose the real
+  // goal event/minute before the main V27 score catches up.
 
   let summaryGoal = null;
 
@@ -1464,95 +1476,15 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // 2) HALF TIME
+  // 2) V27 SCORE FALLBACK — RESTORED BEFORE HT / 2H
   // ==========================================================
-  // At official HT, any score increase necessarily happened in 1H.
-  // This is the only post-1H place where V27 score fallback is safe.
-
-  if (
-    isFirstHalfFinished(m)
-  ) {
-
-    if (
-      home > entryHome ||
-      away > entryAway
-    ) {
-
-      const goalMinute =
-        getRealGoalMinute(
-          m,
-          entryHome,
-          entryAway,
-          entryMinute,
-          currentMinute
-        );
-
-      const afterMinutes =
-        goalMinute !== null
-          ? Math.max(
-              0,
-              goalMinute -
-              entryMinute
-            )
-          : null;
-
-      await resolveTrackingGoal(
-        env,
-        existing,
-        m,
-        trackingMap,
-        id,
-        now,
-        goalMinute,
-        afterMinutes,
-        "V27_HT_SCORE"
-      );
-
-      return;
-    }
-
-    await resolveTrackingNoGoal(
-      env,
-      existing,
-      m,
-      trackingMap,
-      id,
-      now,
-      "HALF_TIME"
-    );
-
-    return;
-  }
-
-
-  // ==========================================================
-  // 3) SECOND HALF STARTED
-  // ==========================================================
-  // IMPORTANT: A score increase first observed in 2H is NOT enough
-  // to prove a 1H goal. If df_sui did not confirm a 1H goal above,
-  // the 1H O0.5 signal is a NO_GOAL.
-
-  if (
-    isSecondHalfStarted(m)
-  ) {
-
-    await resolveTrackingNoGoal(
-      env,
-      existing,
-      m,
-      trackingMap,
-      id,
-      now,
-      "SECOND_HALF_STARTED"
-    );
-
-    return;
-  }
-
-
-  // ==========================================================
-  // 4) STILL FIRST HALF — V27 SCORE FALLBACK IS SAFE
-  // ==========================================================
+  // V6.7.10.3 moved this check after the HT/2H guards.
+  // That allowed a TRACKING signal to be closed as NO_GOAL when
+  // DF_SUI temporarily missed the event, even though V27 already
+  // contained a score increase.
+  //
+  // Restore the proven ordering:
+  // DF_SUI -> V27 SCORE -> HT/2H NO_GOAL.
 
   if (
     home > entryHome ||
@@ -1586,7 +1518,58 @@ async function processTrackingMatch(
       now,
       goalMinute,
       afterMinutes,
-      "V27_1H_SCORE"
+      "V27_SCORE_SAFE_FALLBACK"
+    );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // 3) OFFICIAL HALF TIME — ONLY NOW CAN 0:0 BECOME NO_GOAL
+  // ==========================================================
+  // Both independent goal paths above have already been checked.
+
+  if (
+    isFirstHalfFinished(m)
+  ) {
+
+    await resolveTrackingNoGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      "HALF_TIME_CONFIRMED_0_0"
+    );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // 4) SECOND HALF STARTED
+  // ==========================================================
+  // Reaching this point means:
+  // - no confirmed post-entry 1H DF_SUI goal was found; and
+  // - V27 has no score increase versus the entry score.
+  //
+  // Therefore the 1H O0.5 signal can be resolved NO_GOAL.
+  // Atomic DB update still prevents later overwrite.
+
+  if (
+    isSecondHalfStarted(m)
+  ) {
+
+    await resolveTrackingNoGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      "SECOND_HALF_CONFIRMED_NO_1H_GOAL"
     );
 
     return;
@@ -1595,7 +1578,7 @@ async function processTrackingMatch(
 
 
 // ============================================================
-// NO_GOAL RESOLVER — ATOMIC / IMMEDIATE HT + 2H
+// NO_GOAL RESOLVER — ATOMIC / AFTER GOAL CHECKS
 // ============================================================
 
 async function resolveTrackingNoGoal(
@@ -4190,21 +4173,24 @@ async function finalizeMissingTracking(
     );
 
 
-  // Missing from V27 usually means HT / feed transition.
-  // Estimate the end of 1H from the ENTRY minute and allow a short
-  // safety grace for stoppage time / feed delay. The old formula
-  // waited deep into the match and produced NO_GOAL ~20 min late.
-  const estimatedToHalfTime =
-    Math.max(
-      0,
-      45 - safeEntryMinute
-    );
-
-  const MISSING_HT_GRACE_MINUTES = 8;
-
+  // V6.7.10.4 SAFE MISSING-FEED FALLBACK
+  //
+  // A match disappearing from the V27 live list is NOT proof of HT 0:0.
+  // V6.7.10.3 finalized these signals close to HT, which can create a
+  // false NO_GOAL during a temporary feed transition.
+  //
+  // Return to the conservative timeout. The final DF_SUI goal check
+  // below is still executed before any NO_GOAL is written.
   const requiredMinutes =
-    estimatedToHalfTime +
-    MISSING_HT_GRACE_MINUTES;
+    Math.max(
+      68,
+      (
+        90 -
+        safeEntryMinute
+      ) +
+      15 +
+      20
+    );
 
 
   const entryTime =
