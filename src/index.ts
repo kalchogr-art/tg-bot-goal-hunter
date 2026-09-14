@@ -1,7 +1,16 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.5 HT RECONCILIATION
+// GOAL WATCH — HUNTER TRACKER V6.7.10.6 GOAL RESOLVER RESTORE
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
+//
+// V6.7.10.6:
+// - CRITICAL FIX: restores the missing resolveTrackingGoal() function.
+// - GOAL can now complete TRACKING -> GOAL atomically again.
+// - Writes goal_minute, goal_after_minutes and result='GOAL HIT'.
+// - Sends the Telegram GOAL HIT reply after the DB update.
+// - Keeps V6.7.10.5 HT/2H reconciliation unchanged.
+// - Keeps DF_SUI first-half guards and conservative missing-feed fallback.
+// - Hunter / Matcher / AI Matcher / odds / Bet Worker / reports are unchanged.
 //
 // V6.7.10.5:
 // - FIX: HT/2H 0:0 is no longer finalized immediately.
@@ -1727,6 +1736,80 @@ function shouldDeferHalfTransitionNoGoal(
     ageMinutes <
     requiredAge
   );
+}
+
+
+// ============================================================
+// RESOLVE TRACKING GOAL — V6.7.10.6 RESTORED
+// ============================================================
+
+async function resolveTrackingGoal(
+  env,
+  existing,
+  m,
+  trackingMap,
+  id,
+  now,
+  goalMinute,
+  afterMinutes,
+  source
+) {
+
+  const update =
+    await env.DB
+      .prepare(`
+        UPDATE hunter_signals
+        SET
+          status = 'GOAL',
+          goal_minute = ?,
+          goal_after_minutes = ?,
+          result = 'GOAL HIT',
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'TRACKING'
+      `)
+      .bind(
+        goalMinute,
+        afterMinutes,
+        now.toISOString(),
+        existing.id
+      )
+      .run();
+
+
+  const changes =
+    Number(
+      update?.meta?.changes ||
+      0
+    );
+
+  if (
+    changes < 1
+  ) {
+    return false;
+  }
+
+
+  trackingMap.delete(id);
+
+
+  if (!isShadowSignal(existing)) {
+
+    await sendTelegram(
+      env,
+      formatGoalMessage(
+        existing,
+        m,
+        goalMinute,
+        afterMinutes,
+        source
+      ),
+      existing.telegram_message_id
+    );
+  }
+
+
+  return true;
 }
 
 
@@ -7963,7 +8046,7 @@ ${existing.hunter_score}/100
 ${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
 
 🔎 Потвърждение:
-${source === "DF_SUI" ? "DF_SUI EVENT" : "V27 SCORE"}
+${String(source || "").startsWith("DF_SUI") ? "DF_SUI EVENT" : "V27 SCORE"}
 
 RESULT: GOAL HIT`;
 }
