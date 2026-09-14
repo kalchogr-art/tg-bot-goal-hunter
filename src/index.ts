@@ -1,7 +1,19 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.4 SAFE GOAL RESOLUTION
+// GOAL WATCH — HUNTER TRACKER V6.7.10.5 HT RECONCILIATION
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
+//
+// V6.7.10.5:
+// - FIX: HT/2H 0:0 is no longer finalized immediately.
+// - HT/2H enters a reconciliation grace window and remains TRACKING.
+// - During the grace window every cron run re-checks DF_SUI for a confirmed 1H post-entry goal.
+// - A score increase at official HT is still accepted as GOAL.
+// - A generic score increase first seen in 2H is NOT used as proof of a 1H goal.
+// - After the reconciliation window expires, NO_GOAL can be finalized only after repeated DF_SUI misses.
+// - Explicit 1H DF_SUI context can accept direct 46/47/etc as first-half stoppage time.
+// - Direct 46/47/etc without explicit 1H context remains rejected.
+// - Missing-feed fallback remains conservative.
+// - Hunter / Matcher / AI Matcher / odds / Bet Worker / reports are unchanged.
 //
 // V6.7.10.4:
 // - FIX: V27 score increase is checked BEFORE HT/2H NO_GOAL resolution again.
@@ -1395,9 +1407,8 @@ async function processTrackingMatch(
   // ==========================================================
   // 1) DF_SUI — CONFIRMED FIRST-HALF GOAL AFTER ENTRY
   // ==========================================================
-  // V6.7.10.4 keeps the 1H period guard from V6.7.10.3.
-  // This is the preferred source because it can expose the real
-  // goal event/minute before the main V27 score catches up.
+  // Preferred source. This check runs on EVERY cron pass while
+  // the signal remains TRACKING, including HT/2H reconciliation.
 
   let summaryGoal = null;
 
@@ -1475,20 +1486,25 @@ async function processTrackingMatch(
   }
 
 
+  const atHalfTime =
+    isFirstHalfFinished(m);
+
+  const inSecondHalf =
+    isSecondHalfStarted(m);
+
+
   // ==========================================================
-  // 2) V27 SCORE FALLBACK — RESTORED BEFORE HT / 2H
+  // 2) STILL FIRST HALF — V27 SCORE FALLBACK IS SAFE
   // ==========================================================
-  // V6.7.10.3 moved this check after the HT/2H guards.
-  // That allowed a TRACKING signal to be closed as NO_GOAL when
-  // DF_SUI temporarily missed the event, even though V27 already
-  // contained a score increase.
-  //
-  // Restore the proven ordering:
-  // DF_SUI -> V27 SCORE -> HT/2H NO_GOAL.
+  // While still in 1H, any score increase happened in 1H.
 
   if (
-    home > entryHome ||
-    away > entryAway
+    !atHalfTime &&
+    !inSecondHalf &&
+    (
+      home > entryHome ||
+      away > entryAway
+    )
   ) {
 
     const goalMinute =
@@ -1518,7 +1534,7 @@ async function processTrackingMatch(
       now,
       goalMinute,
       afterMinutes,
-      "V27_SCORE_SAFE_FALLBACK"
+      "V27_1H_SCORE"
     );
 
     return;
@@ -1526,22 +1542,47 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // 3) OFFICIAL HALF TIME — ONLY NOW CAN 0:0 BECOME NO_GOAL
+  // 3) OFFICIAL HT — SCORE INCREASE IS SAFE
   // ==========================================================
-  // Both independent goal paths above have already been checked.
+  // At a genuine HT snapshot, a score increase versus ENTRY
+  // necessarily belongs to the first half.
 
   if (
-    isFirstHalfFinished(m)
+    atHalfTime &&
+    (
+      home > entryHome ||
+      away > entryAway
+    )
   ) {
 
-    await resolveTrackingNoGoal(
+    const goalMinute =
+      getRealGoalMinute(
+        m,
+        entryHome,
+        entryAway,
+        entryMinute,
+        currentMinute
+      );
+
+    const afterMinutes =
+      goalMinute !== null
+        ? Math.max(
+            0,
+            goalMinute -
+            entryMinute
+          )
+        : null;
+
+    await resolveTrackingGoal(
       env,
       existing,
       m,
       trackingMap,
       id,
       now,
-      "HALF_TIME_CONFIRMED_0_0"
+      goalMinute,
+      afterMinutes,
+      "V27_HT_SCORE"
     );
 
     return;
@@ -1549,18 +1590,55 @@ async function processTrackingMatch(
 
 
   // ==========================================================
-  // 4) SECOND HALF STARTED
+  // 4) HT / 2H RECONCILIATION WINDOW
   // ==========================================================
-  // Reaching this point means:
-  // - no confirmed post-entry 1H DF_SUI goal was found; and
-  // - V27 has no score increase versus the entry score.
+  // CRITICAL V6.7.10.5 FIX:
   //
-  // Therefore the 1H O0.5 signal can be resolved NO_GOAL.
-  // Atomic DB update still prevents later overwrite.
+  // The first HT/2H 0:0 snapshot is NOT trusted as final.
+  // Flashscore/V27 can briefly transition period before score/events
+  // have caught up. Keep TRACKING and let subsequent cron passes
+  // re-check DF_SUI.
+  //
+  // We intentionally do NOT use a generic score increase first seen
+  // in 2H as proof of a 1H goal because that could be a real 2H goal.
 
   if (
-    isSecondHalfStarted(m)
+    atHalfTime ||
+    inSecondHalf
   ) {
+
+    const deferNoGoal =
+      shouldDeferHalfTransitionNoGoal(
+        existing,
+        now
+      );
+
+    if (deferNoGoal) {
+
+      console.log(
+        "HT_RECONCILIATION_DEFER",
+        id,
+        {
+          entry_minute:
+            entryMinute,
+          period:
+            normalizeLivePeriod?.(m) ??
+            m?.period ??
+            null,
+          score: {
+            home,
+            away
+          }
+        }
+      );
+
+      return;
+    }
+
+
+    // Grace window has expired.
+    // DF_SUI was already checked again at the top of this pass.
+    // If no confirmed 1H post-entry goal exists, close NO_GOAL.
 
     await resolveTrackingNoGoal(
       env,
@@ -1569,11 +1647,86 @@ async function processTrackingMatch(
       trackingMap,
       id,
       now,
-      "SECOND_HALF_CONFIRMED_NO_1H_GOAL"
+      atHalfTime
+        ? "HALF_TIME_RECONCILED_NO_GOAL"
+        : "SECOND_HALF_RECONCILED_NO_GOAL"
     );
 
     return;
   }
+}
+
+
+// ============================================================
+// V6.7.10.5 — HT / 2H NO_GOAL RECONCILIATION TIMER
+// ============================================================
+
+function shouldDeferHalfTransitionNoGoal(
+  signal,
+  now
+) {
+
+  const entryMinute =
+    Math.max(
+      0,
+      Math.min(
+        45,
+        Number(
+          signal?.entry_minute ||
+          0
+        )
+      )
+    );
+
+  const entryTime =
+    new Date(
+      signal?.entry_time ||
+      signal?.created_at ||
+      ""
+    );
+
+  // If timestamp is temporarily unusable, fail SAFE:
+  // do not finalize NO_GOAL from one uncertain HT/2H snapshot.
+  if (
+    Number.isNaN(
+      entryTime.getTime()
+    )
+  ) {
+    return true;
+  }
+
+  const ageMinutes =
+    (
+      now.getTime() -
+      entryTime.getTime()
+    ) /
+    60000;
+
+  // Estimated real-time distance from ENTRY to 45:00.
+  const minutesUntil45 =
+    Math.max(
+      0,
+      45 - entryMinute
+    );
+
+  // Allow enough time for:
+  // - first-half stoppage time
+  // - Flashscore period transition
+  // - V27 score propagation
+  // - DF_SUI event propagation
+  //
+  // Cron keeps retrying each minute during this window.
+  const HT_RECONCILIATION_GRACE_MINUTES =
+    15;
+
+  const requiredAge =
+    minutesUntil45 +
+    HT_RECONCILIATION_GRACE_MINUTES;
+
+  return (
+    ageMinutes <
+    requiredAge
+  );
 }
 
 
@@ -2176,6 +2329,23 @@ function isFirstHalfDfSuiEvent(
     )
   ) {
     return false;
+  }
+
+  // V6.7.10.5:
+  // Explicit FIRST-HALF context is stronger than the raw displayed
+  // minute. Some feeds can expose stoppage as direct 46/47/etc
+  // instead of 45+N. Accept it only when the event context itself
+  // explicitly says first half.
+  const explicitFirstHalf =
+    /(^|\s)(1H|1ST HALF|FIRST HALF|1P)(\s|$)/.test(
+      sectionText
+    );
+
+  if (
+    explicitFirstHalf &&
+    minuteInfo.effective <= 60
+  ) {
+    return true;
   }
 
   // Flashscore-style 45+N is first-half stoppage time.
