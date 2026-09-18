@@ -1,7 +1,15 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.10 BETSTATS FROM SEP 15
+// GOAL WATCH — HUNTER TRACKER V6.7.10.11 SHADOWSTATS + VIRTUAL BANK
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
+//
+// V6.7.10.11:
+// - Adds /shadowstats for experimental 5–9 minute SHADOW signals.
+// - /shadowstats keeps 5–9 separate from real BET READY statistics.
+// - /betstats adds a virtual bankroll simulation from 2026-09-15.
+// - Starting bank: 100 EUR; flat stake: REPORT_STAKE (10 EUR).
+// - Each day's closing bank becomes the next day's opening bank.
+// - This is accounting/statistics only; no betting logic is changed.
 //
 // V6.7.10.9:
 // - /betstats now shows ONLY clean data after the tracker fixes.
@@ -225,6 +233,10 @@ const BET_READY_HISTORY_SQL = `
 // 2026-09-15 00:00 Europe/Sofia = 2026-09-14T21:00:00.000Z.
 const BETSTATS_CLEAN_START_UTC = "2026-09-14T21:00:00.000Z";
 const BETSTATS_CLEAN_START_LABEL = "2026-09-15";
+
+// Virtual bankroll for clean BET READY research.
+const BETSTATS_START_BANK = 100;
+
 
 
 // V6.7.4 matcher retry: same strict matcher rules, no relaxed names.
@@ -979,6 +991,24 @@ export default {
           return json({
             success: true,
             action: "TODAY"
+          });
+        }
+
+
+        if (
+          text === "/shadowstats" ||
+          text.startsWith("/shadowstats@")
+        ) {
+
+          await sendTelegram(
+            env,
+            await buildShadowStats(env)
+          );
+
+          return json({
+            success: true,
+            action: "SHADOWSTATS",
+            population: "SHADOW_5_9"
           });
         }
 
@@ -6671,6 +6701,142 @@ ${formatMinuteStats(minuteRows)}
 
 
 // ============================================================
+// SHADOW STATS — /shadowstats
+// Experimental 5–9 minute Hunter population
+// ============================================================
+
+async function buildShadowStats(env) {
+
+  const result = await env.DB
+    .prepare(`
+      SELECT
+        entry_minute,
+        hunter_score,
+        result,
+        goal_after_minutes,
+        entry_odds
+      FROM hunter_signals
+      WHERE entry_minute BETWEEN 5 AND 9
+        AND hunter_score >= 65
+      ORDER BY created_at ASC
+    `)
+    .all();
+
+  const rows = result?.results || [];
+
+  const total = rows.length;
+  const goals = rows.filter(r => r?.result === "GOAL HIT").length;
+  const noGoals = rows.filter(r => r?.result === "NO GOAL").length;
+  const open = Math.max(0, total - goals - noGoals);
+  const resolved = goals + noGoals;
+  const successRate = resolved > 0 ? goals / resolved * 100 : 0;
+
+  const goalTimes = rows
+    .filter(r => r?.result === "GOAL HIT")
+    .map(r => numberOrNull(r?.goal_after_minutes))
+    .filter(v => v !== null);
+
+  const avgGoalAfter = goalTimes.length
+    ? goalTimes.reduce((a, b) => a + b, 0) / goalTimes.length
+    : null;
+
+  const oddsRows = rows.filter(r => {
+    const odds = numberOrNull(r?.entry_odds);
+    return odds !== null && odds > 1;
+  });
+
+  let oddsPL = 0;
+  let oddsResolved = 0;
+
+  for (const row of oddsRows) {
+    const odds = numberOrNull(row?.entry_odds);
+    if (row?.result === "GOAL HIT") {
+      oddsPL += REPORT_STAKE * (odds - 1);
+      oddsResolved += 1;
+    } else if (row?.result === "NO GOAL") {
+      oddsPL -= REPORT_STAKE;
+      oddsResolved += 1;
+    }
+  }
+
+  const avgOdds = oddsRows.length
+    ? oddsRows.reduce((sum, row) => sum + Number(row.entry_odds), 0) / oddsRows.length
+    : null;
+
+  const oddsROI = oddsResolved > 0
+    ? oddsPL / (oddsResolved * REPORT_STAKE) * 100
+    : null;
+
+  let message =
+`👻 SHADOW STATS — 5–9′
+
+🧪 Експериментални ранни Hunter сигнали
+🔥 Минимален Score: 65
+
+🎯 ENTRY: ${total}
+🟢 GOAL HIT: ${goals}
+🔴 NO GOAL: ${noGoals}${open > 0 ? `\n⏳ OPEN: ${open}` : ""}
+
+📈 Успеваемост: ${successRate.toFixed(1)}%
+⏱ Средно до гол: ${avgGoalAfter !== null ? avgGoalAfter.toFixed(1) + " мин." : "—"}
+🎲 Avg odds: ${avgOdds !== null ? avgOdds.toFixed(2) : "—"}
+💶 P/L @ €${REPORT_STAKE.toFixed(0)}: ${oddsResolved ? formatMoney(oddsPL) + " EUR" : "—"}
+📈 ROI: ${oddsROI !== null ? (oddsROI > 0 ? "+" : "") + oddsROI.toFixed(1) + "%" : "—"}
+
+━━━━━━━━━━━━━━━━
+⏱ ПО ТОЧНА ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+`;
+
+  for (let minute = 5; minute <= 9; minute++) {
+    const group = rows.filter(r => Number(r?.entry_minute) === minute);
+    const g = group.filter(r => r?.result === "GOAL HIT").length;
+    const ng = group.filter(r => r?.result === "NO GOAL").length;
+    const resolvedMinute = g + ng;
+    const rate = resolvedMinute > 0 ? g / resolvedMinute * 100 : 0;
+
+    message += group.length
+      ? `${minute}′: ${group.length} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${rate.toFixed(1)}%\n`
+      : `${minute}′: 0 ENTRY\n`;
+  }
+
+  message +=
+`\n━━━━━━━━━━━━━━━━
+🔥 ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+  for (const [minScore, maxScore, label] of [
+    [65, 69, "65–69"],
+    [70, 79, "70–79"],
+    [80, 89, "80–89"],
+    [90, 100, "90–100"]
+  ]) {
+    const group = rows.filter(r => {
+      const score = Number(r?.hunter_score || 0);
+      return score >= minScore && score <= maxScore;
+    });
+    const g = group.filter(r => r?.result === "GOAL HIT").length;
+    const ng = group.filter(r => r?.result === "NO GOAL").length;
+    const resolvedScore = g + ng;
+    const rate = resolvedScore > 0 ? g / resolvedScore * 100 : 0;
+
+    message += group.length
+      ? `${label}: ${group.length} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${rate.toFixed(1)}%\n`
+      : `${label}: 0 ENTRY\n`;
+  }
+
+  message +=
+`\n━━━━━━━━━━━━━━━━
+👻 SHADOW ONLY — не влиза в /betstats
+💾 Продължава да се събира в D1
+🕐 Europe/Sofia`;
+
+  return message;
+}
+
+
+// ============================================================
 // BET READY HISTORY — /betstats
 // V6.7.10.7
 // ============================================================
@@ -6884,6 +7050,51 @@ async function buildBetReadyStats(env) {
       message += `${row?.day_key || "—"}: ${dTotal} ENTRY | ${dGoals} GOAL | ${dNoGoals} NO GOAL${dOpen ? ` | ${dOpen} OPEN` : ""} | ${dRate.toFixed(1)}%\n`;
       message += `   🎲 ${dOdds !== null ? dOdds.toFixed(2) : "—"} | 💶 ${dResolved ? formatMoney(dPL) + " EUR" : "—"} | ROI ${dRoi !== null ? (dRoi > 0 ? "+" : "") + dRoi.toFixed(1) + "%" : "—"}\n`;
     }
+  }
+
+  message += `\n━━━━━━━━━━━━━━━━
+🏦 ВИРТУАЛНА БАНКА · €${BETSTATS_START_BANK.toFixed(2)} START
+━━━━━━━━━━━━━━━━
+`;
+
+  let virtualBank = BETSTATS_START_BANK;
+  const bankRows = [...dailyRows].reverse();
+
+  if (!bankRows.length) {
+    message += `Няма завършени дни.\n`;
+  } else {
+    for (const row of bankRows) {
+      const dGoals = Number(row?.goals || 0);
+      const dNoGoals = Number(row?.no_goals || 0);
+      const dResolved = dGoals + dNoGoals;
+      const dPL = Number(row?.profit_loss || 0);
+      const openingBank = virtualBank;
+
+      // Flat-stake research: the stake stays REPORT_STAKE (10 EUR).
+      // We do not stop the simulation if the virtual bank falls below the stake;
+      // this is a historical accounting curve, not an execution engine.
+      virtualBank += dPL;
+
+      const bankReturn = openingBank !== 0
+        ? dPL / openingBank * 100
+        : null;
+
+      message +=
+        `${row?.day_key || "—"}: €${openingBank.toFixed(2)} → ${dPL >= 0 ? "+" : ""}€${dPL.toFixed(2)} → €${virtualBank.toFixed(2)}` +
+        `${dResolved ? ` | ${dResolved} bets` : ""}` +
+        `${bankReturn !== null ? ` | ${bankReturn >= 0 ? "+" : ""}${bankReturn.toFixed(1)}% bank` : ""}\n`;
+    }
+
+    const totalBankPL = virtualBank - BETSTATS_START_BANK;
+    const bankGrowth = BETSTATS_START_BANK > 0
+      ? totalBankPL / BETSTATS_START_BANK * 100
+      : null;
+
+    message +=
+      `\n💰 Текуща виртуална банка: €${virtualBank.toFixed(2)}\n` +
+      `📊 Промяна: ${totalBankPL >= 0 ? "+" : ""}€${totalBankPL.toFixed(2)}` +
+      `${bankGrowth !== null ? ` | ${bankGrowth >= 0 ? "+" : ""}${bankGrowth.toFixed(1)}% спрямо началната банка` : ""}\n` +
+      `🎯 Flat stake: €${REPORT_STAKE.toFixed(2)} на BET READY`;
   }
 
   message += `\n━━━━━━━━━━━━━━━━
