@@ -1,9 +1,26 @@
+
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.11 SHADOWSTATS + VIRTUAL BANK
+// GOAL WATCH — HUNTER TRACKER V6.7.10.13 SHADOW BET-READY ONLY
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
-// V6.7.10.11:
+// V6.7.10.13:
+// - /shadowstats shows ONLY 5–9 minute SHADOW signals that became BET READY.
+// - Requires Cloudbet event id + real entry_odds > 1 + odds_available = 1.
+// - Shadow research threshold remains Score >= 50.
+// - IMPORTANT: restores the real 20–24 BET READY threshold to Score >= 65.
+// - Tracker / GOAL resolver / /betstats are unchanged.
+//
+// V6.7.10.12:
+// - SHADOW research 5–9 minute threshold lowered from Score 65 to Score 50.
+// - Shadow signals continue through the SAME Cloudbet matcher + odds lookup as normal entries.
+// - Saves cloudbet_event_id, entry_odds and odds_available in D1 when found.
+// - AI-matched shadow events can also sync exact 1H O0.5 odds from Bet Worker preflight.
+// - Still SHADOW ONLY: no normal ENTRY Telegram and never enters /betstats.
+// - /shadowstats adds Score buckets 50–54, 55–59 and 60–64.
+// - Real BET READY thresholds from minute 10 onward are unchanged.
+//
+// // V6.7.10.11:
 // - Adds /shadowstats for experimental 5–9 minute SHADOW signals.
 // - /shadowstats keeps 5–9 separate from real BET READY statistics.
 // - /betstats adds a virtual bankroll simulation from 2026-09-15.
@@ -121,7 +138,7 @@
 // 5. ODDS READ DIRECTLY FROM MATCHER result.odds
 // 6. ENTRY ODDS SAVED IN D1
 // 7. ODDS FAILURE NEVER BLOCKS HUNTER ENTRY
-// 8. HUNTER LOGIC: 5–9 SHADOW 65+; 10–19 60+; 20–24 65+; 25–29 70+; 30–34 75+; 35–42 80+
+// 8. HUNTER LOGIC: 5–9 SHADOW 50+; 10–19 60+; 20–24 65+; 25–29 70+; 30–34 75+; 35–42 80+
 // 9. TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
 // 10. DAILY / MONTHLY / LEAGUE / HOUR STATS PRESERVED
 // 11. TELEGRAM ENTRY SHOWS MATCHED / UNMATCHED
@@ -136,7 +153,7 @@
 // A match can have ONLY ONE Hunter ENTRY during its lifetime.
 // created_at / updated_at / entry_time are stored as UTC ISO.
 // Statistics are calculated according to Europe/Sofia.
-// V6.7.10.0: 5–9 shadow tracking + dynamic live Score thresholds + odds-only filtered reports.
+// V6.7.10.0: 5–9 shadow 50+ tracking + dynamic live Score thresholds + odds-only filtered reports.
 //
 // V6.7.10.1 DF_SUI GOAL VERIFY:
 // - TRACKING checks Flashscore df_sui for confirmed post-ENTRY goals.
@@ -159,7 +176,7 @@ const HUNTER_TO = 42;
 const HUNTER_MIN_SCORE = 60;
 
 // V6.7.10.0 LIVE HUNTER FILTER
-// 5–9   => 65+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
+// 5–9   => 50+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
 // 10–19 => 60+
 // 20–24 => 65+
 // 25–29 => 70+
@@ -4772,7 +4789,7 @@ function isHunterCandidate(
 function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
 
-  if (m >= 5 && m <= 9) return 65;
+  if (m >= 5 && m <= 9) return 50;
   if (m >= 10 && m <= 19) return 60;
   if (m >= 20 && m <= 24) return 65;
   if (m >= 25 && m <= 29) return 70;
@@ -6717,7 +6734,12 @@ async function buildShadowStats(env) {
         entry_odds
       FROM hunter_signals
       WHERE entry_minute BETWEEN 5 AND 9
-        AND hunter_score >= 65
+        AND hunter_score >= 50
+        AND cloudbet_event_id IS NOT NULL
+        AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> ''
+        AND entry_odds IS NOT NULL
+        AND entry_odds > 1
+        AND odds_available = 1
       ORDER BY created_at ASC
     `)
     .all();
@@ -6768,10 +6790,10 @@ async function buildShadowStats(env) {
     : null;
 
   let message =
-`👻 SHADOW STATS — 5–9′
+`👻 SHADOW BET READY STATS — 5–9′
 
-🧪 Експериментални ранни Hunter сигнали
-🔥 Минимален Score: 65
+🧪 Само ранни сигнали, които реално са станали BET READY
+🔥 Минимален Score: 50
 
 🎯 ENTRY: ${total}
 🟢 GOAL HIT: ${goals}
@@ -6807,6 +6829,9 @@ async function buildShadowStats(env) {
 `;
 
   for (const [minScore, maxScore, label] of [
+    [50, 54, "50–54"],
+    [55, 59, "55–59"],
+    [60, 64, "60–64"],
     [65, 69, "65–69"],
     [70, 79, "70–79"],
     [80, 89, "80–89"],
@@ -6828,8 +6853,9 @@ async function buildShadowStats(env) {
 
   message +=
 `\n━━━━━━━━━━━━━━━━
-👻 SHADOW ONLY — не влиза в /betstats
-💾 Продължава да се събира в D1
+👻 Само SHADOW BET READY — не влиза в /betstats
+🎲 Cloudbet event + реален entry odds + odds_available
+💾 Не-BET-READY Shadow сигналите не участват в тази команда
 🕐 Europe/Sofia`;
 
   return message;
