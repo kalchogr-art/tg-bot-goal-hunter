@@ -1,7 +1,22 @@
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.7 BET READY HISTORY
+// GOAL WATCH — HUNTER TRACKER V6.7.10.10 BETSTATS FROM SEP 15
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
+//
+// V6.7.10.9:
+// - /betstats now shows ONLY clean data after the tracker fixes.
+// - Clean period starts 2026-09-18 Europe/Sofia.
+// - Removes old/pre-fix history from this command's calculations and output.
+// - Keeps odds buckets, minute buckets, score buckets, P/L and ROI.
+// - Does NOT delete old D1 rows; they are simply excluded from /betstats.
+// - Tracker / GOAL resolver / HT reconciliation remain unchanged.
+//
+// V6.7.10.8:
+// - /betstats keeps ALL BET READY history.
+// - Adds CLEAN PERIOD starting from the working GOAL-resolver generation (V6.7.10.6).
+// - CLEAN cutoff: 2026-09-18 00:00 Europe/Sofia.
+// - Adds odds buckets with GOAL/NO GOAL, hit rate, average odds, P/L and ROI.
+// - Does NOT alter Hunter, Tracker, GOAL/NO_GOAL resolution, Matcher, odds capture or Bet Worker.
 //
 // V6.7.10.7:
 // - Adds Telegram command /betstats.
@@ -205,6 +220,12 @@ const BET_READY_HISTORY_SQL = `
     OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 80)
   )
 `;
+
+// /betstats clean analysis window requested by user.
+// 2026-09-15 00:00 Europe/Sofia = 2026-09-14T21:00:00.000Z.
+const BETSTATS_CLEAN_START_UTC = "2026-09-14T21:00:00.000Z";
+const BETSTATS_CLEAN_START_LABEL = "2026-09-15";
+
 
 // V6.7.4 matcher retry: same strict matcher rules, no relaxed names.
 const MATCHER_ENTRY_ATTEMPTS = 2;
@@ -6471,6 +6492,114 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 HU
 
   const minuteRows = await getMinuteStatsForBounds(env, bounds);
 
+  const cleanStart =
+    bounds.start > BETSTATS_CLEAN_START_UTC
+      ? bounds.start
+      : BETSTATS_CLEAN_START_UTC;
+
+  const cleanOverall = await env.DB
+    .prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(CASE WHEN result = 'GOAL HIT' AND goal_after_minutes IS NOT NULL THEN goal_after_minutes END) AS avg_goal_after,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      cleanStart,
+      bounds.end
+    )
+    .first();
+
+  const oddsResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_odds >= 1.00 AND entry_odds < 1.40 THEN '1.00–1.39'
+          WHEN entry_odds >= 1.40 AND entry_odds < 1.70 THEN '1.40–1.69'
+          WHEN entry_odds >= 1.70 AND entry_odds < 2.00 THEN '1.70–1.99'
+          WHEN entry_odds >= 2.00 AND entry_odds < 2.50 THEN '2.00–2.49'
+          WHEN entry_odds >= 2.50 AND entry_odds < 3.50 THEN '2.50–3.49'
+          WHEN entry_odds >= 3.50 AND entry_odds < 5.00 THEN '3.50–4.99'
+          ELSE '5.00+'
+        END AS odds_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY odds_group
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      bounds.start,
+      bounds.end
+    )
+    .all();
+
+  const cleanOddsResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_odds >= 1.00 AND entry_odds < 1.40 THEN '1.00–1.39'
+          WHEN entry_odds >= 1.40 AND entry_odds < 1.70 THEN '1.40–1.69'
+          WHEN entry_odds >= 1.70 AND entry_odds < 2.00 THEN '1.70–1.99'
+          WHEN entry_odds >= 2.00 AND entry_odds < 2.50 THEN '2.00–2.49'
+          WHEN entry_odds >= 2.50 AND entry_odds < 3.50 THEN '2.50–3.49'
+          WHEN entry_odds >= 3.50 AND entry_odds < 5.00 THEN '3.50–4.99'
+          ELSE '5.00+'
+        END AS odds_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY odds_group
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      cleanStart,
+      bounds.end
+    )
+    .all();
+
   const total = Number(overall?.total || 0);
   const goals = Number(overall?.goals || 0);
   const noGoals = Number(overall?.no_goals || 0);
@@ -6558,6 +6687,11 @@ async function buildBetReadyStats(env) {
     return `💰 BET READY STATS\n\n❌ Не успях да изчисля месечните граници.`;
   }
 
+  const cleanStart =
+    bounds.start > BETSTATS_CLEAN_START_UTC
+      ? bounds.start
+      : BETSTATS_CLEAN_START_UTC;
+
   const overall = await env.DB
     .prepare(`
       SELECT
@@ -6579,12 +6713,7 @@ async function buildBetReadyStats(env) {
         AND created_at < ?
         AND ${BET_READY_HISTORY_SQL}
     `)
-    .bind(
-      REPORT_STAKE,
-      REPORT_STAKE,
-      bounds.start,
-      bounds.end
-    )
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
     .first();
 
   const dailyResult = await env.DB
@@ -6610,12 +6739,7 @@ async function buildBetReadyStats(env) {
       ORDER BY day_key DESC
       LIMIT 10
     `)
-    .bind(
-      REPORT_STAKE,
-      REPORT_STAKE,
-      bounds.start,
-      bounds.end
-    )
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
     .all();
 
   const minuteResult = await env.DB
@@ -6652,12 +6776,7 @@ async function buildBetReadyStats(env) {
         WHEN '35–42′' THEN 5
       END
     `)
-    .bind(
-      REPORT_STAKE,
-      REPORT_STAKE,
-      bounds.start,
-      bounds.end
-    )
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
     .all();
 
   const scoreResult = await env.DB
@@ -6678,7 +6797,39 @@ async function buildBetReadyStats(env) {
         AND ${BET_READY_HISTORY_SQL}
       GROUP BY score_group
     `)
-    .bind(bounds.start, bounds.end)
+    .bind(cleanStart, bounds.end)
+    .all();
+
+  const oddsResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_odds >= 1.00 AND entry_odds < 1.40 THEN '1.00–1.39'
+          WHEN entry_odds >= 1.40 AND entry_odds < 1.70 THEN '1.40–1.69'
+          WHEN entry_odds >= 1.70 AND entry_odds < 2.00 THEN '1.70–1.99'
+          WHEN entry_odds >= 2.00 AND entry_odds < 2.50 THEN '2.00–2.49'
+          WHEN entry_odds >= 2.50 AND entry_odds < 3.50 THEN '2.50–3.49'
+          WHEN entry_odds >= 3.50 AND entry_odds < 5.00 THEN '3.50–4.99'
+          ELSE '5.00+'
+        END AS odds_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY odds_group
+    `)
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
     .all();
 
   const total = Number(overall?.total || 0);
@@ -6696,9 +6847,9 @@ async function buildBetReadyStats(env) {
     : null;
 
   let message =
-`💰 BET READY STATS
+`💰 BET READY STATS — CLEAN
 
-📅 ${currentMonth} · история само BET READY
+📅 От ${BETSTATS_CLEAN_START_LABEL} · след Tracker фиксовете
 
 🎯 ENTRY: ${total}
 🟢 GOAL HIT: ${goals}
@@ -6711,14 +6862,13 @@ async function buildBetReadyStats(env) {
 📈 ROI: ${roi !== null ? (roi > 0 ? "+" : "") + roi.toFixed(1) + "%" : "—"}
 
 ━━━━━━━━━━━━━━━━
-📆 ПО ДНИ — ПОСЛЕДНИТЕ 10
+📆 ПО ДНИ
 ━━━━━━━━━━━━━━━━
 `;
 
   const dailyRows = dailyResult?.results || [];
-
-  if (dailyRows.length === 0) {
-    message += `Няма BET READY записи.\n`;
+  if (!dailyRows.length) {
+    message += `Няма BET READY записи след фикса.\n`;
   } else {
     for (const row of dailyRows) {
       const dTotal = Number(row?.total || 0);
@@ -6731,73 +6881,79 @@ async function buildBetReadyStats(env) {
       const dPL = Number(row?.profit_loss || 0);
       const dRoi = dResolved > 0 ? dPL / (dResolved * REPORT_STAKE) * 100 : null;
 
-      message +=
-        `${row?.day_key || "—"}: ${dTotal} ENTRY | ${dGoals} GOAL | ${dNoGoals} NO GOAL` +
-        `${dOpen > 0 ? ` | ${dOpen} OPEN` : ""} | ${dRate.toFixed(1)}%\n` +
-        `   🎲 ${dOdds !== null ? dOdds.toFixed(2) : "—"} | 💶 ${dResolved > 0 ? formatMoney(dPL) + " EUR" : "—"} | ROI ${dRoi !== null ? (dRoi > 0 ? "+" : "") + dRoi.toFixed(1) + "%" : "—"}\n`;
+      message += `${row?.day_key || "—"}: ${dTotal} ENTRY | ${dGoals} GOAL | ${dNoGoals} NO GOAL${dOpen ? ` | ${dOpen} OPEN` : ""} | ${dRate.toFixed(1)}%\n`;
+      message += `   🎲 ${dOdds !== null ? dOdds.toFixed(2) : "—"} | 💶 ${dResolved ? formatMoney(dPL) + " EUR" : "—"} | ROI ${dRoi !== null ? (dRoi > 0 ? "+" : "") + dRoi.toFixed(1) + "%" : "—"}\n`;
     }
   }
 
-  message +=
-`\n━━━━━━━━━━━━━━━━
-⏱ ПО ENTRY МИНУТА — МЕСЕЦ
+  message += `\n━━━━━━━━━━━━━━━━
+⏱ ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
 `;
 
-  const minuteMap = new Map(
-    (minuteResult?.results || []).map(row => [row.minute_group, row])
-  );
-
+  const minuteMap = new Map((minuteResult?.results || []).map(row => [row.minute_group, row]));
   for (const group of ENTRY_MINUTE_GROUPS) {
     const row = minuteMap.get(group.label);
-    const mTotal = Number(row?.total || 0);
-    const mGoals = Number(row?.goals || 0);
-    const mNoGoals = Number(row?.no_goals || 0);
-    const mResolved = mGoals + mNoGoals;
-    const mRate = mResolved > 0 ? mGoals / mResolved * 100 : 0;
-    const mOdds = numberOrNull(row?.avg_entry_odds);
-    const mPL = Number(row?.profit_loss || 0);
-    const mRoi = mResolved > 0 ? mPL / (mResolved * REPORT_STAKE) * 100 : null;
-
-    if (!mTotal) {
-      message += `${group.label}: 0 ENTRY\n`;
-    } else {
-      message +=
-        `${group.label}: ${mTotal} ENTRY | ${mGoals} GOAL | ${mNoGoals} NO GOAL | ${mRate.toFixed(1)}%\n` +
-        `   🎲 ${mOdds !== null ? mOdds.toFixed(2) : "—"} | 💶 ${mResolved > 0 ? formatMoney(mPL) + " EUR" : "—"} | ROI ${mRoi !== null ? (mRoi > 0 ? "+" : "") + mRoi.toFixed(1) + "%" : "—"}\n`;
-    }
+    const n = Number(row?.total || 0);
+    const g = Number(row?.goals || 0);
+    const ng = Number(row?.no_goals || 0);
+    const r = g + ng;
+    const hit = r ? g / r * 100 : 0;
+    const av = numberOrNull(row?.avg_entry_odds);
+    const pl = Number(row?.profit_loss || 0);
+    const rr = r ? pl / (r * REPORT_STAKE) * 100 : null;
+    message += n
+      ? `${group.label}: ${n} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${hit.toFixed(1)}%\n   🎲 ${av !== null ? av.toFixed(2) : "—"} | 💶 ${r ? formatMoney(pl) + " EUR" : "—"} | ROI ${rr !== null ? (rr > 0 ? "+" : "") + rr.toFixed(1) + "%" : "—"}\n`
+      : `${group.label}: 0 ENTRY\n`;
   }
 
-  message +=
-`\n━━━━━━━━━━━━━━━━
-🔥 ПО HUNTER SCORE — МЕСЕЦ
+  message += `\n━━━━━━━━━━━━━━━━
+🔥 ПО HUNTER SCORE
 ━━━━━━━━━━━━━━━━
 `;
 
-  const scoreMap = new Map(
-    (scoreResult?.results || []).map(row => [row.score_group, row])
-  );
-
+  const scoreMap = new Map((scoreResult?.results || []).map(row => [row.score_group, row]));
   for (const group of ["60–69", "70–79", "80–89", "90–100"]) {
     const row = scoreMap.get(group);
-    const sTotal = Number(row?.total || 0);
-    const sGoals = Number(row?.goals || 0);
-    const sNoGoals = Number(row?.no_goals || 0);
-    const sResolved = sGoals + sNoGoals;
-    const sRate = sResolved > 0 ? sGoals / sResolved * 100 : 0;
-
-    if (!sTotal) {
-      message += `${group}: 0 ENTRY\n`;
-    } else {
-      message += `${group}: ${sTotal} ENTRY | ${sGoals} GOAL | ${sNoGoals} NO GOAL | ${sRate.toFixed(1)}%\n`;
-    }
+    const n = Number(row?.total || 0);
+    const g = Number(row?.goals || 0);
+    const ng = Number(row?.no_goals || 0);
+    const r = g + ng;
+    message += n
+      ? `${group}: ${n} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${(r ? g / r * 100 : 0).toFixed(1)}%\n`
+      : `${group}: 0 ENTRY\n`;
   }
 
-  message +=
-`\n━━━━━━━━━━━━━━━━
-✅ Само Cloudbet event + реален entry odds + odds_available
+  message += `\n━━━━━━━━━━━━━━━━
+🎲 ПО ENTRY ODDS
+━━━━━━━━━━━━━━━━
+`;
+
+  const oddsOrder = ["1.00–1.39","1.40–1.69","1.70–1.99","2.00–2.49","2.50–3.49","3.50–4.99","5.00+"];
+  const oddsMap = new Map((oddsResult?.results || []).map(row => [row.odds_group, row]));
+
+  for (const group of oddsOrder) {
+    const row = oddsMap.get(group);
+    const n = Number(row?.total || 0);
+    const g = Number(row?.goals || 0);
+    const ng = Number(row?.no_goals || 0);
+    const r = g + ng;
+    const hit = r ? g / r * 100 : 0;
+    const av = numberOrNull(row?.avg_entry_odds);
+    const be = av !== null && av > 0 ? 100 / av : null;
+    const pl = Number(row?.profit_loss || 0);
+    const rr = r ? pl / (r * REPORT_STAKE) * 100 : null;
+
+    message += n
+      ? `${group}: ${n} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${hit.toFixed(1)}%\n   🎲 Avg ${av !== null ? av.toFixed(2) : "—"} | ⚖️ BE ${be !== null ? be.toFixed(1) + "%" : "—"}\n   💶 ${r ? formatMoney(pl) + " EUR" : "—"} | ROI ${rr !== null ? (rr > 0 ? "+" : "") + rr.toFixed(1) + "%" : "—"}\n`
+      : `${group}: 0 ENTRY\n`;
+  }
+
+  message += `\n━━━━━━━━━━━━━━━━
+✅ Само BET READY след ${BETSTATS_CLEAN_START_LABEL}
 🎯 Dynamic Score filter
-💾 Историята остава в hunter_signals и след края на деня
+🧼 Старите pre-fix записи са изключени само от /betstats
+💾 Не са изтрити от D1
 🕐 Europe/Sofia`;
 
   return message;
