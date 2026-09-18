@@ -177,11 +177,10 @@ const HUNTER_MIN_SCORE = 60;
 
 // V6.7.10.0 LIVE HUNTER FILTER
 // 5–9   => 50+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
-// 10–19 => 60+
-// 20–24 => 65+
-// 25–29 => 70+
-// 30–34 => 75+
-// 35–42 => 80+
+// WEEKEND BET READY TEST:
+// 10–25 => 60+
+// 26–34 => 90+
+// 35–42 => 100
 const SHADOW_FROM = 5;
 const SHADOW_TO = 9;
 
@@ -206,6 +205,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
+// BET FILTER UPDATE — WEEKEND TEST: 10–25 Score >=60; 26–34 Score >=90; 35–42 Score 100. Same filter in /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
 // A normal row enters statistics only after a real entry odds is captured
@@ -214,11 +214,9 @@ const REPORT_ELIGIBLE_SQL = `
   entry_odds IS NOT NULL
   AND entry_odds > 1
   AND (
-    (entry_minute BETWEEN 10 AND 19 AND hunter_score >= 60)
-    OR (entry_minute BETWEEN 20 AND 24 AND hunter_score >= 65)
-    OR (entry_minute BETWEEN 25 AND 29 AND hunter_score >= 70)
-    OR (entry_minute BETWEEN 30 AND 34 AND hunter_score >= 75)
-    OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 80)
+    (entry_minute BETWEEN 10 AND 25 AND hunter_score >= 60)
+    OR (entry_minute BETWEEN 26 AND 34 AND hunter_score >= 90)
+    OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 100)
   )
 `;
 
@@ -238,11 +236,9 @@ const BET_READY_HISTORY_SQL = `
   AND entry_odds > 1
   AND odds_available = 1
   AND (
-    (entry_minute BETWEEN 10 AND 19 AND hunter_score >= 60)
-    OR (entry_minute BETWEEN 20 AND 24 AND hunter_score >= 65)
-    OR (entry_minute BETWEEN 25 AND 29 AND hunter_score >= 70)
-    OR (entry_minute BETWEEN 30 AND 34 AND hunter_score >= 75)
-    OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 80)
+    (entry_minute BETWEEN 10 AND 25 AND hunter_score >= 60)
+    OR (entry_minute BETWEEN 26 AND 34 AND hunter_score >= 90)
+    OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 100)
   )
 `;
 
@@ -4790,11 +4786,9 @@ function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
 
   if (m >= 5 && m <= 9) return 50;
-  if (m >= 10 && m <= 19) return 60;
-  if (m >= 20 && m <= 24) return 65;
-  if (m >= 25 && m <= 29) return 70;
-  if (m >= 30 && m <= 34) return 75;
-  if (m >= 35 && m <= 42) return 80;
+  if (m >= 10 && m <= 25) return 60;
+  if (m >= 26 && m <= 34) return 90;
+  if (m >= 35 && m <= 42) return 100;
 
   return null;
 }
