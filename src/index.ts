@@ -6533,10 +6533,9 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 HU
 
   const minuteRows = await getMinuteStatsForBounds(env, bounds);
 
-  const cleanStart =
-    bounds.start > BETSTATS_CLEAN_START_UTC
-      ? bounds.start
-      : BETSTATS_CLEAN_START_UTC;
+  // Full-month recalculation with the CURRENT BET READY filter.
+  // Historical D1 rows are not modified or deleted.
+  const cleanStart = bounds.start;
 
   const cleanOverall = await env.DB
     .prepare(`
@@ -7033,9 +7032,9 @@ async function buildBetReadyStats(env) {
     : null;
 
   let message =
-`💰 BET READY STATS — CLEAN
+`💰 BET READY STATS — CURRENT FILTER
 
-📅 От ${BETSTATS_CLEAN_START_LABEL} · след Tracker фиксовете
+📅 ${currentMonth} · целият месец по текущия BET READY филтър
 
 🎯 ENTRY: ${total}
 🟢 GOAL HIT: ${goals}
@@ -7181,9 +7180,9 @@ async function buildBetReadyStats(env) {
   }
 
   message += `\n━━━━━━━━━━━━━━━━
-✅ Само BET READY след ${BETSTATS_CLEAN_START_LABEL}
-🎯 Dynamic Score filter
-🧼 Старите pre-fix записи са изключени само от /betstats
+✅ BET READY за целия ${currentMonth}
+🎯 10–25: Score >=60 | 26–34: Score >=90 | 35–42: Score =100
+♻️ Старите записи се преизчисляват по същия филтър
 💾 Не са изтрити от D1
 🕐 Europe/Sofia`;
 
