@@ -984,7 +984,14 @@ export default {
                 id,
                 match_id,
                 match_name,
+                league,
                 entry_minute,
+                hunter_score,
+                entry_home_score,
+                entry_away_score,
+                cloudbet_match,
+                cloudbet_max_stake,
+                matcher_score,
                 telegram_message_id,
                 entry_time
               FROM hunter_signals
@@ -1073,13 +1080,100 @@ export default {
             )
             .join("\n");
 
-        const telegramMessageId =
+        // Keep the ODDS FOUND notification as a reply when an original
+        // Telegram message exists. This is informational only.
+        const oddsFoundMessageId =
           await sendTelegram(
             env,
             message,
             row?.telegram_message_id ??
             null
           );
+
+        // V6.7.11 — PENDING_ODDS -> READY_TO_BET FORWARD
+        // Once real odds are found, publish the SAME Hunter signal again
+        // as a complete BET READY entry. No new hunter_signals row is
+        // created, so statistics still count one ENTRY only.
+        const readyMatch = {
+          match: row?.match_name ?? matchId,
+          league: row?.league ?? "LIVE",
+          tournament: row?.league ?? "LIVE",
+          competition: row?.league ?? "LIVE",
+          minute: entryMinute ?? 0,
+          minute_display:
+            entryMinute !== null
+              ? entryMinute + "'"
+              : "—",
+          score: {
+            home: Number(row?.entry_home_score ?? 0),
+            away: Number(row?.entry_away_score ?? 0)
+          }
+        };
+
+        const readyCloudbet = {
+          success: true,
+          accepted: true,
+          event_id: eventId,
+          match: body?.cloudbet_match ?? row?.cloudbet_match ?? null,
+          price: odds,
+          entry_odds: odds,
+          odds_available: true,
+          max_stake:
+            numberOrNull(body?.max_stake) ??
+            numberOrNull(row?.cloudbet_max_stake),
+          matcher_score: numberOrNull(row?.matcher_score),
+          match_source: "PENDING_ODDS_CALLBACK"
+        };
+
+        const readyBet = {
+          checked: true,
+          ready: true,
+          action: "READY_TO_BET",
+          reason: null,
+          event_id: eventId,
+          cloudbet_match:
+            body?.cloudbet_match ?? row?.cloudbet_match ?? null,
+          current_odds: odds,
+          max_stake:
+            numberOrNull(body?.max_stake) ??
+            numberOrNull(row?.cloudbet_max_stake),
+          account_balance: null
+        };
+
+        const readyTelegramMessageId =
+          await sendTelegram(
+            env,
+            formatEntryMessage(
+              readyMatch,
+              Number(row?.hunter_score ?? 0),
+              getSofiaTime(new Date()),
+              readyCloudbet,
+              readyBet
+            )
+          );
+
+        // Future GOAL / NO GOAL replies should attach to the full READY
+        // signal, not to the old WAITING/ODDS FOUND notification.
+        if (
+          readyTelegramMessageId !== null &&
+          readyTelegramMessageId !== undefined
+        ) {
+          await env.DB
+            .prepare(`
+              UPDATE hunter_signals
+              SET
+                telegram_message_id = ?,
+                updated_at = ?
+              WHERE match_id = ?
+                AND status = 'TRACKING'
+            `)
+            .bind(
+              readyTelegramMessageId,
+              nowIso,
+              matchId
+            )
+            .run();
+        }
 
         return json({
           success: true,
@@ -1103,9 +1197,15 @@ export default {
           reply_to:
             row?.telegram_message_id ??
             null,
+          odds_found_message_id:
+            oddsFoundMessageId ??
+            null,
           telegram_message_id:
-            telegramMessageId ??
-            null
+            readyTelegramMessageId ??
+            null,
+          full_ready_signal_forwarded:
+            readyTelegramMessageId !== null &&
+            readyTelegramMessageId !== undefined
         });
 
       } catch (error) {
