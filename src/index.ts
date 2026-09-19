@@ -6466,11 +6466,59 @@ function formatMinuteStats(
 }
 
 
+async function getBetReadyMinuteStatsForBounds(env, bounds) {
+  if (!bounds) return [];
+
+  const result = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_minute BETWEEN 10 AND 25 THEN '10–25′'
+          WHEN entry_minute BETWEEN 26 AND 34 THEN '26–34′'
+          WHEN entry_minute BETWEEN 35 AND 42 THEN '35–42′'
+        END AS minute_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        SUM(
+          CASE
+            WHEN result IS NULL OR result NOT IN ('GOAL HIT', 'NO GOAL')
+            THEN 1 ELSE 0
+          END
+        ) AS open_count,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY minute_group
+      ORDER BY
+        CASE minute_group
+          WHEN '10–25′' THEN 1
+          WHEN '26–34′' THEN 2
+          WHEN '35–42′' THEN 3
+        END
+    `)
+    .bind(REPORT_STAKE, REPORT_STAKE, bounds.start, bounds.end)
+    .all();
+
+  return result?.results || [];
+}
+
+
 // ============================================================
 // TODAY COMMAND
 // ============================================================
 
-async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 HUNTER TODAY") {
+async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 BET READY TODAY") {
 
   const now = new Date();
   const local = getSofiaTime(now);
@@ -6500,7 +6548,7 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 HU
       FROM hunter_signals
       WHERE created_at >= ?
         AND created_at < ?
-        AND ${REPORT_ELIGIBLE_SQL}
+        AND ${BET_READY_HISTORY_SQL}
     `)
     .bind(
       REPORT_STAKE,
@@ -6525,13 +6573,13 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 HU
       FROM hunter_signals
       WHERE created_at >= ?
         AND created_at < ?
-        AND ${REPORT_ELIGIBLE_SQL}
+        AND ${BET_READY_HISTORY_SQL}
       GROUP BY score_group
     `)
     .bind(bounds.start, bounds.end)
     .all();
 
-  const minuteRows = await getMinuteStatsForBounds(env, bounds);
+  const minuteRows = await getBetReadyMinuteStatsForBounds(env, bounds);
 
   // Full-month recalculation with the CURRENT BET READY filter.
   // Historical D1 rows are not modified or deleted.
@@ -6671,11 +6719,11 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 HU
 📈 ROI: ${roi !== null ? (roi > 0 ? "+" : "") + roi.toFixed(1) + "%" : "—"}
 
 ━━━━━━━━━━━━━━━━
-⏱ ДНЕС — ПО ENTRY МИНУТА
+⏱ BET READY — ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
 ${formatMinuteStats(minuteRows)}
 ━━━━━━━━━━━━━━━━
-🔥 ДНЕС — ПО HUNTER SCORE
+🔥 BET READY — ПО HUNTER SCORE
 ━━━━━━━━━━━━━━━━
 `;
 
@@ -6703,7 +6751,7 @@ ${formatMinuteStats(minuteRows)}
   message +=
 `\n━━━━━━━━━━━━━━━━
 🎲 Само мачове с реален entry odds
-🎯 Dynamic Score filter
+🎯 10–25′: Score ≥60 | 26–34′: Score ≥90 | 35–42′: Score =100
 🕐 Europe/Sofia`;
 
   return message;
