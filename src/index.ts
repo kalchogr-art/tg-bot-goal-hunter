@@ -6514,6 +6514,60 @@ async function getBetReadyMinuteStatsForBounds(env, bounds) {
 }
 
 
+
+function formatBetReadyMinuteStats(rows) {
+  const groups = ["10–25′", "26–34′", "35–42′"];
+  const map = new Map();
+
+  for (const row of rows || []) {
+    map.set(String(row?.minute_group || ""), row);
+  }
+
+  const lines = [];
+
+  for (const group of groups) {
+    const row = map.get(group);
+
+    if (!row) {
+      lines.push(`${group}: 0 ENTRY`);
+      continue;
+    }
+
+    const total = Number(row?.total || 0);
+    const goals = Number(row?.goals || 0);
+    const noGoals = Number(row?.no_goals || 0);
+    const open = Number(row?.open_count || 0);
+    const resolved = goals + noGoals;
+    const rate = resolved > 0 ? goals / resolved * 100 : 0;
+
+    const avgOdds = numberOrNull(row?.avg_entry_odds);
+    const financialBets = Number(row?.financial_bets || 0);
+    const profitLoss = Number(row?.profit_loss || 0);
+    const roi = financialBets > 0
+      ? profitLoss / (financialBets * REPORT_STAKE) * 100
+      : null;
+
+    const breakEven = rate > 0 ? 100 / rate : null;
+
+    lines.push(
+      `${group}: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%` +
+      (open > 0 ? ` | ${open} OPEN` : "")
+    );
+
+    if (financialBets > 0 || avgOdds !== null) {
+      lines.push(
+        `   🎲 Avg odds: ${avgOdds !== null ? avgOdds.toFixed(2) : "—"} | ⚖️ BE: ${breakEven !== null ? breakEven.toFixed(2) : "—"}`
+      );
+      lines.push(
+        `   💶 P/L: ${financialBets > 0 ? formatMoney(profitLoss) + " EUR" : "—"} | 📈 ROI: ${roi !== null ? (roi > 0 ? "+" : "") + roi.toFixed(1) + "%" : "—"} | bets: ${financialBets}`
+      );
+    }
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+
 // ============================================================
 // TODAY COMMAND
 // ============================================================
@@ -6721,7 +6775,7 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 BE
 ━━━━━━━━━━━━━━━━
 ⏱ BET READY — ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
-${formatMinuteStats(minuteRows)}
+${formatBetReadyMinuteStats(minuteRows)}
 ━━━━━━━━━━━━━━━━
 🔥 BET READY — ПО HUNTER SCORE
 ━━━━━━━━━━━━━━━━
