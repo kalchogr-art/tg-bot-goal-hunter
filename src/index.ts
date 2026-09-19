@@ -1,9 +1,17 @@
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.14 BET-READY TELEGRAM GUARD
+// GOAL WATCH — HUNTER TRACKER V6.7.10.15 FULL HUNTER STATS + DIAGNOSTICS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
+//
+// V6.7.10.15:
+// - /stats keeps ALL normal Hunter signals 10–42, independent of Cloudbet readiness.
+// - Adds GET /diagnostics with ALL normal Hunter signals + pipeline state.
+// - Adds Telegram /diagnostics summary.
+// - Telegram ENTRY remains BET READY YES only.
+// - /betstats remains BET READY only.
+// - Hunter thresholds and GOAL/NO_GOAL unchanged.
 //
 // V6.7.10.14:
 // - Telegram HUNTER ENTRY is sent ONLY after final BET READY YES.
@@ -671,7 +679,7 @@ export default {
         return json({
           success: true,
           worker:
-            "GOAL WATCH — HUNTER TRACKER V6.7.4",
+            "GOAL WATCH — HUNTER TRACKER V6.7.10.15",
           source:
             "hunter_signals",
           mode:
@@ -980,6 +988,18 @@ export default {
 
 
     // ========================================================
+    // V6.7.10.15 — PIPELINE DIAGNOSTICS
+    // ========================================================
+    if (request.method === "GET" && url.pathname === "/diagnostics") {
+      try {
+        return json(await buildPipelineDiagnostics(env, url.searchParams));
+      } catch (error) {
+        return json({success:false,error:error?.message || String(error)},500);
+      }
+    }
+
+
+    // ========================================================
     // TELEGRAM WEBHOOK
     // ========================================================
 
@@ -1031,6 +1051,19 @@ export default {
             success: true,
             action: "SHADOWSTATS",
             population: "SHADOW_5_9"
+          });
+        }
+
+
+        if (
+          text === "/diagnostics" ||
+          text.startsWith("/diagnostics@")
+        ) {
+          await sendTelegram(env, await buildPipelineDiagnosticsMessage(env));
+          return json({
+            success: true,
+            action: "DIAGNOSTICS",
+            population: "ALL_HUNTER_10_42"
           });
         }
 
@@ -7403,6 +7436,114 @@ async function buildBetReadyStats(env) {
 💾 Не са изтрити от D1
 🕐 Europe/Sofia`;
 
+  return message;
+}
+
+
+// ============================================================
+// V6.7.10.15 — PIPELINE DIAGNOSTICS
+// ============================================================
+
+async function buildPipelineDiagnostics(env, searchParams = null) {
+  if (!env.DB) throw new Error("DB binding missing");
+
+  const rawLimit = Number(searchParams?.get?.("limit") ?? 100);
+  const limit = Math.max(1, Math.min(500, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 100));
+  const date = String(searchParams?.get?.("date") || getSofiaTime(new Date()).date);
+  const bounds = getSofiaDayUtcBounds(date);
+  if (!bounds) throw new Error("INVALID_SOFIA_DATE");
+
+  const result = await env.DB.prepare(`
+    SELECT id, match_id, match_name, league, entry_time, entry_minute,
+           hunter_score, cloudbet_event_id, entry_odds, cloudbet_max_stake,
+           cloudbet_match, odds_available, matcher_score, telegram_message_id,
+           status, result, created_at, updated_at
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND entry_minute BETWEEN 10 AND 42
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).bind(bounds.start,bounds.end,limit).all();
+
+  const summary = await env.DB.prepare(`
+    SELECT COUNT(*) AS hunter_total,
+      SUM(CASE WHEN cloudbet_event_id IS NOT NULL AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> '' THEN 1 ELSE 0 END) AS event_id_total,
+      SUM(CASE WHEN entry_odds IS NOT NULL AND entry_odds > 1 AND odds_available = 1 THEN 1 ELSE 0 END) AS odds_ready_total,
+      SUM(CASE WHEN telegram_message_id IS NOT NULL THEN 1 ELSE 0 END) AS telegram_ready_total,
+      SUM(CASE WHEN status='TRACKING' THEN 1 ELSE 0 END) AS tracking,
+      SUM(CASE WHEN result='GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result='NO GOAL' THEN 1 ELSE 0 END) AS no_goals
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND entry_minute BETWEEN 10 AND 42
+  `).bind(bounds.start,bounds.end).first();
+
+  const signals=(result?.results || []).map(row=>{
+    const hasEvent=row?.cloudbet_event_id!==null && row?.cloudbet_event_id!==undefined && String(row.cloudbet_event_id).trim()!=="";
+    const odds=numberOrNull(row?.entry_odds);
+    const oddsReady=hasEvent && odds!==null && odds>1 && Number(row?.odds_available||0)===1;
+    const telegramSent=row?.telegram_message_id!==null && row?.telegram_message_id!==undefined && String(row.telegram_message_id).trim()!=="";
+    return {
+      id:row?.id??null, match_id:row?.match_id??null, match:row?.match_name??null,
+      league:row?.league??null, entry_time:row?.entry_time??null,
+      entry_minute:Number(row?.entry_minute??0), hunter_score:Number(row?.hunter_score??0),
+      cloudbet:{
+        matched:hasEvent,event_id:hasEvent?String(row.cloudbet_event_id):null,
+        match:row?.cloudbet_match??null,matcher_score:numberOrNull(row?.matcher_score),
+        entry_odds:odds,max_stake:numberOrNull(row?.cloudbet_max_stake),
+        odds_available:Number(row?.odds_available||0)===1
+      },
+      pipeline:{hunter:true,event_id:hasEvent,odds_ready:oddsReady,telegram_entry_sent:telegramSent,bet_ready:telegramSent},
+      football:{status:row?.status??null,result:row?.result??null},
+      created_at:row?.created_at??null,updated_at:row?.updated_at??null
+    };
+  });
+
+  const total=Number(summary?.hunter_total||0);
+  const eventIds=Number(summary?.event_id_total||0);
+  const oddsReady=Number(summary?.odds_ready_total||0);
+  const telegramReady=Number(summary?.telegram_ready_total||0);
+
+  return {
+    success:true,version:"V6.7.10.15 FULL HUNTER STATS + DIAGNOSTICS",
+    date,timezone:TIME_ZONE,population:"ALL_NORMAL_HUNTER_10_42",
+    summary:{
+      hunter_total:total,event_id_found:eventIds,event_id_missing:Math.max(0,total-eventIds),
+      odds_ready:oddsReady,odds_missing:Math.max(0,total-oddsReady),
+      telegram_bet_ready:telegramReady,telegram_not_sent:Math.max(0,total-telegramReady),
+      tracking:Number(summary?.tracking||0),goals:Number(summary?.goals||0),no_goals:Number(summary?.no_goals||0)
+    },
+    signals
+  };
+}
+
+async function buildPipelineDiagnosticsMessage(env) {
+  const data=await buildPipelineDiagnostics(env,{get:(n)=>n==="limit"?"20":null});
+  const x=data.summary||{};
+  let message=`🧪 HUNTER PIPELINE DIAGNOSTICS
+
+📅 ${data.date}
+🎯 ALL HUNTER: ${x.hunter_total||0}
+🔗 Event ID found: ${x.event_id_found||0}
+❌ Event ID missing: ${x.event_id_missing||0}
+🎲 Odds ready: ${x.odds_ready||0}
+⏳ Odds missing: ${x.odds_missing||0}
+📲 Telegram BET READY: ${x.telegram_bet_ready||0}
+🙈 Telegram not sent: ${x.telegram_not_sent||0}
+
+⚽ GOAL: ${x.goals||0}
+🔴 NO GOAL: ${x.no_goals||0}
+⏱ TRACKING: ${x.tracking||0}
+
+━━━━━━━━━━━━━━━━
+Последни сигнали
+━━━━━━━━━━━━━━━━
+`;
+  for(const row of (data.signals||[])){
+    const cb=row.cloudbet||{};
+    message+=`\n${row.entry_minute}' | ${row.hunter_score}/100 | ${row.match}\nEvent: ${cb.event_id||"—"} | Odds: ${cb.entry_odds!==null&&cb.entry_odds!==undefined?Number(cb.entry_odds).toFixed(2):"—"} | Telegram: ${row.pipeline?.telegram_entry_sent?"YES":"NO"} | ${row.football?.result||row.football?.status||"—"}\n`;
+  }
+  message+=`\n💾 /stats = ALL Hunter 10–42\n✅ /betstats = BET READY only\n📲 ENTRY alerts = BET READY only`;
   return message;
 }
 
