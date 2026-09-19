@@ -1,9 +1,15 @@
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.15 FULL HUNTER STATS + DIAGNOSTICS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.16 PERSISTENT HISTORY API
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
+//
+// V6.7.10.16:
+// - Adds READ-ONLY /history over the EXISTING hunter_signals D1 archive.
+// - No DB schema change.
+// - No GOAL/NO_GOAL resolver change.
+// - Exposes event_id, entry minute, odds, goal minute and final result for Top Signal.
 //
 // V6.7.10.15:
 // - /stats keeps ALL normal Hunter signals 10–42, independent of Cloudbet readiness.
@@ -697,6 +703,142 @@ export default {
           String(error)
         );
 
+        return json({
+          success: false,
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
+    }
+
+
+
+    // ========================================================
+    // V6.7.10.16 — READ-ONLY PERSISTENT HISTORY
+    // Existing hunter_signals D1 archive; no schema mutation.
+    // ========================================================
+    if (
+      request.method === "GET" &&
+      url.pathname === "/history"
+    ) {
+      try {
+        if (!env.DB) {
+          return json({ success: false, error: "DB binding missing" }, 500);
+        }
+
+        const rawDays = Number(url.searchParams.get("days") ?? 120);
+        const days = Math.max(
+          1,
+          Math.min(
+            365,
+            Number.isFinite(rawDays) ? Math.floor(rawDays) : 120
+          )
+        );
+
+        const cutoff =
+          new Date(
+            Date.now() - days * 86400000
+          ).toISOString();
+
+        const result =
+          await env.DB
+            .prepare(`
+              SELECT
+                id,
+                match_id,
+                match_name,
+                league,
+                entry_time,
+                entry_minute,
+                hunter_score,
+                cloudbet_event_id,
+                entry_odds,
+                cloudbet_max_stake,
+                cloudbet_match,
+                odds_available,
+                matcher_score,
+                status,
+                result,
+                goal_minute,
+                goal_after_minutes,
+                created_at,
+                updated_at
+              FROM hunter_signals
+              WHERE created_at >= ?
+                AND cloudbet_event_id IS NOT NULL
+                AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> ''
+                AND entry_minute BETWEEN 10 AND 42
+              ORDER BY created_at DESC
+              LIMIT 5000
+            `)
+            .bind(cutoff)
+            .all();
+
+        const entries =
+          (result?.results || [])
+            .map(row => ({
+              id: row?.id ?? null,
+              match_id: row?.match_id ?? null,
+              match_name: row?.match_name ?? "",
+              match: row?.match_name ?? "",
+              league: row?.league ?? "LIVE",
+              entry_time: row?.entry_time ?? null,
+              entry_minute: row?.entry_minute ?? null,
+              hunter_score: row?.hunter_score ?? null,
+
+              cloudbet_event_id:
+                row?.cloudbet_event_id ?? null,
+
+              entry_odds:
+                numberOrNull(row?.entry_odds),
+
+              cloudbet_max_stake:
+                numberOrNull(row?.cloudbet_max_stake),
+
+              cloudbet_match:
+                row?.cloudbet_match ?? null,
+
+              odds_available:
+                Number(row?.odds_available || 0) === 1,
+
+              matcher_score:
+                numberOrNull(row?.matcher_score),
+
+              status:
+                row?.status ?? null,
+
+              result:
+                row?.result ?? null,
+
+              goal_minute:
+                numberOrNull(row?.goal_minute),
+
+              goal_after_minutes:
+                numberOrNull(row?.goal_after_minutes),
+
+              created_at:
+                row?.created_at ?? null,
+
+              updated_at:
+                row?.updated_at ?? null
+            }));
+
+        return json({
+          success: true,
+          worker:
+            "GOAL WATCH — HUNTER TRACKER V6.7.10.16",
+          source:
+            "EXISTING_HUNTER_SIGNALS_D1",
+          mode:
+            "READ_ONLY",
+          days,
+          count:
+            entries.length,
+          entries
+        });
+
+      } catch (error) {
         return json({
           success: false,
           error:
