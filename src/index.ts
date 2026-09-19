@@ -1,8 +1,17 @@
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.13 SHADOW BET-READY ONLY
+// GOAL WATCH — HUNTER TRACKER V6.7.10.14 BET-READY TELEGRAM GUARD
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
+//
+//
+// V6.7.10.14:
+// - Telegram HUNTER ENTRY is sent ONLY after final BET READY YES.
+// - UNMATCHED / WAITING / failed preflight remain internal in D1.
+// - A secure READY preflight promotes its locked event_id + exact odds
+//   to the final Cloudbet state before Telegram formatting.
+// - Prevents impossible CLOUDBET UNMATCHED + BET READY YES output.
+// - Hunter thresholds, GOAL/NO_GOAL, reports and shadow logic unchanged.
 //
 // V6.7.10.13:
 // - /shadowstats shows ONLY 5–9 minute SHADOW signals that became BET READY.
@@ -4369,6 +4378,97 @@ async function createHunterEntry(
 
 
   // ==========================================================
+  // V6.7.10.14 — PREFLIGHT READY OVERRIDES STALE MATCHER DISPLAY
+  //
+  // If Bet Worker has completed a secure preflight and returned READY,
+  // its locked event_id + exact current odds are authoritative for the
+  // final Cloudbet state. This prevents impossible output such as:
+  // CLOUDBET UNMATCHED / AI_MATCHER_TIMEOUT + BET READY YES.
+  // ==========================================================
+
+  if (
+    betReady?.ready === true &&
+    betReady?.event_id !== null &&
+    betReady?.event_id !== undefined &&
+    String(betReady.event_id).trim() !== "" &&
+    numberOrNull(betReady?.current_odds) !== null &&
+    numberOrNull(betReady?.current_odds) > 1
+  ) {
+    const readyEventId =
+      String(betReady.event_id).trim();
+
+    const readyOdds =
+      numberOrNull(betReady.current_odds);
+
+    cloudbetOdds = {
+      ...(cloudbetOdds || {}),
+      success: true,
+      accepted: true,
+      event_id: readyEventId,
+      match:
+        betReady?.cloudbet_match ??
+        cloudbetOdds?.match ??
+        null,
+      price: readyOdds,
+      entry_odds: readyOdds,
+      odds_available: true,
+      max_stake:
+        numberOrNull(betReady?.max_stake) ??
+        numberOrNull(cloudbetOdds?.max_stake),
+      matcher_score:
+        numberOrNull(betReady?.ai_confidence) ??
+        numberOrNull(cloudbetOdds?.matcher_score),
+      matcher_reason: null,
+      match_source:
+        betReady?.cloudbet_match ||
+        numberOrNull(betReady?.ai_confidence) !== null
+          ? "AI"
+          : (cloudbetOdds?.match_source ?? "PREFLIGHT")
+    };
+
+    try {
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            cloudbet_event_id = ?,
+            entry_odds = ?,
+            cloudbet_max_stake = COALESCE(?, cloudbet_max_stake),
+            cloudbet_match = COALESCE(?, cloudbet_match),
+            odds_available = 1,
+            matcher_score = COALESCE(?, matcher_score),
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          readyEventId,
+          readyOdds,
+          numberOrNull(betReady?.max_stake),
+          betReady?.cloudbet_match ?? null,
+          numberOrNull(betReady?.ai_confidence),
+          nowIso,
+          insertedId
+        )
+        .run();
+
+      console.log(
+        "PREFLIGHT READY PROMOTED TO FINAL CLOUDBET STATE",
+        id,
+        readyEventId,
+        readyOdds
+      );
+    } catch (error) {
+      console.error(
+        "PREFLIGHT READY DB SYNC ERROR",
+        id,
+        error?.message || String(error)
+      );
+    }
+  }
+
+
+  // ==========================================================
   // V6.7.9.5 — SYNC AI PREFLIGHT ODDS BACK TO ENTRY ODDS
   //
   // AI matcher returns a locked event_id but usually no price.
@@ -4463,8 +4563,23 @@ async function createHunterEntry(
 
   const shadowEntry = isShadowEntryMinute(minute);
 
+  // V6.7.10.14:
+  // Public Telegram HUNTER ENTRY is emitted ONLY after Bet Worker
+  // confirms the exact event/market/odds as BET READY and the final
+  // Cloudbet state contains the locked event id + real odds.
+  // UNMATCHED / WAITING / failed preflight remain internal in D1.
+  const finalTelegramReady =
+    betReady?.ready === true &&
+    cloudbetOdds?.success === true &&
+    cloudbetOdds?.event_id !== null &&
+    cloudbetOdds?.event_id !== undefined &&
+    String(cloudbetOdds.event_id).trim() !== "" &&
+    numberOrNull(cloudbetOdds?.price) !== null &&
+    numberOrNull(cloudbetOdds?.price) > 1;
+
   const telegramMessageId =
-    shadowEntry
+    shadowEntry ||
+    !finalTelegramReady
       ? null
       : await sendTelegram(
           env,
