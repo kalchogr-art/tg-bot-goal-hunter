@@ -1,6 +1,6 @@
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.16 PERSISTENT HISTORY API
+// GOAL WATCH — HUNTER TRACKER V6.7.10.17 10–25 ONLY + TODAY API
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -194,8 +194,8 @@
 // - TRACKING remains the football result-tracking status; betting readiness is separate.
 // ============================================================
 
-const HUNTER_FROM = 5;
-const HUNTER_TO = 42;
+const HUNTER_FROM = 10;
+const HUNTER_TO = 25;
 const HUNTER_MIN_SCORE = 60;
 
 // V6.7.10.0 LIVE HUNTER FILTER
@@ -228,7 +228,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// BET FILTER UPDATE — WEEKEND TEST: 10–25 Score >=60; 26–34 Score >=90; 35–42 Score 100. Same filter in /betstats.
+// BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
 // A normal row enters statistics only after a real entry odds is captured
@@ -236,11 +236,8 @@ const FLASHSCORE_HEADERS = {
 const REPORT_ELIGIBLE_SQL = `
   entry_odds IS NOT NULL
   AND entry_odds > 1
-  AND (
-    (entry_minute BETWEEN 10 AND 25 AND hunter_score >= 60)
-    OR (entry_minute BETWEEN 26 AND 34 AND hunter_score >= 90)
-    OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 100)
-  )
+  AND entry_minute BETWEEN 10 AND 25
+  AND hunter_score >= 60
 `;
 
 // /stats HUNTER HISTORY: keep the complete historical Hunter sample.
@@ -258,11 +255,8 @@ const BET_READY_HISTORY_SQL = `
   AND entry_odds IS NOT NULL
   AND entry_odds > 1
   AND odds_available = 1
-  AND (
-    (entry_minute BETWEEN 10 AND 25 AND hunter_score >= 60)
-    OR (entry_minute BETWEEN 26 AND 34 AND hunter_score >= 90)
-    OR (entry_minute BETWEEN 35 AND 42 AND hunter_score >= 100)
-  )
+  AND entry_minute BETWEEN 10 AND 25
+  AND hunter_score >= 60
 `;
 
 // /betstats clean analysis window requested by user.
@@ -1237,6 +1231,57 @@ export default {
         return json(await buildPipelineDiagnostics(env, url.searchParams));
       } catch (error) {
         return json({success:false,error:error?.message || String(error)},500);
+      }
+    }
+
+
+    // ========================================================
+    // V6.7.10.17 — TODAY BET READY JSON
+    // Exact same population used by /today and /betstats filter.
+    // Used by TOP SIGNAL daily counter.
+    // ========================================================
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/today-stats"
+    ) {
+      try {
+        const local = getSofiaTime(new Date());
+        const bounds = getSofiaDayUtcBounds(local.date);
+
+        if (!bounds) {
+          return json({
+            success: false,
+            date: local.date,
+            entry: 0,
+            error: "INVALID_DAY_BOUNDS"
+          }, 500);
+        }
+
+        const row = await env.DB
+          .prepare(`
+            SELECT COUNT(*) AS total
+            FROM hunter_signals
+            WHERE created_at >= ?
+              AND created_at < ?
+              AND ${BET_READY_HISTORY_SQL}
+          `)
+          .bind(bounds.start, bounds.end)
+          .first();
+
+        return json({
+          success: true,
+          version: "V6.7.10.17 10-25 ONLY + TODAY API",
+          date: local.date,
+          entry: Number(row?.total || 0),
+          filter: "10-25_SCORE_GTE_60_BET_READY"
+        });
+      } catch (error) {
+        return json({
+          success: false,
+          entry: 0,
+          error: error?.message || String(error)
+        }, 500);
       }
     }
 
@@ -5175,10 +5220,8 @@ function isHunterCandidate(
 function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
 
-  if (m >= 5 && m <= 9) return 50;
+  // V6.7.10.17 — ONLY 10–25′ with Hunter Score >=60.
   if (m >= 10 && m <= 25) return 60;
-  if (m >= 26 && m <= 34) return 90;
-  if (m >= 35 && m <= 42) return 100;
 
   return null;
 }
@@ -6864,8 +6907,6 @@ async function getBetReadyMinuteStatsForBounds(env, bounds) {
       SELECT
         CASE
           WHEN entry_minute BETWEEN 10 AND 25 THEN '10–25′'
-          WHEN entry_minute BETWEEN 26 AND 34 THEN '26–34′'
-          WHEN entry_minute BETWEEN 35 AND 42 THEN '35–42′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -6893,8 +6934,6 @@ async function getBetReadyMinuteStatsForBounds(env, bounds) {
       ORDER BY
         CASE minute_group
           WHEN '10–25′' THEN 1
-          WHEN '26–34′' THEN 2
-          WHEN '35–42′' THEN 3
         END
     `)
     .bind(REPORT_STAKE, REPORT_STAKE, bounds.start, bounds.end)
@@ -6906,7 +6945,7 @@ async function getBetReadyMinuteStatsForBounds(env, bounds) {
 
 
 function formatBetReadyMinuteStats(rows) {
-  const groups = ["10–25′", "26–34′", "35–42′"];
+  const groups = ["10–25′"];
   const map = new Map();
 
   for (const row of rows || []) {
@@ -7195,7 +7234,7 @@ ${formatBetReadyMinuteStats(minuteRows)}
   message +=
 `\n━━━━━━━━━━━━━━━━
 🎲 Само мачове с реален entry odds
-🎯 10–25′: Score ≥60 | 26–34′: Score ≥90 | 35–42′: Score =100
+🎯 10–25′: Score ≥60 | 26′+ НЕ СЕ ВЗИМАТ
 🕐 Europe/Sofia`;
 
   return message;
@@ -7747,7 +7786,7 @@ async function buildPipelineDiagnostics(env, searchParams = null) {
   const telegramReady=Number(summary?.telegram_ready_total||0);
 
   return {
-    success:true,version:"V6.7.10.15 FULL HUNTER STATS + DIAGNOSTICS",
+    success:true,version:"V6.7.10.17 10-25 ONLY + TODAY API",
     date,timezone:TIME_ZONE,population:"ALL_NORMAL_HUNTER_10_42",
     summary:{
       hunter_total:total,event_id_found:eventIds,event_id_missing:Math.max(0,total-eventIds),
@@ -9581,3 +9620,4 @@ function json(
     }
   );
 }
+
