@@ -1,6 +1,7 @@
 
+
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.17 10–25 ONLY + TODAY API
+// GOAL WATCH — HUNTER TRACKER V6.7.10.18 10–25 ONLY + BETSTATS FIX
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -278,11 +279,7 @@ const LEAGUE_TOP_COUNT = 10;
 const LEAGUE_BOTTOM_COUNT = 10;
 
 const ENTRY_MINUTE_GROUPS = [
-  { label: "10–19′", min: 10, max: 19 },
-  { label: "20–24′", min: 20, max: 24 },
-  { label: "25–29′", min: 25, max: 29 },
-  { label: "30–34′", min: 30, max: 34 },
-  { label: "35–42′", min: 35, max: 42 }
+  { label: "10–25′", min: 10, max: 25 }
 ];
 
 const ENTRY_HOUR_GROUPS = [
@@ -762,7 +759,7 @@ export default {
               WHERE created_at >= ?
                 AND cloudbet_event_id IS NOT NULL
                 AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> ''
-                AND entry_minute BETWEEN 10 AND 42
+                AND entry_minute BETWEEN 10 AND 25
               ORDER BY created_at DESC
               LIMIT 5000
             `)
@@ -1271,7 +1268,7 @@ export default {
 
         return json({
           success: true,
-          version: "V6.7.10.17 10-25 ONLY + TODAY API",
+          version: "V6.7.10.18 10-25 ONLY + BETSTATS FIX",
           date: local.date,
           entry: Number(row?.total || 0),
           filter: "10-25_SCORE_GTE_60_BET_READY"
@@ -6023,20 +6020,8 @@ async function getCurrentMonthDetails(
 
           CASE
 
-            WHEN entry_minute BETWEEN 10 AND 19
-              THEN '10–19′'
-
-            WHEN entry_minute BETWEEN 20 AND 24
-              THEN '20–24′'
-
-            WHEN entry_minute BETWEEN 25 AND 29
-              THEN '25–29′'
-
-            WHEN entry_minute BETWEEN 30 AND 34
-              THEN '30–34′'
-
-            WHEN entry_minute BETWEEN 35 AND 42
-              THEN '35–42′'
+            WHEN entry_minute BETWEEN 10 AND 25
+              THEN '10–25′'
 
           END AS minute_group,
 
@@ -6063,17 +6048,13 @@ async function getCurrentMonthDetails(
         WHERE created_at >= ?
           AND created_at < ?
           AND ${HUNTER_HISTORY_SQL}
-          AND entry_minute BETWEEN 10 AND 42
+          AND entry_minute BETWEEN 10 AND 25
 
         GROUP BY minute_group
 
         ORDER BY
           CASE minute_group
-            WHEN '10–19′' THEN 1
-            WHEN '20–24′' THEN 2
-            WHEN '25–29′' THEN 3
-            WHEN '30–34′' THEN 4
-            WHEN '35–42′' THEN 5
+            WHEN '10–25′' THEN 1
           END
       `)
       .bind(
@@ -6533,11 +6514,7 @@ async function getHunterMinuteStatsForBounds(env, bounds) {
     .prepare(`
       SELECT
         CASE
-          WHEN entry_minute BETWEEN 10 AND 19 THEN '10–19′'
-          WHEN entry_minute BETWEEN 20 AND 24 THEN '20–24′'
-          WHEN entry_minute BETWEEN 25 AND 29 THEN '25–29′'
-          WHEN entry_minute BETWEEN 30 AND 34 THEN '30–34′'
-          WHEN entry_minute BETWEEN 35 AND 42 THEN '35–42′'
+          WHEN entry_minute BETWEEN 10 AND 25 THEN '10–25′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -6548,11 +6525,7 @@ async function getHunterMinuteStatsForBounds(env, bounds) {
         AND ${HUNTER_HISTORY_SQL}
       GROUP BY minute_group
       ORDER BY CASE minute_group
-        WHEN '10–19′' THEN 1
-        WHEN '20–24′' THEN 2
-        WHEN '25–29′' THEN 3
-        WHEN '30–34′' THEN 4
-        WHEN '35–42′' THEN 5
+        WHEN '10–25′' THEN 1
       END
     `)
     .bind(bounds.start, bounds.end)
@@ -6615,20 +6588,8 @@ async function getMinuteStatsForBounds(
 
           CASE
 
-            WHEN entry_minute BETWEEN 10 AND 19
-              THEN '10–19′'
-
-            WHEN entry_minute BETWEEN 20 AND 24
-              THEN '20–24′'
-
-            WHEN entry_minute BETWEEN 25 AND 29
-              THEN '25–29′'
-
-            WHEN entry_minute BETWEEN 30 AND 34
-              THEN '30–34′'
-
-            WHEN entry_minute BETWEEN 35 AND 42
-              THEN '35–42′'
+            WHEN entry_minute BETWEEN 10 AND 25
+              THEN '10–25′'
 
           END AS minute_group,
 
@@ -6698,17 +6659,13 @@ async function getMinuteStatsForBounds(
         WHERE created_at >= ?
           AND created_at < ?
           AND ${REPORT_ELIGIBLE_SQL}
-          AND entry_minute BETWEEN 10 AND 42
+          AND entry_minute BETWEEN 10 AND 25
 
         GROUP BY minute_group
 
         ORDER BY
           CASE minute_group
-            WHEN '10–19′' THEN 1
-            WHEN '20–24′' THEN 2
-            WHEN '25–29′' THEN 3
-            WHEN '30–34′' THEN 4
-            WHEN '35–42′' THEN 5
+            WHEN '10–25′' THEN 1
           END
       `)
       .bind(
@@ -7462,11 +7419,7 @@ async function buildBetReadyStats(env) {
     .prepare(`
       SELECT
         CASE
-          WHEN entry_minute BETWEEN 10 AND 19 THEN '10–19′'
-          WHEN entry_minute BETWEEN 20 AND 24 THEN '20–24′'
-          WHEN entry_minute BETWEEN 25 AND 29 THEN '25–29′'
-          WHEN entry_minute BETWEEN 30 AND 34 THEN '30–34′'
-          WHEN entry_minute BETWEEN 35 AND 42 THEN '35–42′'
+          WHEN entry_minute BETWEEN 10 AND 25 THEN '10–25′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -7485,11 +7438,7 @@ async function buildBetReadyStats(env) {
         AND ${BET_READY_HISTORY_SQL}
       GROUP BY minute_group
       ORDER BY CASE minute_group
-        WHEN '10–19′' THEN 1
-        WHEN '20–24′' THEN 2
-        WHEN '25–29′' THEN 3
-        WHEN '30–34′' THEN 4
-        WHEN '35–42′' THEN 5
+        WHEN '10–25′' THEN 1
       END
     `)
     .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
@@ -7712,7 +7661,7 @@ async function buildBetReadyStats(env) {
 
   message += `\n━━━━━━━━━━━━━━━━
 ✅ BET READY за целия ${currentMonth}
-🎯 10–25: Score >=60 | 26–34: Score >=90 | 35–42: Score =100
+🎯 10–25′: Score >=60 | 26′+ НЕ СЕ ВЗИМАТ
 ♻️ Старите записи се преизчисляват по същия филтър
 💾 Не са изтрити от D1
 🕐 Europe/Sofia`;
@@ -7741,7 +7690,7 @@ async function buildPipelineDiagnostics(env, searchParams = null) {
            status, result, created_at, updated_at
     FROM hunter_signals
     WHERE created_at >= ? AND created_at < ?
-      AND entry_minute BETWEEN 10 AND 42
+      AND entry_minute BETWEEN 10 AND 25
     ORDER BY created_at DESC
     LIMIT ?
   `).bind(bounds.start,bounds.end,limit).all();
@@ -7756,7 +7705,7 @@ async function buildPipelineDiagnostics(env, searchParams = null) {
       SUM(CASE WHEN result='NO GOAL' THEN 1 ELSE 0 END) AS no_goals
     FROM hunter_signals
     WHERE created_at >= ? AND created_at < ?
-      AND entry_minute BETWEEN 10 AND 42
+      AND entry_minute BETWEEN 10 AND 25
   `).bind(bounds.start,bounds.end).first();
 
   const signals=(result?.results || []).map(row=>{
@@ -7786,7 +7735,7 @@ async function buildPipelineDiagnostics(env, searchParams = null) {
   const telegramReady=Number(summary?.telegram_ready_total||0);
 
   return {
-    success:true,version:"V6.7.10.17 10-25 ONLY + TODAY API",
+    success:true,version:"V6.7.10.18 10-25 ONLY + BETSTATS FIX",
     date,timezone:TIME_ZONE,population:"ALL_NORMAL_HUNTER_10_42",
     summary:{
       hunter_total:total,event_id_found:eventIds,event_id_missing:Math.max(0,total-eventIds),
@@ -9620,4 +9569,3 @@ function json(
     }
   );
 }
-
