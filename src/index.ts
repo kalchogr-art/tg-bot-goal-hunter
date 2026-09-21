@@ -1,12 +1,13 @@
 
 
-// V6.7.10.26 behavior:
+// V6.7.10.27 behavior:
 // - Telegram: ALL Hunter signals passing 10–21′ + Score >=65
 // - Telegram does not wait for MATCHED / ODDS / BET READY
 // - BET READY counting/filtering remains unchanged
+// - /stats minute groups restored to full normal Hunter history 10–42′
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.26 10–25 ONLY + BETSTATS ODDS ANALYTICS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.27 TELEGRAM ALL FILTERED + FULL STATS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -284,8 +285,14 @@ const MIN_LEAGUE_RESOLVED = 5;
 const LEAGUE_TOP_COUNT = 10;
 const LEAGUE_BOTTOM_COUNT = 10;
 
+// V6.7.10.27 — /stats keeps the COMPLETE normal Hunter history.
+// These groups are reporting-only and DO NOT change the live 10–21′ Score >=65 filter.
 const ENTRY_MINUTE_GROUPS = [
-  { label: "10–21′", min: 10, max: 21 }
+  { label: "10–19′", min: 10, max: 19 },
+  { label: "20–24′", min: 20, max: 24 },
+  { label: "25–29′", min: 25, max: 29 },
+  { label: "30–34′", min: 30, max: 34 },
+  { label: "35–42′", min: 35, max: 42 }
 ];
 
 // V6.7.10.18 — analysis display only for /today and /betstats. Live filter unchanged.
@@ -1279,7 +1286,7 @@ export default {
 
         return json({
           success: true,
-          version: "V6.7.10.18 10-25 ONLY + BETSTATS FIX",
+          version: "V6.7.10.27 TELEGRAM ALL FILTERED + FULL STATS",
           date: local.date,
           entry: Number(row?.total || 0),
           filter: "10-21_SCORE_GTE_65_BET_READY"
@@ -4891,23 +4898,17 @@ async function createHunterEntry(
 
   const shadowEntry = isShadowEntryMinute(minute);
 
-  // V6.7.10.14:
-  // Public Telegram HUNTER ENTRY is emitted ONLY after Bet Worker
-  // confirms the exact event/market/odds as BET READY and the final
-  // Cloudbet state contains the locked event id + real odds.
-  // UNMATCHED / WAITING / failed preflight remain internal in D1.
-  const finalTelegramReady =
-    betReady?.ready === true &&
-    cloudbetOdds?.success === true &&
-    cloudbetOdds?.event_id !== null &&
-    cloudbetOdds?.event_id !== undefined &&
-    String(cloudbetOdds.event_id).trim() !== "" &&
-    numberOrNull(cloudbetOdds?.price) !== null &&
-    numberOrNull(cloudbetOdds?.price) > 1;
+  // V6.7.10.27:
+  // Telegram visibility is independent from Cloudbet readiness.
+  // Every NORMAL Hunter signal passing the live strategy filter
+  // (10–21′ + Score >=65) is sent immediately, including
+  // UNMATCHED / WAITING_ODDS. BET READY accounting remains separate.
+  const sendHunterTelegram =
+    !shadowEntry &&
+    shouldSendHunterEntryToTelegram(minute, hunterScore);
 
   const telegramMessageId =
-    shadowEntry ||
-    !finalTelegramReady
+    !sendHunterTelegram
       ? null
       : await sendTelegram(
           env,
@@ -7837,7 +7838,7 @@ async function buildPipelineDiagnostics(env, searchParams = null) {
         entry_odds:odds,max_stake:numberOrNull(row?.cloudbet_max_stake),
         odds_available:Number(row?.odds_available||0)===1
       },
-      pipeline:{hunter:true,event_id:hasEvent,odds_ready:oddsReady,telegram_entry_sent:telegramSent,bet_ready:telegramSent},
+      pipeline:{hunter:true,event_id:hasEvent,odds_ready:oddsReady,telegram_entry_sent:telegramSent,bet_ready:oddsReady},
       football:{status:row?.status??null,result:row?.result??null},
       created_at:row?.created_at??null,updated_at:row?.updated_at??null
     };
