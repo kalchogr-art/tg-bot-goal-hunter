@@ -1,7 +1,7 @@
 
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.18 10–25 ONLY + BETSTATS FIX
+// GOAL WATCH — HUNTER TRACKER V6.7.10.21 10–25 ONLY + BETSTATS ODDS ANALYTICS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -229,7 +229,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// V6.7.10.20: adds analytical 10–21′ + odds >1.50 row to /today + /betstats. No live filter change.
+// V6.7.10.21: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
 // BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -7200,6 +7200,8 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 BE
 ⏱ BET READY — ПО ENTRY МИНУТА
 ━━━━━━━━━━━━━━━━
 ${formatBetReadyMinuteStats(minuteRows)}
+${formatEarlyOddsOver150Row(earlyOddsOver150)}
+
 ━━━━━━━━━━━━━━━━
 🔥 BET READY — ПО HUNTER SCORE
 ━━━━━━━━━━━━━━━━
@@ -7223,9 +7225,7 @@ ${formatBetReadyMinuteStats(minuteRows)}
     const rowResolved = rowGoals + rowNoGoals;
     const rowRate = rowResolved > 0 ? rowGoals / rowResolved * 100 : 0;
 
-    message += `\n${formatEarlyOddsOver150Row(earlyOddsOver150)}\n`;
-
-  message += `${group}: ${rowTotal} ENTRY | ${rowGoals} GOAL | ${rowNoGoals} NO GOAL | ${rowRate.toFixed(1)}%\n`;
+    message += `${group}: ${rowTotal} ENTRY | ${rowGoals} GOAL | ${rowNoGoals} NO GOAL | ${rowRate.toFixed(1)}%\n`;
   }
 
   message +=
@@ -7661,7 +7661,7 @@ async function buildBetReadyStats(env) {
       : `${group.label}: 0 ENTRY\n`;
   }
 
-  message += `\n${formatEarlyOddsOver150Row(earlyOddsOver150)}\n`;
+  message += `\n━━━━━━━━━━━━━━━━\n🎯 10–21′ + ODDS > 1.50\n━━━━━━━━━━━━━━━━\n${formatEarlyOddsOver150Row(earlyOddsOver150)}\n`;
 
   message += `\n━━━━━━━━━━━━━━━━
 🔥 ПО HUNTER SCORE
