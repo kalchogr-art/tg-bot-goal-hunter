@@ -1,7 +1,7 @@
 
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.23 10–25 ONLY + BETSTATS ODDS ANALYTICS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.25 10–25 ONLY + BETSTATS ODDS ANALYTICS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -229,7 +229,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// V6.7.10.23: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
+// V6.7.10.25: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
 // BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -238,8 +238,8 @@ const FLASHSCORE_HEADERS = {
 const REPORT_ELIGIBLE_SQL = `
   entry_odds IS NOT NULL
   AND entry_odds > 1
-  AND entry_minute BETWEEN 10 AND 25
-  AND hunter_score >= 60
+  AND entry_minute BETWEEN 10 AND 21
+  AND hunter_score >= 65
 `;
 
 // /stats HUNTER HISTORY: keep the complete historical Hunter sample.
@@ -257,14 +257,14 @@ const BET_READY_HISTORY_SQL = `
   AND entry_odds IS NOT NULL
   AND entry_odds > 1
   AND odds_available = 1
-  AND entry_minute BETWEEN 10 AND 25
-  AND hunter_score >= 60
+  AND entry_minute BETWEEN 10 AND 21
+  AND hunter_score >= 65
 `;
 
 // /betstats clean analysis window requested by user.
-// 2026-09-15 00:00 Europe/Sofia = 2026-09-14T21:00:00.000Z.
-const BETSTATS_CLEAN_START_UTC = "2026-09-14T21:00:00.000Z";
-const BETSTATS_CLEAN_START_LABEL = "2026-09-15";
+// 2026-09-21 00:00 Europe/Sofia = 2026-09-20T21:00:00.000Z.
+const BETSTATS_CLEAN_START_UTC = "2026-09-20T21:00:00.000Z";
+const BETSTATS_CLEAN_START_LABEL = "2026-09-21";
 
 // Virtual bankroll for clean BET READY research.
 const BETSTATS_START_BANK = 100;
@@ -280,13 +280,12 @@ const LEAGUE_TOP_COUNT = 10;
 const LEAGUE_BOTTOM_COUNT = 10;
 
 const ENTRY_MINUTE_GROUPS = [
-  { label: "10–25′", min: 10, max: 25 }
+  { label: "10–21′", min: 10, max: 21 }
 ];
 
 // V6.7.10.18 — analysis display only for /today and /betstats. Live filter unchanged.
 const BET_READY_MINUTE_GROUPS = [
-  { label: "10–21′", min: 10, max: 21 },
-  { label: "22–25′", min: 22, max: 25 }
+  { label: "10–21′", min: 10, max: 21 }
 ];
 
 const ENTRY_HOUR_GROUPS = [
@@ -1278,7 +1277,7 @@ export default {
           version: "V6.7.10.18 10-25 ONLY + BETSTATS FIX",
           date: local.date,
           entry: Number(row?.total || 0),
-          filter: "10-25_SCORE_GTE_60_BET_READY"
+          filter: "10-21_SCORE_GTE_65_BET_READY"
         });
       } catch (error) {
         return json({
@@ -5224,8 +5223,9 @@ function isHunterCandidate(
 function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
 
-  // V6.7.10.17 — ONLY 10–25′ with Hunter Score >=60.
-  if (m >= 10 && m <= 25) return 60;
+  // V6.7.10.25 — LIVE BET READY TEST FILTER:
+  // only 10–21′ with Hunter Score >=65.
+  if (m >= 10 && m <= 21) return 65;
 
   return null;
 }
@@ -6871,7 +6871,6 @@ async function getBetReadyMinuteStatsForBounds(env, bounds) {
       SELECT
         CASE
           WHEN entry_minute BETWEEN 10 AND 21 THEN '10–21′'
-          WHEN entry_minute BETWEEN 22 AND 25 THEN '22–25′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -7281,7 +7280,7 @@ ${formatEarlyScoreSplit(earlyScoreSplit)}
   message +=
 `\n━━━━━━━━━━━━━━━━
 🎲 Само мачове с реален entry odds
-🎯 10–25′: Score ≥60 | 26′+ НЕ СЕ ВЗИМАТ
+🎯 10–21′: Score ≥65 | 22′+ НЕ СЕ ВЗИМАТ
 🕐 Europe/Sofia`;
 
   return message;
@@ -7510,7 +7509,6 @@ async function buildBetReadyStats(env) {
       SELECT
         CASE
           WHEN entry_minute BETWEEN 10 AND 21 THEN '10–21′'
-          WHEN entry_minute BETWEEN 22 AND 25 THEN '22–25′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -7760,7 +7758,7 @@ async function buildBetReadyStats(env) {
 
   message += `\n━━━━━━━━━━━━━━━━
 ✅ BET READY за целия ${currentMonth}
-🎯 10–25′: Score >=60 | 26′+ НЕ СЕ ВЗИМАТ
+🎯 10–21′: Score >=65 | 22′+ НЕ СЕ ВЗИМАТ
 ♻️ Старите записи се преизчисляват по същия филтър
 💾 Не са изтрити от D1
 🕐 Europe/Sofia`;
@@ -9375,7 +9373,7 @@ ${cloudbetText}
 
 ${betReadyText}
 
-🎯 Условие: > 60
+🎯 Условие: 10–21′ | Score ≥65
 
 🕐 ${local.text}
 
