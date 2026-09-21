@@ -1,6526 +1,9685 @@
+
+
+// V6.7.10.26 behavior:
+// - Telegram: ALL Hunter signals passing 10–21′ + Score >=65
+// - Telegram does not wait for MATCHED / ODDS / BET READY
+// - BET READY counting/filtering remains unchanged
+
 // ============================================================
-// CRYPTOBOT V1.2 — MICROSTRUCTURE ENGINE
-// READ ONLY / NO TRADING
+// GOAL WATCH — HUNTER TRACKER V6.7.10.26 10–25 ONLY + BETSTATS ODDS ANALYTICS
+// 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
+// V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
-// Coins: BTC / ETH / SOL / XRP / BNB / DOGE / AVAX / LINK / SUI / HYPE
 //
-// FIXES / FEATURES:
-// - Closed candles used for historical volume/volatility/trend
-// - Live candle kept separately for live momentum
-// - 1m + 5m chart engine
-// - L2 top-5 / top-10 / distance-weighted order-book imbalance
-// - Spread / bid / ask liquidity
-// - Current Open Interest / Funding / Premium
-// - Combined MARKET LONG / SHORT score
+// V6.7.10.16:
+// - Adds READ-ONLY /history over the EXISTING hunter_signals D1 archive.
+// - No DB schema change.
+// - No GOAL/NO_GOAL resolver change.
+// - Exposes event_id, entry minute, odds, goal minute and final result for Top Signal.
+//
+// V6.7.10.15:
+// - /stats keeps ALL normal Hunter signals 10–42, independent of Cloudbet readiness.
+// - Adds GET /diagnostics with ALL normal Hunter signals + pipeline state.
+// - Adds Telegram /diagnostics summary.
+// - Telegram ENTRY remains BET READY YES only.
+// - /betstats remains BET READY only.
+// - Hunter thresholds and GOAL/NO_GOAL unchanged.
+//
+// V6.7.10.14:
+// - Telegram HUNTER ENTRY is sent ONLY after final BET READY YES.
+// - UNMATCHED / WAITING / failed preflight remain internal in D1.
+// - A secure READY preflight promotes its locked event_id + exact odds
+//   to the final Cloudbet state before Telegram formatting.
+// - Prevents impossible CLOUDBET UNMATCHED + BET READY YES output.
+// - Hunter thresholds, GOAL/NO_GOAL, reports and shadow logic unchanged.
+//
+// V6.7.10.13:
+// - /shadowstats shows ONLY 5–9 minute SHADOW signals that became BET READY.
+// - Requires Cloudbet event id + real entry_odds > 1 + odds_available = 1.
+// - Shadow research threshold remains Score >= 50.
+// - IMPORTANT: restores the real 20–24 BET READY threshold to Score >= 65.
+// - Tracker / GOAL resolver / /betstats are unchanged.
+//
+// V6.7.10.12:
+// - SHADOW research 5–9 minute threshold lowered from Score 65 to Score 50.
+// - Shadow signals continue through the SAME Cloudbet matcher + odds lookup as normal entries.
+// - Saves cloudbet_event_id, entry_odds and odds_available in D1 when found.
+// - AI-matched shadow events can also sync exact 1H O0.5 odds from Bet Worker preflight.
+// - Still SHADOW ONLY: no normal ENTRY Telegram and never enters /betstats.
+// - /shadowstats adds Score buckets 50–54, 55–59 and 60–64.
+// - Real BET READY thresholds from minute 10 onward are unchanged.
+//
+// // V6.7.10.11:
+// - Adds /shadowstats for experimental 5–9 minute SHADOW signals.
+// - /shadowstats keeps 5–9 separate from real BET READY statistics.
+// - /betstats adds a virtual bankroll simulation from 2026-09-15.
+// - Starting bank: 100 EUR; flat stake: REPORT_STAKE (10 EUR).
+// - Each day's closing bank becomes the next day's opening bank.
+// - This is accounting/statistics only; no betting logic is changed.
+//
+// V6.7.10.9:
+// - /betstats now shows ONLY clean data after the tracker fixes.
+// - Clean period starts 2026-09-18 Europe/Sofia.
+// - Removes old/pre-fix history from this command's calculations and output.
+// - Keeps odds buckets, minute buckets, score buckets, P/L and ROI.
+// - Does NOT delete old D1 rows; they are simply excluded from /betstats.
+// - Tracker / GOAL resolver / HT reconciliation remain unchanged.
+//
+// V6.7.10.8:
+// - /betstats keeps ALL BET READY history.
+// - Adds CLEAN PERIOD starting from the working GOAL-resolver generation (V6.7.10.6).
+// - CLEAN cutoff: 2026-09-18 00:00 Europe/Sofia.
+// - Adds odds buckets with GOAL/NO GOAL, hit rate, average odds, P/L and ROI.
+// - Does NOT alter Hunter, Tracker, GOAL/NO_GOAL resolution, Matcher, odds capture or Bet Worker.
+//
+// V6.7.10.7:
+// - Adds Telegram command /betstats.
+// - /betstats is persistent history: only signals that became genuinely BET READY.
+// - Historical READY rule matches /entries: Cloudbet event id + real entry odds > 1.
+// - Keeps Dynamic Score thresholds and excludes shadow 5–9.
+// - Shows current-month totals, P/L/ROI, daily breakdown, minute groups and score groups.
+// - Does NOT change /stats, /today, Hunter, Tracker, Matcher, odds capture or Bet Worker.
+//
+// V6.7.10.6:
+// - CRITICAL FIX: restores the missing resolveTrackingGoal() function.
+// - GOAL can now complete TRACKING -> GOAL atomically again.
+// - Writes goal_minute, goal_after_minutes and result='GOAL HIT'.
+// - Sends the Telegram GOAL HIT reply after the DB update.
+// - Keeps V6.7.10.5 HT/2H reconciliation unchanged.
+// - Keeps DF_SUI first-half guards and conservative missing-feed fallback.
+// - Hunter / Matcher / AI Matcher / odds / Bet Worker / reports are unchanged.
+//
+// V6.7.10.5:
+// - FIX: HT/2H 0:0 is no longer finalized immediately.
+// - HT/2H enters a reconciliation grace window and remains TRACKING.
+// - During the grace window every cron run re-checks DF_SUI for a confirmed 1H post-entry goal.
+// - A score increase at official HT is still accepted as GOAL.
+// - A generic score increase first seen in 2H is NOT used as proof of a 1H goal.
+// - After the reconciliation window expires, NO_GOAL can be finalized only after repeated DF_SUI misses.
+// - Explicit 1H DF_SUI context can accept direct 46/47/etc as first-half stoppage time.
+// - Direct 46/47/etc without explicit 1H context remains rejected.
+// - Missing-feed fallback remains conservative.
+// - Hunter / Matcher / AI Matcher / odds / Bet Worker / reports are unchanged.
+//
+// V6.7.10.4:
+// - FIX: V27 score increase is checked BEFORE HT/2H NO_GOAL resolution again.
+// - Keeps the V6.7.10.3 DF_SUI first-half guard (45+N allowed; direct 46/47/50 rejected).
+// - Prevents a valid 1H goal from being lost when DF_SUI temporarily misses the event.
+// - HT/2H can close NO_GOAL only after DF_SUI + V27 score checks did not find a goal.
+// - Missing-feed finalization is conservative again; it no longer creates fast false NO_GOALs.
+// - Final DF_SUI check before missing-feed NO_GOAL is preserved.
+// - Hunter / Matcher / AI Matcher / odds / Bet Worker / reports are unchanged.
+//
+// V6.7.10.3:
+// - DF_SUI goals are accepted only when they belong to the FIRST HALF.
+// - 45+N is valid first-half stoppage time; direct 46/47/50 from 2H is rejected.
+// - 2H can never create a GOAL HIT unless a valid 1H DF_SUI goal was already found.
+// - HT/2H closes 0:0 signals immediately as NO_GOAL.
+// - Missing-feed fallback closes near expected HT after a short safety grace, not ~20 min later.
+//
+// V6.7.9.2:
+// - Mechanical Matcher and AI Matcher start in parallel.
+// - Secure Mechanical match wins immediately.
+// - Mechanical failure waits for the already-running AI.
+// - Telegram ENTRY is sent only after final matching result.
+// - AI requires accepted=true, confidence>=0.90 and category_guard.ok=true.
+// - AI 0% / rejected result never exposes an event_id.
+// - Existing D1, odds callback, GOAL/NO_GOAL and reports are preserved.
+// - Tracker does not place wagers.
+//
+// V6.7.7:
+//
+// 1. /preflight is called for EVERY Hunter ENTRY, even when old Matcher is UNMATCHED.
+// 2. AI Matcher can recover the correct Cloudbet event_id.
+// 3. Temporary AI resolution => WAITING, not false final NO.
+// 4. Exact odds unavailable => WAITING; Bet Worker persistent queue owns retry.
+// 5. Hunter remains stored and normal tracking/reporting is unchanged.
+// 6. No real betting is enabled by Tracker.
+//
+// V6.7.6:
+//
+//
+// 1. DAILY REPORT: OPEN count
+// 2. DAILY REPORT: average real Cloudbet ENTRY odds
+// 3. DAILY REPORT: break-even odds
+// 4. DAILY REPORT: exact P/L from each resolved signal with known entry_odds
+// 5. DAILY REPORT: ROI based only on resolved signals with known entry_odds
+// 6. Minute groups include OPEN / Avg odds / Break-even / P/L / ROI
+// 7. Missing odds are excluded from financial P/L/ROI, never invented
+// 8. Hunter / Matcher / Bet Worker / tracking logic unchanged
+//
+// V6.7.5:
+//
+//
+// 1. BET WORKER PREFLIGHT SENDS THE EXACT MATCHED EVENT DIRECTLY
+// 2. USES POST /preflight INSTEAD OF GENERAL /run
+// 3. FIXES EVENT_NOT_RETURNED_BY_BET_WORKER RACE CONDITION
+// 4. DOES NOT WAIT FOR THE SAME ENTRY TO REAPPEAR THROUGH /entries
+// 5. SAME Cloudbet event_id lock preserved
+// 6. Hunter / Matcher / Telegram / D1 tracking logic otherwise unchanged
+//
+// V6.7.4:
+//
+// 1. REAL CLOUDBET ODDS AT HUNTER ENTRY
+// 2. MATCHER V7.3.1 FAST_HUNTER
+// 3. ONLY CONFIDENT_MATCH + secure_match=true
+// 4. EXACT MARKET: 1H TOTAL GOALS OVER 0.5
+// 5. ODDS READ DIRECTLY FROM MATCHER result.odds
+// 6. ENTRY ODDS SAVED IN D1
+// 7. ODDS FAILURE NEVER BLOCKS HUNTER ENTRY
+// 8. HUNTER LOGIC: 5–9 SHADOW 50+; 10–19 60+; 20–24 65+; 25–29 70+; 30–34 75+; 35–42 80+
+// 9. TRACKING / GOAL / NO_GOAL LOGIC PRESERVED
+// 10. DAILY / MONTHLY / LEAGUE / HOUR STATS PRESERVED
+// 11. TELEGRAM ENTRY SHOWS MATCHED / UNMATCHED
+// 12. BET READY COMES ONLY FROM BET WORKER PREFLIGHT
+// 13. BET WORKER FAILURE NEVER BLOCKS HUNTER ENTRY
+// 14. STRICT MATCHER RETRY x2 AT ENTRY (750ms)
+// 15. REAL MATCHER FAILURE REASON IN TELEGRAM
+// 16. MATCHER DIAGNOSTICS PRESERVED IN MEMORY RESPONSE
 //
 // IMPORTANT:
-// - OI level is exposed, but OI CHANGE is not scored yet.
-//   We need stored historical snapshots for that.
-// - Funding is used only as a small contextual factor.
-// - Scores are strength/alignment scores, NOT profit probabilities.
-// - NO WALLET / NO PRIVATE KEY / NO ORDERS.
 //
-// Endpoints:
-// /
-// /health
-// /market
-// /candles?coin=BTC&interval=1m&limit=60
-// /book?coin=BTC
-// /chart?coin=BTC
-// /charts
-// /signal?coin=BTC
-// /signals
-// /debug-hyperliquid
+// A match can have ONLY ONE Hunter ENTRY during its lifetime.
+// created_at / updated_at / entry_time are stored as UTC ISO.
+// Statistics are calculated according to Europe/Sofia.
+// V6.7.10.0: 5–9 shadow 50+ tracking + dynamic live Score thresholds + odds-only filtered reports.
+//
+// V6.7.10.1 DF_SUI GOAL VERIFY:
+// - TRACKING checks Flashscore df_sui for confirmed post-ENTRY goals.
+// - A df_sui Goal can resolve GOAL HIT before the main V27 score catches up.
+// - Only goals strictly AFTER entry_minute are accepted.
+// - Disallowed/cancelled/VAR-overturned goals are ignored.
+// - Existing V27 score increase remains as fallback.
+// - Telegram GOAL HIT shows the confirmation source.
+// - NO_GOAL/report/matcher/bet logic is unchanged.
+// V6.7.10.2 ODDS REACTIVATION:
+// - /internal/odds-found atomically saves event_id + entry_odds + odds_available=1.
+// - /entries exposes READY_TO_BET immediately after that save.
+// - No new matcher is called; the SAME locked Cloudbet event_id is preserved.
+// - Adds top-level bet_ready / bet_status / entry_odds / cloudbet_event_id for consumers.
+// - TRACKING remains the football result-tracking status; betting readiness is separate.
 // ============================================================
 
-const VERSION = "V1.8.8 FORWARD LONG SHADOW";
-const HYPERLIQUID_INFO = "https://api.hyperliquid.xyz/info";
+const HUNTER_FROM = 10;
+const HUNTER_TO = 25;
+const HUNTER_MIN_SCORE = 60;
 
-const TRACKED_COINS = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "AVAX", "LINK", "SUI", "HYPE", "ADA", "LTC", "BCH", "AAVE", "UNI", "NEAR", "OP", "ARB", "WIF", "TRX"] as const;
-const ALLOWED_INTERVALS = ["1m", "3m", "5m", "15m", "30m", "1h"] as const;
+// V6.7.10.0 LIVE HUNTER FILTER
+// 5–9   => 50+  SHADOW ONLY (D1 + odds + GOAL/NO_GOAL, no Telegram)
+// WEEKEND BET READY TEST:
+// 10–25 => 60+
+// 26–34 => 90+
+// 35–42 => 100
+const SHADOW_FROM = 5;
+const SHADOW_TO = 9;
 
-const INTERVAL_MS: Record<string, number> = {
-  "1m": 60_000,
-  "3m": 180_000,
-  "5m": 300_000,
-  "15m": 900_000,
-  "30m": 1_800_000,
-  "1h": 3_600_000,
+const TIME_ZONE = "Europe/Sofia";
+const DAILY_REPORT_WINDOW_MINUTES = 10;
+
+// Theoretical reporting stake per signal. Change only this value if needed.
+const REPORT_STAKE = 10;
+
+// V6.7.10.1 — Flashscore event feed used only for TRACKING verification.
+const FLASHSCORE_DF_SUI_BASE =
+  "https://www.flashscore.com/x/feed/df_sui_1_";
+
+const FLASHSCORE_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36",
+  "Accept": "*/*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://www.flashscore.com/",
+  "Origin": "https://www.flashscore.com",
+  "x-fsign": "SW9D1eZo",
+  "Cache-Control": "no-cache"
 };
 
-type AnyObj = Record<string, any>;
+// V6.7.10.26: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
+// BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
+// V6.7.10.0 REPORT FILTER
+// 5–9 shadow rows NEVER enter the normal Telegram statistics.
+// A normal row enters statistics only after a real entry odds is captured
+// and only if it passes the same dynamic Score threshold used for live ENTRY.
+const REPORT_ELIGIBLE_SQL = `
+  entry_odds IS NOT NULL
+  AND entry_odds > 1
+  AND entry_minute BETWEEN 10 AND 21
+  AND hunter_score >= 65
+`;
 
-type Env = {
-  // Optional. Add with:
-  // npx wrangler secret put X_API_BEARER_TOKEN
-  X_API_BEARER_TOKEN?: string;
+// /stats HUNTER HISTORY: keep the complete historical Hunter sample.
+// Odds are NOT required here. Shadow 5–9 remains excluded from normal history.
+const HUNTER_HISTORY_SQL = `
+  entry_minute BETWEEN 10 AND 42
+`;
 
-  // Cloudflare D1 binding. Recommended binding name: DB
-  DB?: any;
-};
+// V6.7.10.7 — persistent historical BET READY population.
+// This mirrors the READY state exposed by /entries, but works after a match
+// leaves TRACKING because the locked Cloudbet event id and entry odds stay in D1.
+const BET_READY_HISTORY_SQL = `
+  cloudbet_event_id IS NOT NULL
+  AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> ''
+  AND entry_odds IS NOT NULL
+  AND entry_odds > 1
+  AND odds_available = 1
+  AND entry_minute BETWEEN 10 AND 21
+  AND hunter_score >= 65
+`;
 
-type Candle = {
-  coin?: string;
-  interval?: string;
-  open_time: number | null;
-  close_time: number | null;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  close: number | null;
-  volume: number | null;
-  trades?: number | null;
-};
+// /betstats clean analysis window requested by user.
+// 2026-09-21 00:00 Europe/Sofia = 2026-09-20T21:00:00.000Z.
+const BETSTATS_CLEAN_START_UTC = "2026-09-20T21:00:00.000Z";
+const BETSTATS_CLEAN_START_LABEL = "2026-09-21";
+
+// Virtual bankroll for clean BET READY research.
+const BETSTATS_START_BANK = 100;
+
+
+
+// V6.7.4 matcher retry: same strict matcher rules, no relaxed names.
+const MATCHER_ENTRY_ATTEMPTS = 2;
+const MATCHER_RETRY_DELAY_MS = 750;
+
+const MIN_LEAGUE_RESOLVED = 5;
+const LEAGUE_TOP_COUNT = 10;
+const LEAGUE_BOTTOM_COUNT = 10;
+
+const ENTRY_MINUTE_GROUPS = [
+  { label: "10–21′", min: 10, max: 21 }
+];
+
+// V6.7.10.18 — analysis display only for /today and /betstats. Live filter unchanged.
+const BET_READY_MINUTE_GROUPS = [
+  { label: "10–21′", min: 10, max: 21 }
+];
+
+const ENTRY_HOUR_GROUPS = [
+  { label: "00–05", min: 0, max: 5 },
+  { label: "06–09", min: 6, max: 9 },
+  { label: "10–13", min: 10, max: 13 },
+  { label: "14–17", min: 14, max: 17 },
+  { label: "18–21", min: 18, max: 21 },
+  { label: "22–23", min: 22, max: 23 }
+];
+
+const SOFIA_FORMATTER =
+  new Intl.DateTimeFormat(
+    "en-GB",
+    {
+      timeZone: TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    }
+  );
+
 
 // ============================================================
-// RESPONSE / HELPERS
+// MAIN
 // ============================================================
 
-function json(data: any, status = 200): Response {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=UTF-8",
-      "access-control-allow-origin": "*",
-      "cache-control": "no-store",
-    },
-  });
-}
+export default {
 
-function num(value: any): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
+  async fetch(request, env) {
 
-function clamp(value: number, min = 0, max = 100): number {
-  return Math.max(min, Math.min(max, value));
-}
+    const url = new URL(request.url);
 
-function clampSigned(value: number, min = -100, max = 100): number {
-  return Math.max(min, Math.min(max, value));
-}
 
-function round(value: number, decimals = 2): number {
-  const p = 10 ** decimals;
-  return Math.round(value * p) / p;
-}
+    // ========================================================
+    // DEBUG V27
+    // ========================================================
 
-function average(values: number[]): number {
-  return values.length
-    ? values.reduce((a, b) => a + b, 0) / values.length
-    : 0;
-}
+    if (
+      request.method === "GET" &&
+      url.pathname === "/debug-proxy-binding"
+    ) {
 
-function validCoin(coin: string): boolean {
-  return (TRACKED_COINS as readonly string[]).includes(coin.toUpperCase());
-}
+      try {
 
-function sideLabel(signed: number, neutralBand = 5): string {
-  if (signed > neutralBand) return "LONG";
-  if (signed < -neutralBand) return "SHORT";
-  return "NEUTRAL";
-}
+        const response =
+          await env.V27.fetch(
+            "https://v27.internal/"
+          );
 
-// ============================================================
-// HYPERLIQUID
-// ============================================================
+        const text =
+          await response.text();
 
-async function hyperliquid(payload: AnyObj): Promise<any> {
-  const response = await fetch(HYPERLIQUID_INFO, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+        return new Response(
+          JSON.stringify(
+            {
+              success: true,
+              binding: "V27",
+              status: response.status,
+              response: text
+            },
+            null,
+            2
+          ),
+          {
+            status: 200,
+            headers: {
+              "Content-Type":
+                "application/json; charset=utf-8",
+              "Cache-Control":
+                "no-store"
+            }
+          }
+        );
 
-  const text = await response.text();
-  let data: any;
+      } catch (error) {
 
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error("HYPERLIQUID_INVALID_JSON: " + text.slice(0, 500));
+        return new Response(
+          JSON.stringify(
+            {
+              success: false,
+              binding: "V27",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : String(error)
+            },
+            null,
+            2
+          ),
+          {
+            status: 500,
+            headers: {
+              "Content-Type":
+                "application/json; charset=utf-8"
+            }
+          }
+        );
+      }
+    }
+
+
+    // ========================================================
+    // DEBUG MATCHER
+    // ========================================================
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/debug-matcher-binding"
+    ) {
+
+      try {
+
+        if (!env.MATCHER) {
+          throw new Error(
+            "MATCHER Service Binding missing"
+          );
+        }
+
+        const response =
+          await env.MATCHER.fetch(
+            new Request(
+              "https://matcher.internal/",
+              {
+                method: "GET",
+                headers: {
+                  "Accept":
+                    "application/json"
+                }
+              }
+            )
+          );
+
+        const text =
+          await response.text();
+
+        return json({
+          success: true,
+          binding: "MATCHER",
+          status: response.status,
+          response: text
+        });
+
+      } catch (error) {
+
+        return json({
+          success: false,
+          binding: "MATCHER",
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
+    }
+
+
+    // ========================================================
+    // ENTRIES
+    // ========================================================
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/entries"
+    ) {
+
+      try {
+
+        if (!env.DB) {
+          return json(
+            {
+              success: false,
+              error: "DB binding missing"
+            },
+            500
+          );
+        }
+
+        const result =
+          await env.DB
+            .prepare(`
+              SELECT
+                id,
+                match_id,
+                match_name,
+                league,
+                entry_time,
+                entry_minute,
+                hunter_score,
+                goal_pressure,
+                danger_index,
+                attack_score,
+                entry_home_score,
+                entry_away_score,
+                cloudbet_event_id,
+                entry_odds,
+                cloudbet_max_stake,
+                cloudbet_match,
+                odds_available,
+                matcher_score,
+                status,
+                result,
+                created_at,
+                updated_at
+              FROM hunter_signals
+              WHERE status = 'TRACKING'
+              ORDER BY created_at DESC
+            `)
+            .all();
+
+        const rows =
+          result?.results || [];
+
+        // V6.7.4:
+        // Enrich /entries with the CURRENT V27 live minute/period.
+        // entry_minute remains the immutable Hunter entry snapshot.
+        // No D1 migration is required.
+        const liveById =
+          new Map();
+
+        try {
+
+          if (env.V27) {
+
+            const liveResponse =
+              await env.V27.fetch(
+                new Request(
+                  "https://v27.internal/",
+                  {
+                    method: "GET",
+                    headers: {
+                      "Accept":
+                        "application/json"
+                    }
+                  }
+                )
+              );
+
+            if (liveResponse.ok) {
+
+              const liveData =
+                await liveResponse.json();
+
+              const liveMatches =
+                Array.isArray(
+                  liveData?.matches
+                )
+                  ? liveData.matches
+                  : [];
+
+              for (
+                const liveMatch of liveMatches
+              ) {
+
+                const liveId =
+                  String(
+                    liveMatch?.id ?? ""
+                  );
+
+                if (liveId) {
+                  liveById.set(
+                    liveId,
+                    liveMatch
+                  );
+                }
+              }
+            }
+          }
+
+        } catch (error) {
+
+          // /entries must remain available even if V27 enrichment
+          // temporarily fails. In that case current_* fields are null.
+          console.error(
+            "ENTRIES V27 ENRICH ERROR",
+            error?.message ||
+            String(error)
+          );
+        }
+
+        const entries =
+          rows.map(row => {
+
+            const liveMatch =
+              liveById.get(
+                String(
+                  row?.match_id ?? ""
+                )
+              ) ?? null;
+
+            const currentMinute =
+              liveMatch
+                ? parseMinuteValue(
+                    liveMatch?.minute ??
+                    liveMatch?.minute_display ??
+                    liveMatch?.minuteDisplay
+                  )
+                : null;
+
+            const period =
+              liveMatch
+                ? normalizeLivePeriod(
+                    liveMatch
+                  )
+                : null;
+
+            // V6.7.10.2:
+            // Betting readiness is independent from football TRACKING status.
+            // As soon as /internal/odds-found stores the real odds, /entries
+            // must expose the signal as READY_TO_BET on the very next read.
+            const readyEventId =
+              row?.cloudbet_event_id !== null &&
+              row?.cloudbet_event_id !== undefined &&
+              String(row.cloudbet_event_id).trim() !== "";
+
+            const readyEntryOdds =
+              numberOrNull(
+                row?.entry_odds
+              );
+
+            const readyOddsAvailable =
+              Number(
+                row?.odds_available || 0
+              ) === 1 ||
+              (
+                readyEntryOdds !== null &&
+                readyEntryOdds > 1
+              );
+
+            const betReady =
+              readyEventId &&
+              readyOddsAvailable &&
+              readyEntryOdds !== null &&
+              readyEntryOdds > 1;
+
+            return {
+            type: "HUNTER_ENTRY",
+            signal: "HUNTER_ENTRY",
+            action: "ENTRY",
+            status: "TRACKING",
+
+            // V6.7.10.2 — explicit betting state for dashboard / Bet Worker.
+            bet_ready:
+              betReady,
+            bet_status:
+              betReady
+                ? "READY_TO_BET"
+                : (
+                    readyEventId
+                      ? "WAITING_ODDS"
+                      : "UNMATCHED"
+                  ),
+            cloudbet_event_id:
+              row?.cloudbet_event_id ?? null,
+            entry_odds:
+              readyEntryOdds,
+            odds_available:
+              readyOddsAvailable,
+
+            id: row?.id ?? null,
+            match_id: row?.match_id ?? null,
+            match_name: row?.match_name ?? "",
+            match: row?.match_name ?? "",
+            league: row?.league ?? "LIVE",
+            entry_time: row?.entry_time ?? null,
+            entry_minute: row?.entry_minute ?? null,
+            hunter_score: row?.hunter_score ?? null,
+            goal_pressure: row?.goal_pressure ?? null,
+            danger_index: row?.danger_index ?? null,
+            attack_score: row?.attack_score ?? null,
+            score: {
+              home: row?.entry_home_score ?? 0,
+              away: row?.entry_away_score ?? 0
+            },
+            cloudbet: {
+              event_id: row?.cloudbet_event_id ?? null,
+              match: row?.cloudbet_match ?? null,
+              entry_odds: numberOrNull(row?.entry_odds),
+              max_stake: numberOrNull(row?.cloudbet_max_stake),
+              odds_available: Number(row?.odds_available || 0) === 1,
+              matcher_score: numberOrNull(row?.matcher_score)
+            },
+            home: null,
+            away: null,
+            current_minute:
+              currentMinute,
+            period
+          };
+        });
+
+        return json({
+          success: true,
+          worker:
+            "GOAL WATCH — HUNTER TRACKER V6.7.10.15",
+          source:
+            "hunter_signals",
+          mode:
+            "READ_ONLY",
+          count:
+            entries.length,
+          entries
+        });
+
+      } catch (error) {
+
+        console.error(
+          "ENTRIES API ERROR",
+          error?.message ||
+          String(error)
+        );
+
+        return json({
+          success: false,
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
+    }
+
+
+
+    // ========================================================
+    // V6.7.10.16 — READ-ONLY PERSISTENT HISTORY
+    // Existing hunter_signals D1 archive; no schema mutation.
+    // ========================================================
+    if (
+      request.method === "GET" &&
+      url.pathname === "/history"
+    ) {
+      try {
+        if (!env.DB) {
+          return json({ success: false, error: "DB binding missing" }, 500);
+        }
+
+        const rawDays = Number(url.searchParams.get("days") ?? 120);
+        const days = Math.max(
+          1,
+          Math.min(
+            365,
+            Number.isFinite(rawDays) ? Math.floor(rawDays) : 120
+          )
+        );
+
+        const cutoff =
+          new Date(
+            Date.now() - days * 86400000
+          ).toISOString();
+
+        const result =
+          await env.DB
+            .prepare(`
+              SELECT
+                id,
+                match_id,
+                match_name,
+                league,
+                entry_time,
+                entry_minute,
+                hunter_score,
+                cloudbet_event_id,
+                entry_odds,
+                cloudbet_max_stake,
+                cloudbet_match,
+                odds_available,
+                matcher_score,
+                status,
+                result,
+                goal_minute,
+                goal_after_minutes,
+                created_at,
+                updated_at
+              FROM hunter_signals
+              WHERE created_at >= ?
+                AND cloudbet_event_id IS NOT NULL
+                AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> ''
+                AND entry_minute BETWEEN 10 AND 25
+              ORDER BY created_at DESC
+              LIMIT 5000
+            `)
+            .bind(cutoff)
+            .all();
+
+        const entries =
+          (result?.results || [])
+            .map(row => ({
+              id: row?.id ?? null,
+              match_id: row?.match_id ?? null,
+              match_name: row?.match_name ?? "",
+              match: row?.match_name ?? "",
+              league: row?.league ?? "LIVE",
+              entry_time: row?.entry_time ?? null,
+              entry_minute: row?.entry_minute ?? null,
+              hunter_score: row?.hunter_score ?? null,
+
+              cloudbet_event_id:
+                row?.cloudbet_event_id ?? null,
+
+              entry_odds:
+                numberOrNull(row?.entry_odds),
+
+              cloudbet_max_stake:
+                numberOrNull(row?.cloudbet_max_stake),
+
+              cloudbet_match:
+                row?.cloudbet_match ?? null,
+
+              odds_available:
+                Number(row?.odds_available || 0) === 1,
+
+              matcher_score:
+                numberOrNull(row?.matcher_score),
+
+              status:
+                row?.status ?? null,
+
+              result:
+                row?.result ?? null,
+
+              goal_minute:
+                numberOrNull(row?.goal_minute),
+
+              goal_after_minutes:
+                numberOrNull(row?.goal_after_minutes),
+
+              created_at:
+                row?.created_at ?? null,
+
+              updated_at:
+                row?.updated_at ?? null
+            }));
+
+        return json({
+          success: true,
+          worker:
+            "GOAL WATCH — HUNTER TRACKER V6.7.10.16",
+          source:
+            "EXISTING_HUNTER_SIGNALS_D1",
+          mode:
+            "READ_ONLY",
+          days,
+          count:
+            entries.length,
+          entries
+        });
+
+      } catch (error) {
+        return json({
+          success: false,
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
+    }
+
+
+    // ========================================================
+    // OPTIONS
+    // ========================================================
+
+    if (
+      request.method === "OPTIONS"
+    ) {
+
+      return new Response(
+        null,
+        {
+          status: 204,
+          headers: corsHeaders()
+        }
+      );
+    }
+
+
+
+    // ========================================================
+    // V6.7.8 — INTERNAL PENDING ODDS FOUND CALLBACK
+    // Bet Worker calls this only when the SAME locked event_id
+    // changes from PENDING_ODDS to a real exact 1H O0.5 price.
+    // The atomic entry_odds IS NULL guard prevents duplicate
+    // storage and duplicate Telegram replies.
+    // ========================================================
+
+    if (
+      request.method === "POST" &&
+      url.pathname ===
+        "/internal/odds-found"
+    ) {
+
+      try {
+
+        const body =
+          await request.json();
+
+        const matchId =
+          String(
+            body?.match_id ?? ""
+          ).trim();
+
+        const eventId =
+          String(
+            body?.event_id ?? ""
+          ).trim();
+
+        const odds =
+          numberOrNull(
+            body?.odds
+          );
+
+        if (
+          !matchId ||
+          !eventId ||
+          odds === null ||
+          odds <= 1
+        ) {
+          return json(
+            {
+              success: false,
+              error:
+                "INVALID_ODDS_FOUND_PAYLOAD"
+            },
+            400
+          );
+        }
+
+        const nowIso =
+          new Date().toISOString();
+
+        const update =
+          await env.DB
+            .prepare(`
+              UPDATE hunter_signals
+              SET
+                cloudbet_event_id = ?,
+                entry_odds = ?,
+                odds_available = 1,
+                cloudbet_max_stake =
+                  COALESCE(?, cloudbet_max_stake),
+                cloudbet_match =
+                  COALESCE(?, cloudbet_match),
+                updated_at = ?
+              WHERE match_id = ?
+                AND status = 'TRACKING'
+                AND entry_odds IS NULL
+                AND (
+                  cloudbet_event_id IS NULL
+                  OR cloudbet_event_id = ?
+                )
+            `)
+            .bind(
+              eventId,
+              odds,
+              numberOrNull(
+                body?.max_stake
+              ),
+              body?.cloudbet_match ??
+              null,
+              nowIso,
+              matchId,
+              eventId
+            )
+            .run();
+
+        const changed =
+          Number(
+            update?.meta?.changes ?? 0
+          );
+
+        if (changed < 1) {
+
+          return json({
+            success: true,
+            action:
+              "ALREADY_PROCESSED",
+            duplicate:
+              true,
+            match_id:
+              matchId,
+            event_id:
+              eventId,
+            odds
+          });
+        }
+
+        const row =
+          await env.DB
+            .prepare(`
+              SELECT
+                id,
+                match_id,
+                match_name,
+                league,
+                entry_minute,
+                hunter_score,
+                entry_home_score,
+                entry_away_score,
+                cloudbet_match,
+                cloudbet_max_stake,
+                matcher_score,
+                telegram_message_id,
+                entry_time
+              FROM hunter_signals
+              WHERE match_id = ?
+              LIMIT 1
+            `)
+            .bind(
+              matchId
+            )
+            .first();
+
+        const entryMinute =
+          numberOrNull(
+            row?.entry_minute
+          );
+
+        let delayText =
+          null;
+
+        if (row?.entry_time) {
+          const entryMs =
+            new Date(
+              row.entry_time
+            ).getTime();
+
+          if (
+            Number.isFinite(entryMs)
+          ) {
+            const seconds =
+              Math.max(
+                0,
+                Math.round(
+                  (
+                    Date.now() -
+                    entryMs
+                  ) / 1000
+                )
+              );
+
+            delayText =
+              seconds < 60
+                ? seconds + " сек."
+                : Math.max(
+                    1,
+                    Math.round(
+                      seconds / 60
+                    )
+                  ) + " мин.";
+          }
+        }
+
+        const message =
+          [
+            "🎲 ODDS FOUND",
+            "",
+            "⚽ " +
+              String(
+                row?.match_name ??
+                matchId
+              ),
+
+            entryMinute !== null
+              ? "📥 ENTRY: " +
+                entryMinute +
+                "'"
+              : null,
+
+            "🎲 1H Over 0.5: " +
+              odds.toFixed(2),
+
+            delayText
+              ? "⏳ Намерен след: " +
+                delayText
+              : null,
+
+            "🆔 Event: " +
+              eventId,
+
+            "",
+            "✅ PENDING → READY_TO_BET\n🟢 Сигналът е АКТИВЕН"
+          ]
+            .filter(
+              value =>
+                value !== null &&
+                value !== undefined
+            )
+            .join("\n");
+
+        // Keep the ODDS FOUND notification as a reply when an original
+        // Telegram message exists. This is informational only.
+        const oddsFoundMessageId =
+          await sendTelegram(
+            env,
+            message,
+            row?.telegram_message_id ??
+            null
+          );
+
+        // V6.7.11 — PENDING_ODDS -> READY_TO_BET FORWARD
+        // Once real odds are found, publish the SAME Hunter signal again
+        // as a complete BET READY entry. No new hunter_signals row is
+        // created, so statistics still count one ENTRY only.
+        const readyMatch = {
+          match: row?.match_name ?? matchId,
+          league: row?.league ?? "LIVE",
+          tournament: row?.league ?? "LIVE",
+          competition: row?.league ?? "LIVE",
+          minute: entryMinute ?? 0,
+          minute_display:
+            entryMinute !== null
+              ? entryMinute + "'"
+              : "—",
+          score: {
+            home: Number(row?.entry_home_score ?? 0),
+            away: Number(row?.entry_away_score ?? 0)
+          }
+        };
+
+        const readyCloudbet = {
+          success: true,
+          accepted: true,
+          event_id: eventId,
+          match: body?.cloudbet_match ?? row?.cloudbet_match ?? null,
+          price: odds,
+          entry_odds: odds,
+          odds_available: true,
+          max_stake:
+            numberOrNull(body?.max_stake) ??
+            numberOrNull(row?.cloudbet_max_stake),
+          matcher_score: numberOrNull(row?.matcher_score),
+          match_source: "PENDING_ODDS_CALLBACK"
+        };
+
+        const readyBet = {
+          checked: true,
+          ready: true,
+          action: "READY_TO_BET",
+          reason: null,
+          event_id: eventId,
+          cloudbet_match:
+            body?.cloudbet_match ?? row?.cloudbet_match ?? null,
+          current_odds: odds,
+          max_stake:
+            numberOrNull(body?.max_stake) ??
+            numberOrNull(row?.cloudbet_max_stake),
+          account_balance: null
+        };
+
+        const readyTelegramMessageId =
+          await sendTelegram(
+            env,
+            formatEntryMessage(
+              readyMatch,
+              Number(row?.hunter_score ?? 0),
+              getSofiaTime(new Date()),
+              readyCloudbet,
+              readyBet
+            )
+          );
+
+        // Future GOAL / NO GOAL replies should attach to the full READY
+        // signal, not to the old WAITING/ODDS FOUND notification.
+        if (
+          readyTelegramMessageId !== null &&
+          readyTelegramMessageId !== undefined
+        ) {
+          await env.DB
+            .prepare(`
+              UPDATE hunter_signals
+              SET
+                telegram_message_id = ?,
+                updated_at = ?
+              WHERE match_id = ?
+                AND status = 'TRACKING'
+            `)
+            .bind(
+              readyTelegramMessageId,
+              nowIso,
+              matchId
+            )
+            .run();
+        }
+
+        return json({
+          success: true,
+          action:
+            "ODDS_FOUND_SAVED",
+          duplicate:
+            false,
+          match_id:
+            matchId,
+          event_id:
+            eventId,
+          odds,
+          bet_ready:
+            true,
+          bet_status:
+            "READY_TO_BET",
+          odds_available:
+            true,
+          activation:
+            "IMMEDIATE_ON_NEXT_ENTRIES_READ",
+          reply_to:
+            row?.telegram_message_id ??
+            null,
+          odds_found_message_id:
+            oddsFoundMessageId ??
+            null,
+          telegram_message_id:
+            readyTelegramMessageId ??
+            null,
+          full_ready_signal_forwarded:
+            readyTelegramMessageId !== null &&
+            readyTelegramMessageId !== undefined
+        });
+
+      } catch (error) {
+
+        console.error(
+          "ODDS FOUND CALLBACK ERROR",
+          error?.message ||
+          String(error)
+        );
+
+        return json(
+          {
+            success: false,
+            error:
+              error?.message ||
+              String(error)
+          },
+          500
+        );
+      }
+    }
+
+
+    // ========================================================
+    // V6.7.10.15 — PIPELINE DIAGNOSTICS
+    // ========================================================
+    if (request.method === "GET" && url.pathname === "/diagnostics") {
+      try {
+        return json(await buildPipelineDiagnostics(env, url.searchParams));
+      } catch (error) {
+        return json({success:false,error:error?.message || String(error)},500);
+      }
+    }
+
+
+    // ========================================================
+    // V6.7.10.17 — TODAY BET READY JSON
+    // Exact same population used by /today and /betstats filter.
+    // Used by TOP SIGNAL daily counter.
+    // ========================================================
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/today-stats"
+    ) {
+      try {
+        const local = getSofiaTime(new Date());
+        const bounds = getSofiaDayUtcBounds(local.date);
+
+        if (!bounds) {
+          return json({
+            success: false,
+            date: local.date,
+            entry: 0,
+            error: "INVALID_DAY_BOUNDS"
+          }, 500);
+        }
+
+        const row = await env.DB
+          .prepare(`
+            SELECT COUNT(*) AS total
+            FROM hunter_signals
+            WHERE created_at >= ?
+              AND created_at < ?
+              AND ${BET_READY_HISTORY_SQL}
+          `)
+          .bind(bounds.start, bounds.end)
+          .first();
+
+        return json({
+          success: true,
+          version: "V6.7.10.18 10-25 ONLY + BETSTATS FIX",
+          date: local.date,
+          entry: Number(row?.total || 0),
+          filter: "10-21_SCORE_GTE_65_BET_READY"
+        });
+      } catch (error) {
+        return json({
+          success: false,
+          entry: 0,
+          error: error?.message || String(error)
+        }, 500);
+      }
+    }
+
+
+    // ========================================================
+    // TELEGRAM WEBHOOK
+    // ========================================================
+
+    if (
+      request.method === "POST"
+    ) {
+
+      try {
+
+        const update =
+          await request.json();
+
+        const message =
+          update?.message;
+
+        const text =
+          String(
+            message?.text || ""
+          ).trim();
+
+        if (
+          text === "/today" ||
+          text.startsWith("/today@")
+        ) {
+
+          await sendTelegram(
+            env,
+            await buildTodayStats(env)
+          );
+
+          return json({
+            success: true,
+            action: "TODAY"
+          });
+        }
+
+
+        if (
+          text === "/shadowstats" ||
+          text.startsWith("/shadowstats@")
+        ) {
+
+          await sendTelegram(
+            env,
+            await buildShadowStats(env)
+          );
+
+          return json({
+            success: true,
+            action: "SHADOWSTATS",
+            population: "SHADOW_5_9"
+          });
+        }
+
+
+        if (
+          text === "/diagnostics" ||
+          text.startsWith("/diagnostics@")
+        ) {
+          await sendTelegram(env, await buildPipelineDiagnosticsMessage(env));
+          return json({
+            success: true,
+            action: "DIAGNOSTICS",
+            population: "ALL_HUNTER_10_42"
+          });
+        }
+
+
+        if (
+          text === "/betstats" ||
+          text.startsWith("/betstats@")
+        ) {
+
+          await sendTelegram(
+            env,
+            await buildBetReadyStats(env)
+          );
+
+          return json({
+            success: true,
+            action: "BETSTATS",
+            population: "BET_READY_HISTORY"
+          });
+        }
+
+
+        if (
+          text === "/stats" ||
+          text.startsWith("/stats@")
+        ) {
+
+          await sendTelegram(
+            env,
+            await buildStats(env)
+          );
+
+          await sendTelegram(
+            env,
+            await buildHourMinuteStatsMessage(
+              env
+            )
+          );
+
+          return json({
+            success: true,
+            action: "STATS",
+            hour_minute_matrix:
+              true
+          });
+        }
+
+        return json({
+          success: true,
+          action: "IGNORED"
+        });
+
+      } catch (error) {
+
+        console.error(
+          "TELEGRAM WEBHOOK ERROR",
+          error?.message ||
+          String(error)
+        );
+
+        return json({
+          success: false,
+          error:
+            error?.message ||
+            String(error)
+        }, 500);
+      }
+    }
+
+
+    return json({
+      success: true,
+      worker:
+        "GOAL WATCH — HUNTER TRACKER V6.7.4",
+      status: "ONLINE",
+      mode:
+        "24/7 CRON + TELEGRAM + MATCHER CLOUDBET ODDS + D1 ODDS",
+      bindings: {
+        V27:
+          Boolean(env.V27),
+        MATCHER:
+          Boolean(env.MATCHER),
+        BET_WORKER:
+          Boolean(env.BET_WORKER),
+        DB:
+          Boolean(env.DB)
+      },
+      hunter: {
+        from:
+          HUNTER_FROM,
+        to:
+          HUNTER_TO,
+        min_score:
+          HUNTER_MIN_SCORE
+      },
+      odds: {
+        source:
+          "MATCHER V7.3.1",
+        market:
+          "1H Over 0.5",
+        saved_to_d1:
+          true
+      },
+      time:
+        getSofiaTime(
+          new Date()
+        ).text
+    });
+  },
+
+
+  async scheduled(
+    event,
+    env,
+    ctx
+  ) {
+
+    ctx.waitUntil(
+      processTracker(env)
+        .catch(error => {
+          console.error(
+            "TRACKER ERROR",
+            error?.message ||
+            String(error)
+          );
+        })
+    );
   }
+};
+
+
+// ============================================================
+// TRACKER
+// ============================================================
+
+async function processTracker(env) {
+
+  const now = new Date();
+  const local =
+    getSofiaTime(now);
+
+  if (!env.V27)
+    throw new Error(
+      "V27 Service Binding missing"
+    );
+
+  if (!env.DB)
+    throw new Error(
+      "DB binding missing"
+    );
+
+  if (!env.TELEGRAM_BOT_TOKEN)
+    throw new Error(
+      "TELEGRAM_BOT_TOKEN missing"
+    );
+
+  if (!env.TELEGRAM_CHAT_ID)
+    throw new Error(
+      "TELEGRAM_CHAT_ID missing"
+    );
+
+
+  // MATCHER intentionally is NOT mandatory
+  // for Hunter itself.
+  // Missing odds must never stop tracking.
+
+  if (
+    local.hour === 0 &&
+    local.minute <=
+      DAILY_REPORT_WINDOW_MINUTES
+  ) {
+
+    try {
+
+      await sendDailyReport(
+        env,
+        local
+      );
+
+    } catch (error) {
+
+      console.error(
+        "DAILY REPORT ERROR",
+        error?.message ||
+        String(error)
+      );
+    }
+  }
+
+
+  const response =
+    await env.V27.fetch(
+      new Request(
+        "https://v27.internal/",
+        {
+          method: "GET",
+          headers: {
+            "Accept":
+              "application/json"
+          }
+        }
+      )
+    );
 
   if (!response.ok) {
+
+    const text =
+      await response.text();
+
     throw new Error(
-      `HYPERLIQUID_HTTP_${response.status}: ${text.slice(0, 500)}`
+      "V27 HTTP " +
+      response.status +
+      " | " +
+      text.substring(
+        0,
+        300
+      )
     );
   }
 
-  return data;
-}
 
-async function getAllMids() {
-  return hyperliquid({ type: "allMids" });
-}
+  const data =
+    await response.json();
 
-async function getMetaAndContexts() {
-  return hyperliquid({ type: "metaAndAssetCtxs" });
-}
+  if (
+    data?.success !== true
+  ) {
 
-async function getAssetContext(coin: string) {
-  const metaCtx = await getMetaAndContexts();
-
-  const meta = Array.isArray(metaCtx) ? metaCtx[0] : null;
-  const contexts = Array.isArray(metaCtx) ? metaCtx[1] : null;
-  const universe = Array.isArray(meta?.universe) ? meta.universe : [];
-
-  const index = universe.findIndex(
-    (x: any) => String(x?.name ?? "").toUpperCase() === coin
-  );
-
-  const ctx =
-    index >= 0 && Array.isArray(contexts)
-      ? contexts[index]
-      : null;
-
-  return {
-    found: index >= 0,
-    context: ctx,
-    index,
-  };
-}
-
-// ============================================================
-// MARKET
-// ============================================================
-
-async function getMarket() {
-  const [mids, metaCtx] = await Promise.all([
-    getAllMids(),
-    getMetaAndContexts(),
-  ]);
-
-  const meta = Array.isArray(metaCtx) ? metaCtx[0] : null;
-  const contexts = Array.isArray(metaCtx) ? metaCtx[1] : null;
-  const universe = Array.isArray(meta?.universe) ? meta.universe : [];
-
-  const coins = TRACKED_COINS.map((coin) => {
-    const index = universe.findIndex(
-      (x: any) => String(x?.name ?? "").toUpperCase() === coin
+    throw new Error(
+      "V27 returned success=false"
     );
+  }
 
-    const ctx =
-      index >= 0 && Array.isArray(contexts)
-        ? contexts[index]
-        : null;
 
-    const mid = num(mids?.[coin]);
-    const previous = num(ctx?.prevDayPx);
+  const matches =
+    Array.isArray(
+      data.matches
+    )
+      ? data.matches
+      : [];
 
-    let change24h: number | null = null;
 
-    if (mid !== null && previous !== null && previous !== 0) {
-      change24h = ((mid - previous) / previous) * 100;
+  const result =
+    await env.DB
+      .prepare(`
+        SELECT
+          id,
+          match_id,
+          match_name,
+          league,
+          entry_time,
+          entry_minute,
+          hunter_score,
+          entry_home_score,
+          entry_away_score,
+          telegram_message_id
+        FROM hunter_signals
+        WHERE status = 'TRACKING'
+      `)
+      .all();
+
+
+  const signals =
+    result?.results || [];
+
+
+  const trackingMap =
+    new Map();
+
+
+  for (
+    const signal of signals
+  ) {
+
+    const id =
+      String(
+        signal?.match_id || ""
+      );
+
+    if (!id)
+      continue;
+
+    trackingMap.set(
+      id,
+      signal
+    );
+  }
+
+
+  const currentIds =
+    new Set();
+
+
+  for (
+    const match of matches
+  ) {
+
+    const id =
+      String(
+        match?.id || ""
+      );
+
+    if (id) {
+      currentIds.add(id);
+    }
+  }
+
+
+  // ==========================================================
+  // CURRENT MATCHES
+  // ==========================================================
+
+  for (
+    const match of matches
+  ) {
+
+    const id =
+      String(
+        match?.id || ""
+      );
+
+    if (!id)
+      continue;
+
+
+    // --------------------------------------------------------
+    // ALREADY TRACKING
+    // --------------------------------------------------------
+
+    if (
+      trackingMap.has(id)
+    ) {
+
+      try {
+
+        await processTrackingMatch(
+          env,
+          match,
+          now,
+          trackingMap
+        );
+
+      } catch (error) {
+
+        console.error(
+          "TRACKING MATCH ERROR",
+          id,
+          error?.message ||
+          String(error)
+        );
+      }
+
+      continue;
     }
 
-    return {
-      coin,
-      found: index >= 0,
-      mid,
-      mark_price: num(ctx?.markPx),
-      oracle_price: num(ctx?.oraclePx),
-      funding: num(ctx?.funding),
-      open_interest: num(ctx?.openInterest),
-      day_volume: num(ctx?.dayNtlVlm),
-      previous_day_price: previous,
-      change_24h_pct:
-        change24h === null ? null : round(change24h, 3),
-      premium: num(ctx?.premium),
-    };
-  });
 
-  return {
-    source: "HYPERLIQUID",
-    market: "PERPETUALS",
-    timestamp: Date.now(),
-    datetime: new Date().toISOString(),
-    coins,
-  };
-}
+    // --------------------------------------------------------
+    // NEW HUNTER CANDIDATE
+    // --------------------------------------------------------
 
-// ============================================================
-// CANDLES
-// ============================================================
+    const score =
+      getHunterScore(
+        match
+      );
 
-async function getCandles(
-  coin: string,
-  interval: string,
-  limit: number
-) {
-  const now = Date.now();
-  const step = INTERVAL_MS[interval];
+    if (
+      !isHunterCandidate(
+        match,
+        score
+      )
+    ) {
+      continue;
+    }
 
-  if (!step) throw new Error("INVALID_INTERVAL");
 
-  const startTime = now - step * Math.max(limit + 8, 25);
+    try {
 
-  const raw = await hyperliquid({
-    type: "candleSnapshot",
-    req: {
-      coin,
-      interval,
-      startTime,
-      endTime: now,
-    },
-  });
+      await createHunterEntry(
+        env,
+        match,
+        now,
+        local,
+        trackingMap,
+        score
+      );
 
-  const candles: Candle[] = Array.isArray(raw)
-    ? raw.slice(-limit).map((c: any) => ({
-        coin: c?.s ?? coin,
-        interval: c?.i ?? interval,
-        open_time: num(c?.t),
-        close_time: num(c?.T),
-        open: num(c?.o),
-        high: num(c?.h),
-        low: num(c?.l),
-        close: num(c?.c),
-        volume: num(c?.v),
-        trades: num(c?.n),
-      }))
-    : [];
+    } catch (error) {
 
-  return {
-    source: "HYPERLIQUID",
-    coin,
-    interval,
-    requested_limit: limit,
-    returned: candles.length,
-    timestamp: now,
-    candles,
-  };
-}
-
-function splitCandles(candles: Candle[], interval: string) {
-  const now = Date.now();
-  const step = INTERVAL_MS[interval];
-
-  const sorted = [...candles].sort(
-    (a, b) => (a.open_time ?? 0) - (b.open_time ?? 0)
-  );
-
-  if (!sorted.length) {
-    return {
-      closed: [] as Candle[],
-      live: null as Candle | null,
-    };
+      console.error(
+        "ENTRY ERROR",
+        id,
+        error?.message ||
+        String(error)
+      );
+    }
   }
 
-  const last = sorted[sorted.length - 1];
-  const openTime = last.open_time ?? 0;
 
-  // Hyperliquid's latest candle is normally the current in-progress candle.
-  // Use interval boundary as the robust test instead of trusting close_time.
-  const isLive = step > 0 && openTime + step > now;
+  // ==========================================================
+  // MISSING TRACKING
+  // ==========================================================
 
-  return {
-    closed: isLive ? sorted.slice(0, -1) : sorted,
-    live: isLive ? last : null,
-  };
-}
-
-function usableCandles(candles: Candle[]) {
-  return candles.filter(
-    (c) =>
-      c.open !== null &&
-      c.high !== null &&
-      c.low !== null &&
-      c.close !== null
-  );
-}
-
-// ============================================================
-// CHART COMPONENTS
-// ============================================================
-
-function calculateMomentum(candles: Candle[]) {
-  const usable = usableCandles(candles);
-
-  if (usable.length < 6) {
-    return { pct: 0, direction: 0, strength: 0 };
-  }
-
-  const recent = usable.slice(-6);
-  const first = recent[0].close as number;
-  const last = recent[recent.length - 1].close as number;
-
-  if (first === 0) {
-    return { pct: 0, direction: 0, strength: 0 };
-  }
-
-  const pct = ((last - first) / first) * 100;
-
-  const ranges = recent.map((c) => {
-    const close = c.close as number;
-    if (!close) return 0;
-    return (((c.high as number) - (c.low as number)) / close) * 100;
-  });
-
-  const normalRange = Math.max(average(ranges), 0.01);
-  const strength = clamp((Math.abs(pct) / (normalRange * 3)) * 100);
-
-  return {
-    pct: round(pct, 4),
-    direction: pct > 0 ? 1 : pct < 0 ? -1 : 0,
-    strength: round(strength),
-  };
-}
-
-function calculateLiveMomentum(
-  live: Candle | null,
-  closed: Candle[]
-) {
-  if (
-    !live ||
-    live.close === null ||
-    live.open === null ||
-    !closed.length
+  for (
+    const signal of signals
   ) {
-    return {
-      available: false,
-      pct_from_open: 0,
-      pct_from_prev_close: 0,
-      direction: 0,
-      strength: 0,
-    };
+
+    const id =
+      String(
+        signal?.match_id || ""
+      );
+
+    if (!id)
+      continue;
+
+    if (
+      currentIds.has(id)
+    )
+      continue;
+
+    try {
+
+      await finalizeMissingTracking(
+        env,
+        signal,
+        now
+      );
+
+    } catch (error) {
+
+      console.error(
+        "FINALIZE ERROR",
+        id,
+        error?.message ||
+        String(error)
+      );
+    }
   }
-
-  const prevClose = closed[closed.length - 1]?.close;
-
-  if (prevClose === null || prevClose === undefined || prevClose === 0) {
-    return {
-      available: false,
-      pct_from_open: 0,
-      pct_from_prev_close: 0,
-      direction: 0,
-      strength: 0,
-    };
-  }
-
-  const fromOpen =
-    live.open !== 0
-      ? (((live.close as number) - (live.open as number)) /
-          (live.open as number)) *
-        100
-      : 0;
-
-  const fromPrev =
-    (((live.close as number) - prevClose) / prevClose) * 100;
-
-  const recentRanges = usableCandles(closed)
-    .slice(-10)
-    .map((c) => {
-      const close = c.close as number;
-      return close
-        ? (((c.high as number) - (c.low as number)) / close) * 100
-        : 0;
-    });
-
-  const baseline = Math.max(average(recentRanges), 0.01);
-  const strength = clamp((Math.abs(fromPrev) / baseline) * 50);
-
-  return {
-    available: true,
-    pct_from_open: round(fromOpen, 4),
-    pct_from_prev_close: round(fromPrev, 4),
-    direction: fromPrev > 0 ? 1 : fromPrev < 0 ? -1 : 0,
-    strength: round(strength),
-  };
 }
 
-function calculateTrend(candles: Candle[]) {
-  const usable = usableCandles(candles);
 
-  if (usable.length < 20) {
-    return {
-      direction: 0,
-      strength: 0,
-      fast_avg: null,
-      slow_avg: null,
-      distance_pct: 0,
-    };
-  }
+// ============================================================
+// EXISTING TRACKING
+// ============================================================
 
-  const closes = usable.map((c) => c.close as number);
-  const fast = average(closes.slice(-5));
-  const slow = average(closes.slice(-20));
-
-  if (!slow) {
-    return {
-      direction: 0,
-      strength: 0,
-      fast_avg: round(fast, 6),
-      slow_avg: round(slow, 6),
-      distance_pct: 0,
-    };
-  }
-
-  const distancePct = ((fast - slow) / slow) * 100;
-
-  const ranges = usable.slice(-20).map((c) => {
-    const close = c.close as number;
-    return close
-      ? (((c.high as number) - (c.low as number)) / close) * 100
-      : 0;
-  });
-
-  const normalRange = Math.max(average(ranges), 0.01);
-
-  const strength = clamp(
-    (Math.abs(distancePct) / (normalRange * 1.5)) * 100
-  );
-
-  return {
-    direction: distancePct > 0 ? 1 : distancePct < 0 ? -1 : 0,
-    strength: round(strength),
-    fast_avg: round(fast, 6),
-    slow_avg: round(slow, 6),
-    distance_pct: round(distancePct, 4),
-  };
-}
-
-function calculateVolumeClosed(candles: Candle[]) {
-  const usable = candles.filter((c) => c.volume !== null);
-
-  if (usable.length < 11) {
-    return {
-      ratio: 1,
-      strength: 0,
-      latest_closed: null,
-      average_previous_10: null,
-    };
-  }
-
-  const latest = usable[usable.length - 1].volume as number;
-  const previous = usable
-    .slice(-11, -1)
-    .map((c) => c.volume as number);
-
-  const avg = average(previous);
-
-  if (avg <= 0) {
-    return {
-      ratio: 1,
-      strength: 0,
-      latest_closed: latest,
-      average_previous_10: avg,
-    };
-  }
-
-  const ratio = latest / avg;
-
-  return {
-    ratio: round(ratio, 3),
-    strength: round(clamp((ratio - 1) * 50)),
-    latest_closed: latest,
-    average_previous_10: round(avg, 6),
-  };
-}
-
-function calculateVolatilityClosed(candles: Candle[]) {
-  const usable = usableCandles(candles);
-
-  if (usable.length < 11) {
-    return {
-      ratio: 1,
-      strength: 0,
-      latest_closed_range_pct: 0,
-      normal_range_pct: 0,
-    };
-  }
-
-  const ranges = usable.map((c) => {
-    const close = c.close as number;
-    return close
-      ? (((c.high as number) - (c.low as number)) / close) * 100
-      : 0;
-  });
-
-  const latest = ranges[ranges.length - 1];
-  const baseline = average(ranges.slice(-11, -1));
-
-  if (baseline <= 0) {
-    return {
-      ratio: 1,
-      strength: 0,
-      latest_closed_range_pct: round(latest, 4),
-      normal_range_pct: 0,
-    };
-  }
-
-  const ratio = latest / baseline;
-
-  return {
-    ratio: round(ratio, 3),
-    strength: round(clamp((ratio - 1) * 50)),
-    latest_closed_range_pct: round(latest, 4),
-    normal_range_pct: round(baseline, 4),
-  };
-}
-
-function calculateTimeframe(
-  candles: Candle[],
-  interval: string
+async function processTrackingMatch(
+  env,
+  m,
+  now,
+  trackingMap
 ) {
-  const { closed, live } = splitCandles(candles, interval);
 
-  const momentum = calculateMomentum(closed);
-  const liveMomentum = calculateLiveMomentum(live, closed);
-  const trend = calculateTrend(closed);
-  const volume = calculateVolumeClosed(closed);
-  const volatility = calculateVolatilityClosed(closed);
-
-  const historicalDirectional =
-    momentum.direction * momentum.strength * 0.50 +
-    trend.direction * trend.strength * 0.40;
-
-  const liveDirectional =
-    liveMomentum.direction * liveMomentum.strength * 0.10;
-
-  const directionalRaw = historicalDirectional + liveDirectional;
-
-  const direction =
-    directionalRaw > 5 ? 1 : directionalRaw < -5 ? -1 : 0;
-
-  const directionalStrength = Math.abs(directionalRaw);
-
-  const confirmation =
-    volume.strength * 0.60 +
-    volatility.strength * 0.40;
-
-  let totalStrength = directionalStrength;
-
-  if (direction !== 0) {
-    totalStrength = clamp(
-      directionalStrength * 0.80 +
-      confirmation * 0.20
+  const id =
+    String(
+      m?.id || ""
     );
-  }
 
-  return {
-    interval,
-    candle_handling: {
-      closed_candles: closed.length,
-      live_candle_present: !!live,
-      historical_metrics_use_closed_only: true,
-    },
-    momentum,
-    live_momentum: liveMomentum,
-    trend,
-    volume,
-    volatility,
-    direction:
-      direction > 0
-        ? "BULLISH"
-        : direction < 0
-        ? "BEARISH"
-        : "NEUTRAL",
-    directional_raw: round(directionalRaw),
-    confirmation: round(confirmation),
-    long_score: direction > 0 ? round(totalStrength) : 0,
-    short_score: direction < 0 ? round(totalStrength) : 0,
-  };
-}
+  if (!id)
+    return;
 
-function combineTimeframes(oneMinute: any, fiveMinute: any) {
-  let longScore =
-    oneMinute.long_score * 0.60 +
-    fiveMinute.long_score * 0.40;
+  const existing =
+    trackingMap.get(id);
 
-  let shortScore =
-    oneMinute.short_score * 0.60 +
-    fiveMinute.short_score * 0.40;
+  if (!existing)
+    return;
 
-  let agreement = "MIXED";
+  const home =
+    Number(
+      m?.score?.home ?? 0
+    );
 
-  if (
-    oneMinute.direction === "BULLISH" &&
-    fiveMinute.direction === "BULLISH"
-  ) {
-    agreement = "BULLISH_CONFIRMATION";
-    longScore = clamp(longScore * 1.10);
-  } else if (
-    oneMinute.direction === "BEARISH" &&
-    fiveMinute.direction === "BEARISH"
-  ) {
-    agreement = "BEARISH_CONFIRMATION";
-    shortScore = clamp(shortScore * 1.10);
-  } else if (
-    oneMinute.direction === "NEUTRAL" &&
-    fiveMinute.direction === "NEUTRAL"
-  ) {
-    agreement = "NEUTRAL";
-  } else if (
-    oneMinute.direction !== "NEUTRAL" &&
-    fiveMinute.direction !== "NEUTRAL" &&
-    oneMinute.direction !== fiveMinute.direction
-  ) {
-    agreement = "TIMEFRAME_CONFLICT";
-    longScore *= 0.70;
-    shortScore *= 0.70;
-  }
+  const away =
+    Number(
+      m?.score?.away ?? 0
+    );
 
-  longScore = clamp(longScore);
-  shortScore = clamp(shortScore);
+  const currentMinute =
+    Number(
+      m?.minute ?? 0
+    );
 
-  const difference = longScore - shortScore;
-  const strongest = Math.max(longScore, shortScore);
-
-  let status = "NO_TRADE";
-
-  if (strongest >= 80 && Math.abs(difference) >= 20) {
-    status = "STRONG";
-  } else if (strongest >= 65 && Math.abs(difference) >= 15) {
-    status = "WATCH";
-  } else if (strongest >= 50) {
-    status = "WEAK";
-  }
-
-  return {
-    long_score: round(longScore),
-    short_score: round(shortScore),
-    difference: round(difference),
-    bias:
-      difference >= 10
-        ? "LONG"
-        : difference <= -10
-        ? "SHORT"
-        : "NEUTRAL",
-    status,
-    timeframe_agreement: agreement,
-  };
-}
-
-async function buildChart(coin: string) {
-  const started = Date.now();
-
-  const [candles1m, candles5m, mids] = await Promise.all([
-    getCandles(coin, "1m", 45),
-    getCandles(coin, "5m", 45),
-    getAllMids(),
-  ]);
-
-  const oneMinute = calculateTimeframe(candles1m.candles, "1m");
-  const fiveMinute = calculateTimeframe(candles5m.candles, "5m");
-
-  return {
-    source: "HYPERLIQUID",
-    coin,
-    price: num(mids?.[coin]),
-    timestamp: Date.now(),
-    datetime: new Date().toISOString(),
-    processing_ms: Date.now() - started,
-    candles: {
-      "1m": candles1m.returned,
-      "5m": candles5m.returned,
-    },
-    timeframe_1m: oneMinute,
-    timeframe_5m: fiveMinute,
-    chart: {
-      ...combineTimeframes(oneMinute, fiveMinute),
-      meaning:
-        "Chart strength/alignment score, not probability of profit",
-    },
-  };
-}
-
-// ============================================================
-// L2 ORDER BOOK / MICROSTRUCTURE
-// ============================================================
-
-function normalizeBookLevel(x: any) {
-  const price = num(x?.px);
-  const size = num(x?.sz);
-
-  return {
-    price,
-    size,
-    orders: num(x?.n),
-    notional:
-      price !== null && size !== null
-        ? price * size
-        : 0,
-  };
-}
-
-function sumNotional(levels: any[], count: number): number {
-  return levels
-    .slice(0, count)
-    .reduce(
-      (sum, x) =>
-        sum +
-        (Number.isFinite(x.notional) ? x.notional : 0),
+  const entryHome =
+    Number(
+      existing.entry_home_score ||
       0
     );
-}
 
-function imbalance(bid: number, ask: number): number {
-  const total = bid + ask;
-  if (total <= 0) return 0;
-  return (bid - ask) / total;
-}
+  const entryAway =
+    Number(
+      existing.entry_away_score ||
+      0
+    );
 
-function weightedLiquidity(
-  levels: any[],
-  mid: number,
-  count: number
-): number {
-  if (!mid) return 0;
+  const entryMinute =
+    Number(
+      existing.entry_minute ||
+      0
+    );
 
-  return levels.slice(0, count).reduce((sum, x) => {
-    if (
-      x.price === null ||
-      x.size === null ||
-      x.price <= 0 ||
-      x.size <= 0
-    ) {
-      return sum;
+
+  // ==========================================================
+  // 1) DF_SUI — CONFIRMED FIRST-HALF GOAL AFTER ENTRY
+  // ==========================================================
+  // Preferred source. This check runs on EVERY cron pass while
+  // the signal remains TRACKING, including HT/2H reconciliation.
+
+  let summaryGoal = null;
+
+  try {
+
+    summaryGoal =
+      await getPostEntryDfSuiGoal(
+        id,
+        entryMinute
+      );
+
+  } catch (error) {
+
+    console.error(
+      "DF_SUI TRACKING ERROR",
+      id,
+      error?.message ||
+      String(error)
+    );
+  }
+
+
+  if (summaryGoal) {
+
+    const goalMinute =
+      summaryGoal.minute;
+
+    const afterMinutes =
+      Math.max(
+        0,
+        goalMinute -
+        entryMinute
+      );
+
+    const matchForMessage = {
+      ...m,
+      score:
+        summaryGoal.score &&
+        Number.isFinite(
+          Number(
+            summaryGoal.score.home
+          )
+        ) &&
+        Number.isFinite(
+          Number(
+            summaryGoal.score.away
+          )
+        )
+          ? {
+              home:
+                Number(
+                  summaryGoal.score.home
+                ),
+              away:
+                Number(
+                  summaryGoal.score.away
+                )
+            }
+          : m?.score
+    };
+
+    await resolveTrackingGoal(
+      env,
+      existing,
+      matchForMessage,
+      trackingMap,
+      id,
+      now,
+      goalMinute,
+      afterMinutes,
+      "DF_SUI_1H"
+    );
+
+    return;
+  }
+
+
+  const atHalfTime =
+    isFirstHalfFinished(m);
+
+  const inSecondHalf =
+    isSecondHalfStarted(m);
+
+
+  // ==========================================================
+  // 2) STILL FIRST HALF — V27 SCORE FALLBACK IS SAFE
+  // ==========================================================
+  // While still in 1H, any score increase happened in 1H.
+
+  if (
+    !atHalfTime &&
+    !inSecondHalf &&
+    (
+      home > entryHome ||
+      away > entryAway
+    )
+  ) {
+
+    const goalMinute =
+      getRealGoalMinute(
+        m,
+        entryHome,
+        entryAway,
+        entryMinute,
+        currentMinute
+      );
+
+    const afterMinutes =
+      goalMinute !== null
+        ? Math.max(
+            0,
+            goalMinute -
+            entryMinute
+          )
+        : null;
+
+    await resolveTrackingGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      goalMinute,
+      afterMinutes,
+      "V27_1H_SCORE"
+    );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // 3) OFFICIAL HT — SCORE INCREASE IS SAFE
+  // ==========================================================
+  // At a genuine HT snapshot, a score increase versus ENTRY
+  // necessarily belongs to the first half.
+
+  if (
+    atHalfTime &&
+    (
+      home > entryHome ||
+      away > entryAway
+    )
+  ) {
+
+    const goalMinute =
+      getRealGoalMinute(
+        m,
+        entryHome,
+        entryAway,
+        entryMinute,
+        currentMinute
+      );
+
+    const afterMinutes =
+      goalMinute !== null
+        ? Math.max(
+            0,
+            goalMinute -
+            entryMinute
+          )
+        : null;
+
+    await resolveTrackingGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      goalMinute,
+      afterMinutes,
+      "V27_HT_SCORE"
+    );
+
+    return;
+  }
+
+
+  // ==========================================================
+  // 4) HT / 2H RECONCILIATION WINDOW
+  // ==========================================================
+  // CRITICAL V6.7.10.5 FIX:
+  //
+  // The first HT/2H 0:0 snapshot is NOT trusted as final.
+  // Flashscore/V27 can briefly transition period before score/events
+  // have caught up. Keep TRACKING and let subsequent cron passes
+  // re-check DF_SUI.
+  //
+  // We intentionally do NOT use a generic score increase first seen
+  // in 2H as proof of a 1H goal because that could be a real 2H goal.
+
+  if (
+    atHalfTime ||
+    inSecondHalf
+  ) {
+
+    const deferNoGoal =
+      shouldDeferHalfTransitionNoGoal(
+        existing,
+        now
+      );
+
+    if (deferNoGoal) {
+
+      console.log(
+        "HT_RECONCILIATION_DEFER",
+        id,
+        {
+          entry_minute:
+            entryMinute,
+          period:
+            normalizeLivePeriod?.(m) ??
+            m?.period ??
+            null,
+          score: {
+            home,
+            away
+          }
+        }
+      );
+
+      return;
     }
 
-    const distancePct = Math.abs(x.price - mid) / mid;
 
-    // Strongly favor liquidity closest to the current mid.
-    // Small floor avoids division explosion.
-    const weight = 1 / Math.max(distancePct, 0.00001);
+    // Grace window has expired.
+    // DF_SUI was already checked again at the top of this pass.
+    // If no confirmed 1H post-entry goal exists, close NO_GOAL.
 
-    return sum + x.notional * weight;
-  }, 0);
-}
+    await resolveTrackingNoGoal(
+      env,
+      existing,
+      m,
+      trackingMap,
+      id,
+      now,
+      atHalfTime
+        ? "HALF_TIME_RECONCILED_NO_GOAL"
+        : "SECOND_HALF_RECONCILED_NO_GOAL"
+    );
 
-async function getBook(coin: string) {
-  const data = await hyperliquid({
-    type: "l2Book",
-    coin,
-  });
-
-  const rawBids = Array.isArray(data?.levels?.[0])
-    ? data.levels[0]
-    : [];
-
-  const rawAsks = Array.isArray(data?.levels?.[1])
-    ? data.levels[1]
-    : [];
-
-  const bids = rawBids.map(normalizeBookLevel);
-  const asks = rawAsks.map(normalizeBookLevel);
-
-  const bestBid = bids[0]?.price ?? null;
-  const bestAsk = asks[0]?.price ?? null;
-
-  const mid =
-    bestBid !== null && bestAsk !== null
-      ? (bestBid + bestAsk) / 2
-      : null;
-
-  const spread =
-    bestBid !== null && bestAsk !== null
-      ? bestAsk - bestBid
-      : null;
-
-  const spreadPct =
-    spread !== null && mid !== null && mid !== 0
-      ? (spread / mid) * 100
-      : null;
-
-  const bid5 = sumNotional(bids, 5);
-  const ask5 = sumNotional(asks, 5);
-
-  const bid10 = sumNotional(bids, 10);
-  const ask10 = sumNotional(asks, 10);
-
-  const top5Imbalance = imbalance(bid5, ask5);
-  const top10Imbalance = imbalance(bid10, ask10);
-
-  let weightedBid = 0;
-  let weightedAsk = 0;
-
-  if (mid !== null) {
-    weightedBid = weightedLiquidity(bids, mid, 10);
-    weightedAsk = weightedLiquidity(asks, mid, 10);
+    return;
   }
-
-  const weightedImbalance = imbalance(weightedBid, weightedAsk);
-
-  // Final order-flow imbalance:
-  // closest 5 levels matter most.
-  const finalImbalance = clampSigned(
-    (
-      top5Imbalance * 0.45 +
-      top10Imbalance * 0.25 +
-      weightedImbalance * 0.30
-    ) * 100
-  );
-
-  const strength = clamp(Math.abs(finalImbalance));
-
-  return {
-    source: "HYPERLIQUID",
-    coin,
-    timestamp: data?.time ?? Date.now(),
-    best_bid: bestBid,
-    best_ask: bestAsk,
-    mid,
-    spread:
-      spread === null ? null : round(spread, 8),
-    spread_pct:
-      spreadPct === null ? null : round(spreadPct, 6),
-
-    liquidity: {
-      top5: {
-        bid_notional: round(bid5, 2),
-        ask_notional: round(ask5, 2),
-        imbalance: round(top5Imbalance * 100),
-      },
-      top10: {
-        bid_notional: round(bid10, 2),
-        ask_notional: round(ask10, 2),
-        imbalance: round(top10Imbalance * 100),
-      },
-      weighted_top10: {
-        bid: round(weightedBid, 2),
-        ask: round(weightedAsk, 2),
-        imbalance: round(weightedImbalance * 100),
-      },
-    },
-
-    order_flow: {
-      signed_score: round(finalImbalance),
-      direction: sideLabel(finalImbalance),
-      strength: round(strength),
-      long_score: finalImbalance > 0 ? round(strength) : 0,
-      short_score: finalImbalance < 0 ? round(strength) : 0,
-    },
-
-    levels: {
-      bids,
-      asks,
-    },
-  };
-}
-
-// ============================================================
-// DERIVATIVES CONTEXT
-// ============================================================
-
-function buildDerivatives(ctx: any) {
-  const funding = num(ctx?.funding);
-  const openInterest = num(ctx?.openInterest);
-  const premium = num(ctx?.premium);
-  const mark = num(ctx?.markPx);
-  const oracle = num(ctx?.oraclePx);
-
-  // Funding is intentionally low-weight context.
-  // Positive funding = longs pay shorts -> slight contrarian SHORT pressure.
-  // Negative funding = shorts pay longs -> slight contrarian LONG pressure.
-  let fundingSigned = 0;
-
-  if (funding !== null) {
-    // 0.01% funding (0.0001) -> contextual score ~25.
-    fundingSigned = clampSigned((-funding / 0.0001) * 25);
-  }
-
-  let premiumSigned = 0;
-
-  if (premium !== null) {
-    // Positive premium = futures trading above reference -> modest LONG pressure.
-    premiumSigned = clampSigned((premium / 0.001) * 20);
-  }
-
-  const contextualSigned =
-    fundingSigned * 0.60 +
-    premiumSigned * 0.40;
-
-  return {
-    open_interest: openInterest,
-    open_interest_change: null,
-    open_interest_change_status:
-      "WAITING_FOR_HISTORICAL_SNAPSHOTS",
-
-    funding,
-    funding_context: {
-      signed_score: round(fundingSigned),
-      interpretation:
-        fundingSigned > 5
-          ? "LONG_CONTRARIAN_SUPPORT"
-          : fundingSigned < -5
-          ? "SHORT_CONTRARIAN_SUPPORT"
-          : "NEUTRAL",
-    },
-
-    premium,
-    premium_context: {
-      signed_score: round(premiumSigned),
-    },
-
-    mark_price: mark,
-    oracle_price: oracle,
-
-    contextual_signed_score: round(contextualSigned),
-    direction: sideLabel(contextualSigned),
-    strength: round(clamp(Math.abs(contextualSigned))),
-  };
 }
 
 
 // ============================================================
-// V1.4 SNAPSHOT HISTORY + OI CHANGE
-// D1 READ/WRITE ONLY FOR MARKET SNAPSHOTS — NO TRADING
+// V6.7.10.5 — HT / 2H NO_GOAL RECONCILIATION TIMER
 // ============================================================
 
-type SnapshotRow = {
-  coin: string;
-  ts: number;
-  price: number;
-  order_flow_signed: number;
-  open_interest: number | null;
-  funding: number | null;
-  premium: number | null;
-  chart_signed: number;
-};
+function shouldDeferHalfTransitionNoGoal(
+  signal,
+  now
+) {
 
-function dbReady(env?: Env): boolean {
-  return !!env?.DB;
-}
+  const entryMinute =
+    Math.max(
+      0,
+      Math.min(
+        45,
+        Number(
+          signal?.entry_minute ||
+          0
+        )
+      )
+    );
 
-async function ensureSnapshotTable(env: Env): Promise<void> {
-  if (!env.DB) return;
+  const entryTime =
+    new Date(
+      signal?.entry_time ||
+      signal?.created_at ||
+      ""
+    );
 
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS market_snapshots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      coin TEXT NOT NULL,
-      ts INTEGER NOT NULL,
-      datetime TEXT NOT NULL,
-      price REAL NOT NULL,
-      chart_signed REAL NOT NULL,
-      order_flow_signed REAL NOT NULL,
-      open_interest REAL,
-      funding REAL,
-      premium REAL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  // If timestamp is temporarily unusable, fail SAFE:
+  // do not finalize NO_GOAL from one uncertain HT/2H snapshot.
+  if (
+    Number.isNaN(
+      entryTime.getTime()
     )
-  `).run();
+  ) {
+    return true;
+  }
 
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_market_snapshots_coin_ts
-    ON market_snapshots (coin, ts DESC)
-  `).run();
+  const ageMinutes =
+    (
+      now.getTime() -
+      entryTime.getTime()
+    ) /
+    60000;
+
+  // Estimated real-time distance from ENTRY to 45:00.
+  const minutesUntil45 =
+    Math.max(
+      0,
+      45 - entryMinute
+    );
+
+  // Allow enough time for:
+  // - first-half stoppage time
+  // - Flashscore period transition
+  // - V27 score propagation
+  // - DF_SUI event propagation
+  //
+  // Cron keeps retrying each minute during this window.
+  const HT_RECONCILIATION_GRACE_MINUTES =
+    15;
+
+  const requiredAge =
+    minutesUntil45 +
+    HT_RECONCILIATION_GRACE_MINUTES;
+
+  return (
+    ageMinutes <
+    requiredAge
+  );
 }
 
-async function saveSnapshot(
-  env: Env,
-  signal: any
-): Promise<boolean> {
-  if (!env.DB) return false;
 
-  await ensureSnapshotTable(env);
+// ============================================================
+// RESOLVE TRACKING GOAL — V6.7.10.6 RESTORED
+// ============================================================
 
-  await env.DB.prepare(`
-    INSERT INTO market_snapshots (
-      coin, ts, datetime, price,
-      chart_signed, order_flow_signed,
-      open_interest, funding, premium
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    signal.coin,
-    signal.timestamp,
-    signal.datetime,
-    Number(signal.price ?? 0),
+async function resolveTrackingGoal(
+  env,
+  existing,
+  m,
+  trackingMap,
+  id,
+  now,
+  goalMinute,
+  afterMinutes,
+  source
+) {
+
+  const update =
+    await env.DB
+      .prepare(`
+        UPDATE hunter_signals
+        SET
+          status = 'GOAL',
+          goal_minute = ?,
+          goal_after_minutes = ?,
+          result = 'GOAL HIT',
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'TRACKING'
+      `)
+      .bind(
+        goalMinute,
+        afterMinutes,
+        now.toISOString(),
+        existing.id
+      )
+      .run();
+
+
+  const changes =
     Number(
-      signal.chart?.final?.long_score ?? 0
-    ) - Number(
-      signal.chart?.final?.short_score ?? 0
-    ),
-    Number(
-      signal.microstructure?.order_flow?.signed_score ?? 0
-    ),
-    signal.derivatives?.open_interest ?? null,
-    signal.derivatives?.funding ?? null,
-    signal.derivatives?.premium ?? null
-  ).run();
+      update?.meta?.changes ||
+      0
+    );
+
+  if (
+    changes < 1
+  ) {
+    return false;
+  }
+
+
+  trackingMap.delete(id);
+
+
+  if (!isShadowSignal(existing)) {
+
+    await sendTelegram(
+      env,
+      formatGoalMessage(
+        existing,
+        m,
+        goalMinute,
+        afterMinutes,
+        source
+      ),
+      existing.telegram_message_id
+    );
+  }
+
 
   return true;
 }
 
-async function getRecentSnapshots(
-  env: Env,
-  coin: string,
-  minutes = 20,
-  limit = 120
-): Promise<SnapshotRow[]> {
-  if (!env.DB) return [];
 
-  await ensureSnapshotTable(env);
+// ============================================================
+// NO_GOAL RESOLVER — ATOMIC / AFTER GOAL CHECKS
+// ============================================================
 
-  const since = Date.now() - minutes * 60_000;
-
-  const result = await env.DB.prepare(`
-    SELECT
-      coin, ts, price, chart_signed,
-      order_flow_signed, open_interest,
-      funding, premium
-    FROM market_snapshots
-    WHERE coin = ? AND ts >= ?
-    ORDER BY ts ASC
-    LIMIT ?
-  `).bind(
-    coin,
-    since,
-    Math.max(1, Math.min(limit, 500))
-  ).all();
-
-  return (result?.results ?? []) as SnapshotRow[];
-}
-
-function nearestSnapshot(
-  rows: SnapshotRow[],
-  targetTs: number,
-  toleranceMs: number
-): SnapshotRow | null {
-  let best: SnapshotRow | null = null;
-  let bestDistance = Infinity;
-
-  for (const row of rows) {
-    const d = Math.abs(Number(row.ts) - targetTs);
-    if (d <= toleranceMs && d < bestDistance) {
-      best = row;
-      bestDistance = d;
-    }
-  }
-
-  return best;
-}
-
-function pctChange(
-  current: number | null,
-  previous: number | null
-): number | null {
-  if (
-    current === null ||
-    previous === null ||
-    !Number.isFinite(current) ||
-    !Number.isFinite(previous) ||
-    previous === 0
-  ) {
-    return null;
-  }
-
-  return ((current - previous) / Math.abs(previous)) * 100;
-}
-
-function buildOiChangeWindow(
-  current: {
-    ts: number;
-    price: number;
-    oi: number | null;
-  },
-  rows: SnapshotRow[],
-  minutes: number
+async function resolveTrackingNoGoal(
+  env,
+  existing,
+  m,
+  trackingMap,
+  id,
+  now,
+  source = "UNKNOWN"
 ) {
-  const previous = nearestSnapshot(
-    rows,
-    current.ts - minutes * 60_000,
-    90_000
-  );
 
-  if (!previous) {
-    return {
-      available: false,
-      minutes,
-      reason: "NO_SNAPSHOT_NEAR_TARGET",
-    };
-  }
+  const update =
+    await env.DB
+      .prepare(`
+        UPDATE hunter_signals
+        SET
+          status = 'NO_GOAL',
+          result = 'NO GOAL',
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'TRACKING'
+      `)
+      .bind(
+        now.toISOString(),
+        existing.id
+      )
+      .run();
 
-  const oiPct = pctChange(
-    current.oi,
-    previous.open_interest
-  );
-
-  const pricePct = pctChange(
-    current.price,
-    previous.price
-  );
-
-  if (oiPct === null || pricePct === null) {
-    return {
-      available: false,
-      minutes,
-      reason: "MISSING_OI_OR_PRICE",
-    };
-  }
-
-  // OI is context, not direction by itself.
-  // Rising OI + rising price => LONG confirmation.
-  // Rising OI + falling price => SHORT confirmation.
-  // Falling OI => deleveraging; deliberately lower score.
-  const oiMagnitude = clamp(
-    Math.abs(oiPct) / 0.20 * 100
-  );
-
-  const priceMagnitude = clamp(
-    Math.abs(pricePct) / 0.20 * 100
-  );
-
-  let signed = 0;
-  let interpretation = "NEUTRAL";
-
-  if (oiPct > 0.01 && pricePct > 0.01) {
-    signed =
-      Math.min(oiMagnitude, priceMagnitude) * 0.85;
-    interpretation = "RISING_OI_RISING_PRICE";
-  } else if (oiPct > 0.01 && pricePct < -0.01) {
-    signed =
-      -Math.min(oiMagnitude, priceMagnitude) * 0.85;
-    interpretation = "RISING_OI_FALLING_PRICE";
-  } else if (oiPct < -0.01 && pricePct > 0.01) {
-    signed = priceMagnitude * 0.25;
-    interpretation = "FALLING_OI_RISING_PRICE_DELEVERAGING";
-  } else if (oiPct < -0.01 && pricePct < -0.01) {
-    signed = -priceMagnitude * 0.25;
-    interpretation = "FALLING_OI_FALLING_PRICE_DELEVERAGING";
-  }
-
-  return {
-    available: true,
-    minutes,
-    previous_ts: previous.ts,
-    previous_price: round(previous.price),
-    previous_open_interest:
-      previous.open_interest === null
-        ? null
-        : round(previous.open_interest, 6),
-    price_change_pct: round(pricePct, 4),
-    open_interest_change_pct: round(oiPct, 4),
-    signed_score: round(clampSigned(signed)),
-    interpretation,
-  };
-}
-
-function buildOrderFlowPersistence(
-  rows: SnapshotRow[],
-  currentSigned: number
-) {
-  const values = [
-    ...rows.slice(-9).map(
-      (x) => Number(x.order_flow_signed ?? 0)
-    ),
-    currentSigned,
-  ].filter(Number.isFinite);
-
-  if (values.length < 3) {
-    return {
-      available: false,
-      samples: values.length,
-      signed_score: round(currentSigned),
-      reason: "NEED_AT_LEAST_3_SNAPSHOTS",
-    };
-  }
-
-  const avg =
-    values.reduce((a, b) => a + b, 0) /
-    values.length;
-
-  const sameDirection = values.filter(
-    (x) =>
-      Math.sign(x) === Math.sign(avg) &&
-      Math.abs(x) >= 10
-  ).length;
-
-  const persistence = sameDirection / values.length;
-
-  // Persistence prevents a single L2 wall from dominating.
-  const signed =
-    avg * (0.50 + persistence * 0.50);
-
-  return {
-    available: true,
-    samples: values.length,
-    average_signed: round(avg),
-    persistence_ratio: round(persistence, 4),
-    current_signed: round(currentSigned),
-    signed_score: round(clampSigned(signed)),
-    direction: sideLabel(signed, 10),
-  };
-}
-
-async function buildHistoryContext(
-  env: Env | undefined,
-  coin: string,
-  current: {
-    ts: number;
-    price: number;
-    oi: number | null;
-    orderFlowSigned: number;
-  }
-) {
-  if (!env?.DB) {
-    return {
-      storage: "D1_NOT_BOUND",
-      snapshots: 0,
-      order_flow_persistence: {
-        available: false,
-        signed_score: round(current.orderFlowSigned),
-      },
-      oi_change: {
-        available: false,
-        signed_score: 0,
-        status: "WAITING_FOR_D1_BINDING",
-      },
-    };
-  }
-
-  const rows = await getRecentSnapshots(
-    env,
-    coin,
-    20,
-    120
-  );
-
-  const flow = buildOrderFlowPersistence(
-    rows,
-    current.orderFlowSigned
-  );
-
-  const w1 = buildOiChangeWindow(
-    { ts: current.ts, price: current.price, oi: current.oi },
-    rows,
-    1
-  );
-  const w5 = buildOiChangeWindow(
-    { ts: current.ts, price: current.price, oi: current.oi },
-    rows,
-    5
-  );
-  const w15 = buildOiChangeWindow(
-    { ts: current.ts, price: current.price, oi: current.oi },
-    rows,
-    15
-  );
-
-  const available = [w1, w5, w15].filter(
-    (x: any) => x.available
-  );
-
-  let oiSigned = 0;
-
-  if (available.length) {
-    const weighted = [
-      { value: w1, weight: 0.25 },
-      { value: w5, weight: 0.45 },
-      { value: w15, weight: 0.30 },
-    ].filter((x: any) => x.value.available);
-
-    const weightSum = weighted.reduce(
-      (sum: number, x: any) => sum + x.weight,
+  const changes =
+    Number(
+      update?.meta?.changes ||
       0
     );
 
-    oiSigned =
-      weighted.reduce(
-        (sum: number, x: any) =>
-          sum +
-          Number(x.value.signed_score ?? 0) *
-            x.weight,
-        0
-      ) / weightSum;
+  if (changes < 1) {
+    return false;
   }
 
-  return {
-    storage: "D1",
-    snapshots: rows.length,
-    order_flow_persistence: flow,
-    oi_change: {
-      available: available.length > 0,
-      signed_score: round(clampSigned(oiSigned)),
-      windows: {
-        "1m": w1,
-        "5m": w5,
-        "15m": w15,
-      },
-      status:
-        available.length > 0
-          ? "ACTIVE"
-          : "COLLECTING_HISTORY",
-    },
-  };
-}
+  trackingMap?.delete?.(id);
 
-
-
-// ============================================================
-// V1.5 PAPER TRADING ENGINE
-// SIMULATION ONLY — NO ORDERS / NO WALLET / NO REAL MONEY
-// ============================================================
-
-const PAPER_ENTRY_SCORE = 65;
-const PAPER_OBSERVATION_MIN_SCORE = 50;
-const PAPER_MIN_SCORE_GAP = 20;
-const PAPER_TP_PCT = 0.35;
-const PAPER_SL_PCT = 0.25;
-const PAPER_MAX_HOLD_MINUTES = 30;
-const PAPER_FEE_RATE_PER_SIDE = 0.00035;
-const PAPER_NOTIONAL_USD = 100;
-
-async function ensurePaperTables(env: Env): Promise<void> {
-  if (!env.DB) return;
-
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS paper_trades (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      coin TEXT NOT NULL,
-      side TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'OPEN',
-      entry_ts INTEGER NOT NULL,
-      entry_datetime TEXT NOT NULL,
-      entry_price REAL NOT NULL,
-      entry_score REAL NOT NULL,
-      entry_market_status TEXT,
-      chart_signed REAL,
-      order_flow_raw_signed REAL,
-      order_flow_persistent_signed REAL,
-      oi_change_signed REAL,
-      funding_premium_signed REAL,
-      history_mode TEXT,
-      news_signed REAL,
-      final_signed REAL,
-      tp_price REAL NOT NULL,
-      sl_price REAL NOT NULL,
-      max_hold_minutes INTEGER NOT NULL,
-      exit_ts INTEGER,
-      exit_datetime TEXT,
-      exit_price REAL,
-      exit_reason TEXT,
-      gross_return_pct REAL,
-      fee_pct REAL,
-      net_return_pct REAL,
-      pnl_usd REAL,
-      mfe_pct REAL NOT NULL DEFAULT 0,
-      mae_pct REAL NOT NULL DEFAULT 0,
-      max_price REAL,
-      min_price REAL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_paper_trades_status_coin
-    ON paper_trades (status, coin, entry_ts DESC)
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_paper_trades_entry_ts
-    ON paper_trades (entry_ts DESC)
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS paper_signal_observations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      coin TEXT NOT NULL,
-      ts INTEGER NOT NULL,
-      datetime TEXT NOT NULL,
-      price REAL NOT NULL,
-      side TEXT NOT NULL,
-      score REAL NOT NULL,
-      score_bucket TEXT NOT NULL,
-      qualifies_entry INTEGER NOT NULL DEFAULT 0,
-      market_signed REAL,
-      news_signed REAL,
-      final_signed REAL,
-      chart_signed REAL,
-      order_flow_persistent_signed REAL,
-      oi_change_signed REAL,
-      funding_premium_signed REAL,
-      history_mode TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(coin, ts)
-    )
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_paper_obs_coin_ts
-    ON paper_signal_observations (coin, ts DESC)
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_paper_obs_bucket
-    ON paper_signal_observations (score_bucket, side, ts DESC)
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS signal_episodes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      coin TEXT NOT NULL,
-      side TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'ACTIVE',
-      start_ts INTEGER NOT NULL,
-      start_datetime TEXT NOT NULL,
-      start_price REAL NOT NULL,
-      start_score REAL NOT NULL,
-      start_bucket TEXT NOT NULL,
-      peak_score REAL NOT NULL,
-      peak_ts INTEGER NOT NULL,
-      peak_price REAL NOT NULL,
-      qualifies_entry INTEGER NOT NULL DEFAULT 0,
-      market_signed REAL,
-      news_signed REAL,
-      final_signed REAL,
-      chart_signed REAL,
-      order_flow_persistent_signed REAL,
-      oi_change_signed REAL,
-      funding_premium_signed REAL,
-      history_mode TEXT,
-      end_ts INTEGER,
-      end_datetime TEXT,
-      end_price REAL,
-      end_reason TEXT,
-      signal_lifetime_minutes REAL,
-      lifetime_return_pct REAL,
-      lifetime_mfe_pct REAL,
-      lifetime_mae_pct REAL,
-      lifetime_tp_hit INTEGER NOT NULL DEFAULT 0,
-      lifetime_sl_hit INTEGER NOT NULL DEFAULT 0,
-      lifetime_first_barrier TEXT,
-      lifetime_first_barrier_ts INTEGER,
-      return_1m_pct REAL,
-      return_5m_pct REAL,
-      return_15m_pct REAL,
-      return_30m_pct REAL,
-      mfe_pct REAL,
-      mae_pct REAL,
-      tp_hit INTEGER NOT NULL DEFAULT 0,
-      sl_hit INTEGER NOT NULL DEFAULT 0,
-      first_barrier TEXT,
-      first_barrier_ts INTEGER,
-      outcome_complete INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_signal_episodes_coin_status
-    ON signal_episodes (coin, status, start_ts DESC)
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_signal_episodes_start
-    ON signal_episodes (start_ts DESC)
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS signal_65_crossings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      episode_id INTEGER NOT NULL UNIQUE,
-      coin TEXT NOT NULL,
-      side TEXT NOT NULL,
-      crossing_ts INTEGER NOT NULL,
-      crossing_datetime TEXT NOT NULL,
-      crossing_price REAL NOT NULL,
-      crossing_score REAL NOT NULL,
-      market_signed REAL, news_signed REAL, final_signed REAL,
-      chart_signed REAL, order_flow_persistent_signed REAL,
-      oi_change_signed REAL, funding_premium_signed REAL, history_mode TEXT,
-      return_1m_pct REAL, return_5m_pct REAL, return_15m_pct REAL, return_30m_pct REAL,
-      mfe_pct REAL, mae_pct REAL,
-      tp_hit INTEGER NOT NULL DEFAULT 0, sl_hit INTEGER NOT NULL DEFAULT 0,
-      first_barrier TEXT, first_barrier_ts INTEGER,
-      outcome_complete INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_cross65_coin_ts
-    ON signal_65_crossings (coin, crossing_ts DESC)
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS signal_60_64_crossings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      episode_id INTEGER NOT NULL UNIQUE,
-      coin TEXT NOT NULL,
-      side TEXT NOT NULL,
-      crossing_ts INTEGER NOT NULL,
-      crossing_datetime TEXT NOT NULL,
-      crossing_price REAL NOT NULL,
-      crossing_score REAL NOT NULL,
-      return_1m_pct REAL, return_5m_pct REAL, return_15m_pct REAL, return_30m_pct REAL,
-      mfe_pct REAL, mae_pct REAL,
-      outcome_complete INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
-
-  await env.DB.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_cross60_64_coin_ts
-    ON signal_60_64_crossings (coin, crossing_ts DESC)
-  `).run();
-}
-
-function scoreBucket(score: number): string {
-  if (score >= 80) return "80+";
-  if (score >= 75) return "75-79";
-  if (score >= 70) return "70-74";
-  if (score >= 65) return "65-69";
-  if (score >= 60) return "60-64";
-  if (score >= 55) return "55-59";
-  if (score >= 50) return "50-54";
-  return "<50";
-}
-
-async function recordPaperObservation(
-  env: Env,
-  signal: any,
-  finalSignal: any
-): Promise<any> {
-  await ensurePaperTables(env);
-
-  const finalSigned = Number(
-    finalSignal?.final?.signed_score ??
-    signal.market?.signed_score ??
-    0
-  );
-  const score = Math.abs(finalSigned);
-
-  if (score < PAPER_OBSERVATION_MIN_SCORE) {
-    return {
-      recorded: false,
-      reason: "BELOW_OBSERVATION_THRESHOLD",
-      score: round(score),
-    };
-  }
-
-  const side = finalSigned >= 0 ? "LONG" : "SHORT";
-  const ts = Date.now();
-
-  await env.DB.prepare(`
-    INSERT OR IGNORE INTO paper_signal_observations (
-      coin, ts, datetime, price,
-      side, score, score_bucket, qualifies_entry,
-      market_signed, news_signed, final_signed,
-      chart_signed, order_flow_persistent_signed,
-      oi_change_signed, funding_premium_signed,
-      history_mode
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    signal.coin,
-    ts,
-    new Date(ts).toISOString(),
-    Number(signal.price),
-    side,
-    score,
-    scoreBucket(score),
-    score >= PAPER_ENTRY_SCORE ? 1 : 0,
-    signal.market?.signed_score ?? null,
-    finalSignal?.news_x?.signed_score ?? null,
-    finalSigned,
-    signal.market?.components?.chart_signed ?? null,
-    signal.market?.components?.order_flow_persistent_signed ?? null,
-    signal.market?.components?.oi_change_signed ?? null,
-    signal.market?.components?.funding_premium_signed ?? null,
-    signal.market?.weights?.mode ?? null
-  ).run();
-
-  return {
-    recorded: true,
-    side,
-    score: round(score),
-    score_bucket: scoreBucket(score),
-    qualifies_entry: score >= PAPER_ENTRY_SCORE,
-  };
-}
-
-function directionalReturnPct(
-  side: string,
-  entry: number,
-  current: number
-): number {
-  if (!entry) return 0;
-  const raw = ((current - entry) / entry) * 100;
-  return side === "SHORT" ? -raw : raw;
-}
-
-async function nearestSnapshotPrice(
-  env: Env,
-  coin: string,
-  targetTs: number,
-  toleranceMs = 90000
-): Promise<{ ts: number; price: number } | null> {
-  const row: any = await env.DB!.prepare(`
-    SELECT ts, price
-    FROM market_snapshots
-    WHERE coin = ?
-      AND ts BETWEEN ? AND ?
-    ORDER BY ABS(ts - ?) ASC
-    LIMIT 1
-  `).bind(
-    coin,
-    targetTs - toleranceMs,
-    targetTs + toleranceMs,
-    targetTs
-  ).first();
-
-  if (!row) return null;
-  return {
-    ts: Number(row.ts),
-    price: Number(row.price),
-  };
-}
-
-async function computeSignalLifetimeOutcome(
-  env: Env,
-  episode: any
-): Promise<any | null> {
-  if (!env.DB || !episode?.end_ts || episode?.end_price == null) {
-    return null;
-  }
-
-  const startTs = Number(episode.start_ts);
-  const endTs = Number(episode.end_ts);
-  const entry = Number(episode.start_price);
-  const endPrice = Number(episode.end_price);
-  const side = String(episode.side);
-
-  if (!Number.isFinite(startTs) || !Number.isFinite(endTs) ||
-      !Number.isFinite(entry) || !Number.isFinite(endPrice) || entry <= 0) {
-    return null;
-  }
-
-  const rows: any = await env.DB.prepare(`
-    SELECT ts, price
-    FROM market_snapshots
-    WHERE coin = ?
-      AND ts >= ?
-      AND ts <= ?
-    ORDER BY ts ASC
-  `).bind(
-    episode.coin,
-    startTs,
-    endTs
-  ).all();
-
-  // Include the exact episode end price even if the cron snapshot timestamp
-  // differs by a few milliseconds from end_ts.
-  const points = (rows?.results ?? []).map((r: any) => ({
-    ts: Number(r.ts),
-    price: Number(r.price),
-  })).filter((r: any) => Number.isFinite(r.price));
-
-  points.push({ ts: endTs, price: endPrice });
-  points.sort((a: any, b: any) => a.ts - b.ts);
-
-  let minP = entry;
-  let maxP = entry;
-  let tpHit = 0;
-  let slHit = 0;
-  let firstBarrier: string | null = null;
-  let firstBarrierTs: number | null = null;
-  const levels = paperLevels(side, entry);
-
-  for (const point of points) {
-    const p = point.price;
-    minP = Math.min(minP, p);
-    maxP = Math.max(maxP, p);
-
-    const tp = side === "SHORT" ? p <= levels.tp : p >= levels.tp;
-    const sl = side === "SHORT" ? p >= levels.sl : p <= levels.sl;
-
-    if (tp) tpHit = 1;
-    if (sl) slHit = 1;
-    if (!firstBarrier && (tp || sl)) {
-      firstBarrier = tp ? "TP" : "SL";
-      firstBarrierTs = point.ts;
-    }
-  }
-
-  const mfe = side === "SHORT"
-    ? directionalReturnPct(side, entry, minP)
-    : directionalReturnPct(side, entry, maxP);
-  const mae = side === "SHORT"
-    ? directionalReturnPct(side, entry, maxP)
-    : directionalReturnPct(side, entry, minP);
-
-  return {
-    signal_lifetime_minutes: round((endTs - startTs) / 60000),
-    lifetime_return_pct: round(directionalReturnPct(side, entry, endPrice)),
-    lifetime_mfe_pct: round(mfe),
-    lifetime_mae_pct: round(mae),
-    lifetime_tp_hit: tpHit,
-    lifetime_sl_hit: slHit,
-    lifetime_first_barrier: firstBarrier,
-    lifetime_first_barrier_ts: firstBarrierTs,
-  };
-}
-
-async function updateEpisodeOutcomes(
-  env: Env,
-  coin: string
-): Promise<void> {
-  if (!env.DB) return;
-
-  const now = Date.now();
-  const activeOrRecent: any = await env.DB.prepare(`
-    SELECT *
-    FROM signal_episodes
-    WHERE coin = ?
-      AND (
-        outcome_complete = 0
-        OR (status = 'CLOSED' AND lifetime_return_pct IS NULL)
-      )
-      AND start_ts <= ?
-    ORDER BY start_ts ASC
-    LIMIT 100
-  `).bind(coin, now).all();
-
-  for (const ep of activeOrRecent?.results ?? []) {
-    const startTs = Number(ep.start_ts);
-    const entry = Number(ep.start_price);
-    const side = String(ep.side);
-
-    // V1.6.1: once the episode is CLOSED, separately measure what
-    // happened only while the signal itself remained alive.
-    let lifetime: any = null;
-    if (String(ep.status) === "CLOSED" && ep.lifetime_return_pct == null) {
-      lifetime = await computeSignalLifetimeOutcome(env, ep);
-    }
-
-    const values: Record<string, number | null> = {
-      return_1m_pct: ep.return_1m_pct ?? null,
-      return_5m_pct: ep.return_5m_pct ?? null,
-      return_15m_pct: ep.return_15m_pct ?? null,
-      return_30m_pct: ep.return_30m_pct ?? null,
-    };
-
-    for (const [minutes, field] of [
-      [1, "return_1m_pct"],
-      [5, "return_5m_pct"],
-      [15, "return_15m_pct"],
-      [30, "return_30m_pct"],
-    ] as const) {
-      if (values[field] !== null) continue;
-      const target = startTs + minutes * 60000;
-      if (now < target) continue;
-
-      const snap = await nearestSnapshotPrice(
-        env,
-        coin,
-        target
-      );
-      if (snap) {
-        values[field] = round(
-          directionalReturnPct(
-            side,
-            entry,
-            snap.price
-          )
-        );
-      }
-    }
-
-    const range: any = await env.DB.prepare(`
-      SELECT
-        MIN(price) AS min_price,
-        MAX(price) AS max_price
-      FROM market_snapshots
-      WHERE coin = ?
-        AND ts >= ?
-        AND ts <= ?
-    `).bind(
-      coin,
-      startTs,
-      Math.min(now, startTs + 30 * 60000)
-    ).first();
-
-    let mfe: number | null = null;
-    let mae: number | null = null;
-
-    if (
-      range &&
-      range.min_price !== null &&
-      range.max_price !== null
-    ) {
-      const minP = Number(range.min_price);
-      const maxP = Number(range.max_price);
-
-      if (side === "SHORT") {
-        mfe = round(
-          directionalReturnPct(side, entry, minP)
-        );
-        mae = round(
-          directionalReturnPct(side, entry, maxP)
-        );
-      } else {
-        mfe = round(
-          directionalReturnPct(side, entry, maxP)
-        );
-        mae = round(
-          directionalReturnPct(side, entry, minP)
-        );
-      }
-    }
-
-    const barrierRows: any = await env.DB.prepare(`
-      SELECT ts, price
-      FROM market_snapshots
-      WHERE coin = ?
-        AND ts >= ?
-        AND ts <= ?
-      ORDER BY ts ASC
-    `).bind(
-      coin,
-      startTs,
-      Math.min(now, startTs + 30 * 60000)
-    ).all();
-
-    let tpHit = 0;
-    let slHit = 0;
-    let firstBarrier: string | null =
-      ep.first_barrier ?? null;
-    let firstBarrierTs: number | null =
-      ep.first_barrier_ts ?? null;
-
-    const levels = paperLevels(side, entry);
-
-    for (const row of barrierRows?.results ?? []) {
-      const p = Number(row.price);
-      const ts = Number(row.ts);
-
-      const tp =
-        side === "SHORT"
-          ? p <= levels.tp
-          : p >= levels.tp;
-      const sl =
-        side === "SHORT"
-          ? p >= levels.sl
-          : p <= levels.sl;
-
-      if (tp) tpHit = 1;
-      if (sl) slHit = 1;
-
-      if (!firstBarrier && (tp || sl)) {
-        firstBarrier = tp ? "TP" : "SL";
-        firstBarrierTs = ts;
-      }
-    }
-
-    const complete =
-      now >= startTs + 30 * 60000 &&
-      values.return_30m_pct !== null;
-
-    await env.DB.prepare(`
-      UPDATE signal_episodes
-      SET
-        signal_lifetime_minutes = COALESCE(?, signal_lifetime_minutes),
-        lifetime_return_pct = COALESCE(?, lifetime_return_pct),
-        lifetime_mfe_pct = COALESCE(?, lifetime_mfe_pct),
-        lifetime_mae_pct = COALESCE(?, lifetime_mae_pct),
-        lifetime_tp_hit = CASE WHEN ? IS NULL THEN lifetime_tp_hit ELSE ? END,
-        lifetime_sl_hit = CASE WHEN ? IS NULL THEN lifetime_sl_hit ELSE ? END,
-        lifetime_first_barrier = COALESCE(?, lifetime_first_barrier),
-        lifetime_first_barrier_ts = COALESCE(?, lifetime_first_barrier_ts),
-        return_1m_pct = ?,
-        return_5m_pct = ?,
-        return_15m_pct = ?,
-        return_30m_pct = ?,
-        mfe_pct = ?,
-        mae_pct = ?,
-        tp_hit = ?,
-        sl_hit = ?,
-        first_barrier = ?,
-        first_barrier_ts = ?,
-        outcome_complete = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(
-      lifetime?.signal_lifetime_minutes ?? null,
-      lifetime?.lifetime_return_pct ?? null,
-      lifetime?.lifetime_mfe_pct ?? null,
-      lifetime?.lifetime_mae_pct ?? null,
-      lifetime ? lifetime.lifetime_tp_hit : null,
-      lifetime?.lifetime_tp_hit ?? 0,
-      lifetime ? lifetime.lifetime_sl_hit : null,
-      lifetime?.lifetime_sl_hit ?? 0,
-      lifetime?.lifetime_first_barrier ?? null,
-      lifetime?.lifetime_first_barrier_ts ?? null,
-      values.return_1m_pct,
-      values.return_5m_pct,
-      values.return_15m_pct,
-      values.return_30m_pct,
-      mfe,
-      mae,
-      tpHit,
-      slHit,
-      firstBarrier,
-      firstBarrierTs,
-      complete ? 1 : 0,
-      ep.id
-    ).run();
-  }
-}
-
-async function processSignalEpisode(
-  env: Env,
-  signal: any,
-  finalSignal: any
-): Promise<any> {
-  await ensurePaperTables(env);
-
-  const now = Date.now();
-  const price = Number(signal.price);
-  const finalSigned = Number(
-    finalSignal?.final?.signed_score ??
-    signal.market?.signed_score ??
-    0
-  );
-  const score = Math.abs(finalSigned);
-  const side = finalSigned >= 0 ? "LONG" : "SHORT";
-
-  const active: any = await env.DB!.prepare(`
-    SELECT *
-    FROM signal_episodes
-    WHERE coin = ? AND status = 'ACTIVE'
-    ORDER BY start_ts DESC
-    LIMIT 1
-  `).bind(signal.coin).first();
-
-  // An episode ends when strength drops below 50,
-  // direction flips, or 30 minutes have elapsed.
-  if (active) {
-    const ageMin =
-      (now - Number(active.start_ts)) / 60000;
-
-    let endReason: string | null = null;
-    if (score < PAPER_OBSERVATION_MIN_SCORE) {
-      endReason = "SCORE_BELOW_50";
-    } else if (String(active.side) !== side) {
-      endReason = "DIRECTION_FLIP";
-    } else if (ageMin >= 30) {
-      endReason = "MAX_30M";
-    }
-
-    if (endReason) {
-      // V1.6.7 HARD CAP FIX:
-      // If an episode is discovered after its 30-minute deadline, close it
-      // at the stored market snapshot nearest start_ts + 30m instead of
-      // incorrectly using the much later current price/time.
-      let closeTs = now;
-      let closePrice = price;
-
-      if (ageMin >= 30) {
-        endReason = "MAX_30M";
-        const targetTs = Number(active.start_ts) + 30 * 60000;
-        const capSnapshot: any = await env.DB!.prepare(`
-          SELECT ts, price
-          FROM market_snapshots
-          WHERE coin = ?
-          ORDER BY ABS(ts - ?) ASC
-          LIMIT 1
-        `).bind(signal.coin, targetTs).first();
-
-        if (capSnapshot && Number.isFinite(Number(capSnapshot.ts)) && Number.isFinite(Number(capSnapshot.price))) {
-          closeTs = Number(capSnapshot.ts);
-          closePrice = Number(capSnapshot.price);
-        } else {
-          // Never record a lifetime beyond 30m even if historical snapshots
-          // are unavailable. Price falls back to current, timestamp stays capped.
-          closeTs = targetTs;
-        }
-      }
-
-      await env.DB!.prepare(`
-        UPDATE signal_episodes
-        SET
-          status = 'CLOSED',
-          end_ts = ?,
-          end_datetime = ?,
-          end_price = ?,
-          end_reason = ?,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(
-        closeTs,
-        new Date(closeTs).toISOString(),
-        closePrice,
-        endReason,
-        active.id
-      ).run();
-    } else {
-      // Same continuous signal: do not create another episode.
-      if (score > Number(active.peak_score)) {
-        await env.DB!.prepare(`
-          UPDATE signal_episodes
-          SET
-            peak_score = ?,
-            peak_ts = ?,
-            peak_price = ?,
-            qualifies_entry =
-              CASE WHEN ? >= ? THEN 1
-                   ELSE qualifies_entry END,
-            updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).bind(
-          score,
-          now,
-          price,
-          score,
-          PAPER_ENTRY_SCORE,
-          active.id
-        ).run();
-      }
-
-      return {
-        action: "EPISODE_CONTINUES",
-        episode_id: active.id,
-        side,
-        current_score: round(score),
-        peak_score: round(
-          Math.max(score, Number(active.peak_score))
-        ),
-      };
-    }
-  }
-
-  if (score < PAPER_OBSERVATION_MIN_SCORE) {
-    return {
-      action: "NO_EPISODE",
-      reason: "BELOW_50",
-      score: round(score),
-    };
-  }
-
-  const insert: any = await env.DB!.prepare(`
-    INSERT INTO signal_episodes (
-      coin, side, status,
-      start_ts, start_datetime,
-      start_price, start_score, start_bucket,
-      peak_score, peak_ts, peak_price,
-      qualifies_entry,
-      market_signed, news_signed, final_signed,
-      chart_signed, order_flow_persistent_signed,
-      oi_change_signed, funding_premium_signed,
-      history_mode
-    ) VALUES (
-      ?, ?, 'ACTIVE',
-      ?, ?, ?, ?, ?,
-      ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?
-    )
-  `).bind(
-    signal.coin,
-    side,
-    now,
-    new Date(now).toISOString(),
-    price,
-    score,
-    scoreBucket(score),
-    score,
-    now,
-    price,
-    score >= PAPER_ENTRY_SCORE ? 1 : 0,
-    signal.market?.signed_score ?? null,
-    finalSignal?.news_x?.signed_score ?? null,
-    finalSigned,
-    signal.market?.components?.chart_signed ?? null,
-    signal.market?.components
-      ?.order_flow_persistent_signed ?? null,
-    signal.market?.components?.oi_change_signed ?? null,
-    signal.market?.components?.funding_premium_signed ?? null,
-    signal.market?.weights?.mode ?? null
-  ).run();
-
-  return {
-    action: "EPISODE_OPENED",
-    episode_id:
-      insert?.meta?.last_row_id ?? null,
-    side,
-    start_score: round(score),
-    start_bucket: scoreBucket(score),
-    qualifies_entry: score >= PAPER_ENTRY_SCORE,
-  };
-}
-
-// ============================================================
-// V1.8.5 — 60-64 CONTROL CROSSINGS
-// Separate research cohort. Does NOT qualify for paper entry.
-// ============================================================
-async function record6064Crossing(env: Env, signal: any, finalSignal: any): Promise<any> {
-  if (!env.DB) return {recorded:false,reason:"D1_NOT_BOUND"};
-  const signed=Number(finalSignal?.final?.signed_score??signal.market?.signed_score??0);
-  const score=Math.abs(signed);
-  if(score<60||score>=65) return {recorded:false,reason:"OUTSIDE_60_64",score:round(score)};
-  const side=signed>=0?"LONG":"SHORT";
-  const ep:any=await env.DB.prepare(`SELECT * FROM signal_episodes WHERE coin=? AND status='ACTIVE' AND side=? ORDER BY start_ts DESC LIMIT 1`).bind(signal.coin,side).first();
-  if(!ep) return {recorded:false,reason:"NO_ACTIVE_EPISODE"};
-  const old:any=await env.DB.prepare(`SELECT id FROM signal_60_64_crossings WHERE episode_id=? LIMIT 1`).bind(ep.id).first();
-  if(old) return {recorded:false,reason:"ALREADY_RECORDED",crossing_id:old.id};
-  const now=Date.now(),price=Number(signal.price);
-  const r:any=await env.DB.prepare(`INSERT OR IGNORE INTO signal_60_64_crossings
-    (episode_id,coin,side,crossing_ts,crossing_datetime,crossing_price,crossing_score)
-    VALUES (?,?,?,?,?,?,?)`).bind(ep.id,signal.coin,side,now,new Date(now).toISOString(),price,score).run();
-  return {recorded:true,crossing_id:r?.meta?.last_row_id??null,episode_id:ep.id,coin:signal.coin,side,crossing_score:round(score),crossing_price:price};
-}
-
-async function update6064CrossingOutcomes(env: Env, coin: string): Promise<void> {
-  if(!env.DB)return;
-  const now=Date.now();
-  const q:any=await env.DB.prepare(`SELECT * FROM signal_60_64_crossings WHERE coin=? AND outcome_complete=0 ORDER BY crossing_ts ASC LIMIT 100`).bind(coin).all();
-  for(const row of q?.results??[]){
-    const start=Number(row.crossing_ts),entry=Number(row.crossing_price),side=String(row.side);
-    const v:any={return_1m_pct:row.return_1m_pct??null,return_5m_pct:row.return_5m_pct??null,return_15m_pct:row.return_15m_pct??null,return_30m_pct:row.return_30m_pct??null};
-    for(const [m,f] of [[1,"return_1m_pct"],[5,"return_5m_pct"],[15,"return_15m_pct"],[30,"return_30m_pct"]] as const){
-      if(v[f]!==null||now<start+m*60000)continue;
-      const snap=await nearestSnapshotPrice(env,coin,start+m*60000);
-      if(snap)v[f]=round(directionalReturnPct(side,entry,snap.price));
-    }
-    const pts:any=await env.DB.prepare(`SELECT price FROM market_snapshots WHERE coin=? AND ts>=? AND ts<=? ORDER BY ts ASC`).bind(coin,start,Math.min(now,start+30*60000)).all();
-    let minP=entry,maxP=entry;
-    for(const x of pts?.results??[]){const px=Number(x.price);if(Number.isFinite(px)){minP=Math.min(minP,px);maxP=Math.max(maxP,px)}}
-    const mfe=side==="SHORT"?directionalReturnPct(side,entry,minP):directionalReturnPct(side,entry,maxP);
-    const mae=side==="SHORT"?directionalReturnPct(side,entry,maxP):directionalReturnPct(side,entry,minP);
-    await env.DB.prepare(`UPDATE signal_60_64_crossings SET return_1m_pct=?,return_5m_pct=?,return_15m_pct=?,return_30m_pct=?,mfe_pct=?,mae_pct=?,outcome_complete=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-      .bind(v.return_1m_pct,v.return_5m_pct,v.return_15m_pct,v.return_30m_pct,round(mfe),round(mae),v.return_30m_pct!==null?1:0,row.id).run();
-  }
-}
-
-// ============================================================
-// V1.7 — FIRST 65 CROSSING ANALYTICS
-// ============================================================
-async function record65Crossing(env: Env, signal: any, finalSignal: any): Promise<any> {
-  if (!env.DB) return { recorded: false, reason: "D1_NOT_BOUND" };
-  const finalSigned = Number(finalSignal?.final?.signed_score ?? signal.market?.signed_score ?? 0);
-  const score = Math.abs(finalSigned);
-  if (score < PAPER_ENTRY_SCORE) return { recorded: false, reason: "BELOW_65", score: round(score) };
-  const side = finalSigned >= 0 ? "LONG" : "SHORT";
-  const episode: any = await env.DB.prepare(`
-    SELECT * FROM signal_episodes
-    WHERE coin=? AND status='ACTIVE' AND side=?
-    ORDER BY start_ts DESC LIMIT 1
-  `).bind(signal.coin, side).first();
-  if (!episode) return { recorded: false, reason: "NO_ACTIVE_EPISODE" };
-  const existing: any = await env.DB.prepare(`SELECT id FROM signal_65_crossings WHERE episode_id=? LIMIT 1`).bind(episode.id).first();
-  if (existing) return { recorded: false, reason: "ALREADY_RECORDED", crossing_id: existing.id, episode_id: episode.id };
-  const now=Date.now(), price=Number(signal.price);
-  const r:any=await env.DB.prepare(`
-    INSERT OR IGNORE INTO signal_65_crossings (
-      episode_id,coin,side,crossing_ts,crossing_datetime,crossing_price,crossing_score,
-      market_signed,news_signed,final_signed,chart_signed,order_flow_persistent_signed,
-      oi_change_signed,funding_premium_signed,history_mode
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).bind(episode.id,signal.coin,side,now,new Date(now).toISOString(),price,score,
-    signal.market?.signed_score??null,finalSignal?.news_x?.signed_score??null,finalSigned,
-    signal.market?.components?.chart_signed??null,signal.market?.components?.order_flow_persistent_signed??null,
-    signal.market?.components?.oi_change_signed??null,signal.market?.components?.funding_premium_signed??null,
-    signal.market?.weights?.mode??null).run();
-  return { recorded:true, crossing_id:r?.meta?.last_row_id??null, episode_id:episode.id, coin:signal.coin, side, crossing_score:round(score), crossing_price:price };
-}
-
-async function update65CrossingOutcomes(env: Env, coin: string): Promise<void> {
-  if (!env.DB) return;
-  const now=Date.now();
-  const pending:any=await env.DB.prepare(`SELECT * FROM signal_65_crossings WHERE coin=? AND outcome_complete=0 ORDER BY crossing_ts ASC LIMIT 100`).bind(coin).all();
-  for (const row of pending?.results??[]) {
-    const startTs=Number(row.crossing_ts), entry=Number(row.crossing_price), side=String(row.side);
-    const values:any={return_1m_pct:row.return_1m_pct??null,return_5m_pct:row.return_5m_pct??null,return_15m_pct:row.return_15m_pct??null,return_30m_pct:row.return_30m_pct??null};
-    for (const [m,f] of [[1,"return_1m_pct"],[5,"return_5m_pct"],[15,"return_15m_pct"],[30,"return_30m_pct"]] as const) {
-      if(values[f]!==null) continue; const target=startTs+m*60000; if(now<target) continue;
-      const snap=await nearestSnapshotPrice(env,coin,target); if(snap) values[f]=round(directionalReturnPct(side,entry,snap.price));
-    }
-    const points:any=await env.DB.prepare(`SELECT ts,price FROM market_snapshots WHERE coin=? AND ts>=? AND ts<=? ORDER BY ts ASC`).bind(coin,startTs,Math.min(now,startTs+30*60000)).all();
-    let minP=entry,maxP=entry,tpHit=0,slHit=0,firstBarrier:string|null=null,firstBarrierTs:number|null=null;
-    const levels=paperLevels(side,entry);
-    for(const p of points?.results??[]){const px=Number(p.price);if(!Number.isFinite(px))continue;minP=Math.min(minP,px);maxP=Math.max(maxP,px);const tp=side==="SHORT"?px<=levels.tp:px>=levels.tp;const sl=side==="SHORT"?px>=levels.sl:px<=levels.sl;if(tp)tpHit=1;if(sl)slHit=1;if(!firstBarrier&&(tp||sl)){firstBarrier=tp?"TP":"SL";firstBarrierTs=Number(p.ts);}}
-    const mfe=side==="SHORT"?directionalReturnPct(side,entry,minP):directionalReturnPct(side,entry,maxP);
-    const mae=side==="SHORT"?directionalReturnPct(side,entry,maxP):directionalReturnPct(side,entry,minP);
-    await env.DB.prepare(`UPDATE signal_65_crossings SET return_1m_pct=?,return_5m_pct=?,return_15m_pct=?,return_30m_pct=?,mfe_pct=?,mae_pct=?,tp_hit=?,sl_hit=?,first_barrier=?,first_barrier_ts=?,outcome_complete=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(values.return_1m_pct,values.return_5m_pct,values.return_15m_pct,values.return_30m_pct,round(mfe),round(mae),tpHit,slHit,firstBarrier,firstBarrierTs,values.return_30m_pct!==null?1:0,row.id).run();
-  }
-}
-
-function paperReturnPct(
-  side: string,
-  entry: number,
-  current: number
-): number {
-  if (!entry) return 0;
-  const raw = ((current - entry) / entry) * 100;
-  return side === "SHORT" ? -raw : raw;
-}
-
-function paperLevels(side: string, price: number) {
-  if (side === "SHORT") {
-    return {
-      tp: price * (1 - PAPER_TP_PCT / 100),
-      sl: price * (1 + PAPER_SL_PCT / 100),
-    };
-  }
-  return {
-    tp: price * (1 + PAPER_TP_PCT / 100),
-    sl: price * (1 - PAPER_SL_PCT / 100),
-  };
-}
-
-async function getOpenPaperTrade(
-  env: Env,
-  coin: string
-): Promise<any | null> {
-  if (!env.DB) return null;
-  await ensurePaperTables(env);
-
-  const row = await env.DB.prepare(`
-    SELECT *
-    FROM paper_trades
-    WHERE coin = ? AND status = 'OPEN'
-    ORDER BY entry_ts DESC
-    LIMIT 1
-  `).bind(coin).first();
-
-  return row ?? null;
-}
-
-async function openPaperTrade(
-  env: Env,
-  signal: any,
-  finalSignal?: any
-): Promise<any> {
-  await ensurePaperTables(env);
-
-  const existing = await getOpenPaperTrade(env, signal.coin);
-  if (existing) {
-    return {
-      opened: false,
-      reason: "OPEN_TRADE_ALREADY_EXISTS",
-      trade_id: existing.id,
-    };
-  }
-
-  const marketSigned = Number(
-    signal.market?.signed_score ?? 0
-  );
-
-  const finalSigned = Number(
-    finalSignal?.final?.signed_score ??
-    marketSigned
-  );
-
-  const score = Math.abs(finalSigned);
-  const side = finalSigned >= 0 ? "LONG" : "SHORT";
-
-  if (score < PAPER_ENTRY_SCORE) {
-    return {
-      opened: false,
-      reason: "SCORE_BELOW_ENTRY_THRESHOLD",
-      score: round(score),
-      required: PAPER_ENTRY_SCORE,
-    };
-  }
-
-  const finalGap = Math.abs(finalSigned);
-
-  if (finalGap < PAPER_MIN_SCORE_GAP) {
-    return {
-      opened: false,
-      reason: "SCORE_GAP_TOO_SMALL",
-      required_gap: PAPER_MIN_SCORE_GAP,
-    };
-  }
-
-  const price = Number(signal.price ?? 0);
-  if (!Number.isFinite(price) || price <= 0) {
-    return {
-      opened: false,
-      reason: "INVALID_ENTRY_PRICE",
-    };
-  }
-
-  const levels = paperLevels(side, price);
-  const now = Date.now();
-
-  const result = await env.DB.prepare(`
-    INSERT INTO paper_trades (
-      coin, side, status,
-      entry_ts, entry_datetime, entry_price,
-      entry_score, entry_market_status,
-      chart_signed,
-      order_flow_raw_signed,
-      order_flow_persistent_signed,
-      oi_change_signed,
-      funding_premium_signed,
-      history_mode,
-      news_signed,
-      final_signed,
-      tp_price, sl_price,
-      max_hold_minutes,
-      max_price, min_price
-    ) VALUES (
-      ?, ?, 'OPEN',
-      ?, ?, ?,
-      ?, ?,
-      ?, ?, ?, ?, ?, ?,
-      ?, ?,
-      ?, ?, ?,
-      ?, ?
-    )
-  `).bind(
-    signal.coin,
-    side,
-    now,
-    new Date(now).toISOString(),
-    price,
-    score,
-    signal.market?.status ?? null,
-    signal.market?.components?.chart_signed ?? null,
-    signal.market?.components?.order_flow_raw_signed ?? null,
-    signal.market?.components?.order_flow_persistent_signed ?? null,
-    signal.market?.components?.oi_change_signed ?? null,
-    signal.market?.components?.funding_premium_signed ?? null,
-    finalSignal?.final?.mode
-      ? `${signal.market?.weights?.mode ?? "UNKNOWN"}|FINAL:${finalSignal.final.mode}`
-      : signal.market?.weights?.mode ?? null,
-    finalSignal?.news_x?.signed_score ?? null,
-    finalSigned,
-    levels.tp,
-    levels.sl,
-    PAPER_MAX_HOLD_MINUTES,
-    price,
-    price
-  ).run();
-
-  return {
-    opened: true,
-    trade_id:
-      result?.meta?.last_row_id ??
-      result?.meta?.lastRowId ??
-      null,
-    coin: signal.coin,
-    side,
-    entry_price: round(price),
-    score: round(score),
-    tp_price: round(levels.tp),
-    sl_price: round(levels.sl),
-    max_hold_minutes: PAPER_MAX_HOLD_MINUTES,
-  };
-}
-
-async function updatePaperTrade(
-  env: Env,
-  trade: any,
-  currentPrice: number
-): Promise<any> {
-  const now = Date.now();
-  const side = String(trade.side);
-  const entry = Number(trade.entry_price);
-  const currentReturn = paperReturnPct(
-    side,
-    entry,
-    currentPrice
-  );
-
-  const oldMfe = Number(trade.mfe_pct ?? 0);
-  const oldMae = Number(trade.mae_pct ?? 0);
-
-  const mfe = Math.max(oldMfe, currentReturn);
-  const mae = Math.min(oldMae, currentReturn);
-
-  const maxPrice = Math.max(
-    Number(trade.max_price ?? entry),
-    currentPrice
-  );
-  const minPrice = Math.min(
-    Number(trade.min_price ?? entry),
-    currentPrice
-  );
-
-  const ageMinutes =
-    (now - Number(trade.entry_ts)) / 60_000;
-
-  let exitReason: string | null = null;
-
-  if (side === "LONG") {
-    if (currentPrice >= Number(trade.tp_price)) {
-      exitReason = "TAKE_PROFIT";
-    } else if (currentPrice <= Number(trade.sl_price)) {
-      exitReason = "STOP_LOSS";
-    }
-  } else {
-    if (currentPrice <= Number(trade.tp_price)) {
-      exitReason = "TAKE_PROFIT";
-    } else if (currentPrice >= Number(trade.sl_price)) {
-      exitReason = "STOP_LOSS";
-    }
-  }
-
-  if (
-    !exitReason &&
-    ageMinutes >= Number(trade.max_hold_minutes)
-  ) {
-    exitReason = "TIME_EXIT";
-  }
-
-  if (!exitReason) {
-    await env.DB.prepare(`
-      UPDATE paper_trades
-      SET
-        mfe_pct = ?,
-        mae_pct = ?,
-        max_price = ?,
-        min_price = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND status = 'OPEN'
-    `).bind(
-      mfe,
-      mae,
-      maxPrice,
-      minPrice,
-      trade.id
-    ).run();
-
-    return {
-      updated: true,
-      closed: false,
-      trade_id: trade.id,
-      current_return_pct: round(currentReturn, 4),
-      mfe_pct: round(mfe, 4),
-      mae_pct: round(mae, 4),
-      age_minutes: round(ageMinutes, 2),
-    };
-  }
-
-  const gross = currentReturn;
-  const feePct = PAPER_FEE_RATE_PER_SIDE * 2 * 100;
-  const net = gross - feePct;
-  const pnlUsd = PAPER_NOTIONAL_USD * (net / 100);
-
-  await env.DB.prepare(`
-    UPDATE paper_trades
-    SET
-      status = 'CLOSED',
-      exit_ts = ?,
-      exit_datetime = ?,
-      exit_price = ?,
-      exit_reason = ?,
-      gross_return_pct = ?,
-      fee_pct = ?,
-      net_return_pct = ?,
-      pnl_usd = ?,
-      mfe_pct = ?,
-      mae_pct = ?,
-      max_price = ?,
-      min_price = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND status = 'OPEN'
-  `).bind(
-    now,
-    new Date(now).toISOString(),
-    currentPrice,
-    exitReason,
-    gross,
-    feePct,
-    net,
-    pnlUsd,
-    mfe,
-    mae,
-    maxPrice,
-    minPrice,
-    trade.id
-  ).run();
-
-  return {
-    updated: true,
-    closed: true,
-    trade_id: trade.id,
-    exit_reason: exitReason,
-    exit_price: round(currentPrice),
-    gross_return_pct: round(gross, 4),
-    fee_pct: round(feePct, 4),
-    net_return_pct: round(net, 4),
-    pnl_usd: round(pnlUsd, 4),
-    mfe_pct: round(mfe, 4),
-    mae_pct: round(mae, 4),
-  };
-}
-
-async function processPaperCoin(
-  env: Env,
-  signal: any,
-  finalSignal?: any
-): Promise<any> {
-  if (!env.DB) {
-    return {
-      success: false,
-      reason: "D1_NOT_BOUND",
-    };
-  }
-
-  await ensurePaperTables(env);
-
-  const open = await getOpenPaperTrade(env, signal.coin);
-
-  if (open) {
-    return {
-      action: "UPDATE_OPEN",
-      result: await updatePaperTrade(
-        env,
-        open,
-        Number(signal.price)
-      ),
-    };
-  }
-
-  return {
-    action: "CHECK_ENTRY",
-    result: await openPaperTrade(
+  if (!isShadowSignal(existing)) {
+    await sendTelegram(
       env,
-      signal,
-      finalSignal
-    ),
-  };
-}
-
-async function paperSummary(env: Env) {
-  await ensurePaperTables(env);
-
-  const totals = await env.DB.prepare(`
-    SELECT
-      COUNT(*) AS total,
-      SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) AS open,
-      SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
-      SUM(CASE WHEN status = 'CLOSED' AND net_return_pct > 0 THEN 1 ELSE 0 END) AS wins,
-      SUM(CASE WHEN status = 'CLOSED' AND net_return_pct <= 0 THEN 1 ELSE 0 END) AS losses,
-      AVG(CASE WHEN status = 'CLOSED' THEN net_return_pct END) AS avg_net_return_pct,
-      SUM(CASE WHEN status = 'CLOSED' THEN pnl_usd ELSE 0 END) AS pnl_usd,
-      AVG(CASE WHEN status = 'CLOSED' THEN mfe_pct END) AS avg_mfe_pct,
-      AVG(CASE WHEN status = 'CLOSED' THEN mae_pct END) AS avg_mae_pct
-    FROM paper_trades
-  `).first();
-
-  const closed = Number(totals?.closed ?? 0);
-  const wins = Number(totals?.wins ?? 0);
-
-  return {
-    total: Number(totals?.total ?? 0),
-    open: Number(totals?.open ?? 0),
-    closed,
-    wins,
-    losses: Number(totals?.losses ?? 0),
-    win_rate:
-      closed > 0 ? round((wins / closed) * 100, 2) : null,
-    avg_net_return_pct:
-      totals?.avg_net_return_pct == null
-        ? null
-        : round(Number(totals.avg_net_return_pct), 4),
-    pnl_usd: round(Number(totals?.pnl_usd ?? 0), 4),
-    avg_mfe_pct:
-      totals?.avg_mfe_pct == null
-        ? null
-        : round(Number(totals.avg_mfe_pct), 4),
-    avg_mae_pct:
-      totals?.avg_mae_pct == null
-        ? null
-        : round(Number(totals.avg_mae_pct), 4),
-    assumptions: {
-      paper_notional_usd: PAPER_NOTIONAL_USD,
-      entry_score: PAPER_ENTRY_SCORE,
-      min_score_gap: PAPER_MIN_SCORE_GAP,
-      take_profit_pct: PAPER_TP_PCT,
-      stop_loss_pct: PAPER_SL_PCT,
-      max_hold_minutes: PAPER_MAX_HOLD_MINUTES,
-      fee_rate_per_side: PAPER_FEE_RATE_PER_SIDE,
-      fee_pct_round_trip:
-        round(PAPER_FEE_RATE_PER_SIDE * 2 * 100, 4),
-    },
-  };
-}
-
-
-// ============================================================
-// MARKET SIGNAL
-// ============================================================
-
-function chartSigned(chart: any): number {
-  return clampSigned(
-    Number(chart?.long_score ?? 0) -
-      Number(chart?.short_score ?? 0)
-  );
-}
-
-function buildMarketScore(
-  chart: any,
-  book: any,
-  derivatives: any,
-  history?: any
-) {
-  const c = chartSigned(chart);
-
-  const rawOf = clampSigned(
-    Number(book?.order_flow?.signed_score ?? 0)
-  );
-
-  const persistentOf =
-    history?.order_flow_persistence?.available
-      ? clampSigned(
-          Number(
-            history.order_flow_persistence.signed_score ?? rawOf
-          )
-        )
-      : rawOf;
-
-  const oiAvailable =
-    history?.oi_change?.available === true;
-
-  const oi = oiAvailable
-    ? clampSigned(
-        Number(history?.oi_change?.signed_score ?? 0)
-      )
-    : 0;
-
-  const fundingContext = clampSigned(
-    Number(derivatives?.contextual_signed_score ?? 0)
-  );
-
-  // Until enough OI history exists, preserve V1.3 weights.
-  // Once ΔOI becomes available, switch automatically to:
-  // Chart 55 / persistent Order Flow 25 / ΔOI 15 / Funding 5.
-  // V1.4.1: Do not give ΔOI the full 15% weight as soon as
-  // only the 1m window becomes available.
-  //
-  // History maturity:
-  //   no OI windows      -> OI 0%
-  //   1m only            -> OI 5%
-  //   1m + 5m            -> OI 10%
-  //   1m + 5m + 15m      -> OI 15%
-  //
-  // The unused OI weight stays with Chart / persistent L2.
-  const oiWindows = history?.oi_change?.windows ?? {};
-
-  const oi1m =
-    oiWindows?.["1m"]?.available === true;
-  const oi5m =
-    oiWindows?.["5m"]?.available === true;
-  const oi15m =
-    oiWindows?.["15m"]?.available === true;
-
-  let oiMaturity = 0;
-
-  if (oi1m) oiMaturity = 1;
-  if (oi1m && oi5m) oiMaturity = 2;
-  if (oi1m && oi5m && oi15m) oiMaturity = 3;
-
-  const weights =
-    oiMaturity === 3
-      ? {
-          chart: 0.55,
-          order_flow: 0.25,
-          oi_change: 0.15,
-          funding_premium: 0.05,
-        }
-      : oiMaturity === 2
-      ? {
-          chart: 0.58,
-          order_flow: 0.27,
-          oi_change: 0.10,
-          funding_premium: 0.05,
-        }
-      : oiMaturity === 1
-      ? {
-          chart: 0.61,
-          order_flow: 0.29,
-          oi_change: 0.05,
-          funding_premium: 0.05,
-        }
-      : {
-          chart: 0.65,
-          order_flow: 0.30,
-          oi_change: 0,
-          funding_premium: 0.05,
-        };
-
-  const signed =
-    c * weights.chart +
-    persistentOf * weights.order_flow +
-    oi * weights.oi_change +
-    fundingContext * weights.funding_premium;
-
-  const signedClamped = clampSigned(signed);
-
-  const longScore =
-    signedClamped > 0 ? clamp(signedClamped) : 0;
-
-  const shortScore =
-    signedClamped < 0
-      ? clamp(Math.abs(signedClamped))
-      : 0;
-
-  const strength = Math.max(longScore, shortScore);
-  const difference = longScore - shortScore;
-
-  let status = "NO_TRADE";
-
-  if (strength >= 80 && Math.abs(difference) >= 25) {
-    status = "STRONG";
-  } else if (strength >= 65 && Math.abs(difference) >= 20) {
-    status = "WATCH";
-  } else if (strength >= 50) {
-    status = "WEAK";
-  }
-
-  return {
-    weights: {
-      ...weights,
-      mode:
-        oiMaturity === 3
-          ? "HISTORY_FULL"
-          : oiMaturity === 2
-          ? "HISTORY_1M_5M"
-          : oiMaturity === 1
-          ? "HISTORY_1M"
-          : "HISTORY_COLLECTING",
-      oi_maturity: {
-        level: oiMaturity,
-        available_windows: {
-          "1m": oi1m,
-          "5m": oi5m,
-          "15m": oi15m,
-        },
-      },
-    },
-
-    components: {
-      chart_signed: round(c),
-      order_flow_raw_signed: round(rawOf),
-      order_flow_persistent_signed: round(persistentOf),
-      oi_change_signed: round(oi),
-      funding_premium_signed: round(fundingContext),
-    },
-
-    signed_score: round(signedClamped),
-    long_score: round(longScore),
-    short_score: round(shortScore),
-    difference: round(difference),
-    bias: sideLabel(signedClamped, 10),
-    status,
-    meaning:
-      "Market alignment/strength score, not probability of profit",
-  };
-}
-
-async function buildSignal(coin: string, env?: Env) {
-  const started = Date.now();
-
-  const [chart, book, asset] = await Promise.all([
-    buildChart(coin),
-    getBook(coin),
-    getAssetContext(coin),
-  ]);
-
-  const derivatives = buildDerivatives(asset.context);
-
-  const currentTs = Date.now();
-
-  const history = await buildHistoryContext(
-    env,
-    coin,
-    {
-      ts: currentTs,
-      price: Number(chart.price ?? 0),
-      oi:
-        derivatives?.open_interest === null ||
-        derivatives?.open_interest === undefined
-          ? null
-          : Number(derivatives.open_interest),
-      orderFlowSigned: Number(
-        book?.order_flow?.signed_score ?? 0
+      formatNoGoalMessage(
+        existing,
+        m,
+        source
       ),
-    }
-  );
+      existing.telegram_message_id
+    );
+  }
 
-  derivatives.open_interest_change =
-    history?.oi_change?.available
-      ? history.oi_change
-      : null;
-
-  derivatives.open_interest_change_status =
-    history?.oi_change?.status ??
-    "WAITING_FOR_HISTORICAL_SNAPSHOTS";
-
-  const market = buildMarketScore(
-    chart.chart,
-    book,
-    derivatives,
-    history
-  );
-
-  return {
-    source: "HYPERLIQUID",
-    coin,
-    timestamp: Date.now(),
-    datetime: new Date().toISOString(),
-    processing_ms: Date.now() - started,
-
-    price: chart.price,
-
-    chart: {
-      timeframe_1m: chart.timeframe_1m,
-      timeframe_5m: chart.timeframe_5m,
-      final: chart.chart,
-    },
-
-    microstructure: {
-      best_bid: book.best_bid,
-      best_ask: book.best_ask,
-      spread: book.spread,
-      spread_pct: book.spread_pct,
-      liquidity: book.liquidity,
-      order_flow: book.order_flow,
-    },
-
-    derivatives,
-
-    history,
-
-    market,
-
-    execution: {
-      enabled: false,
-      paper_trade: false,
-      real_trade: false,
-    },
-  };
+  return true;
 }
 
 
 // ============================================================
-// V1.3 NEWS + X ENGINE
-//
-// Official feeds:
-// - SEC Press Releases RSS
-// - Federal Reserve All Press Releases RSS
-// - Federal Reserve Monetary Policy RSS
-//
-// Optional X:
-// - X API v2 recent search
-// - Requires X_API_BEARER_TOKEN Cloudflare secret
-//
-// This first News Engine is deterministic/rule-based.
-// It does NOT pretend to be an LLM. We first validate ingestion,
-// timestamps, source weighting, relevance, direction and decay.
-// A later version can replace/enhance classification with an AI API.
+// DF_SUI — FIRST CONFIRMED GOAL AFTER ENTRY
 // ============================================================
 
-const NEWS_FEEDS = [
-  {
-    id: "SEC_PRESS",
-    name: "SEC Press Releases",
-    url: "https://www.sec.gov/news/pressreleases.rss",
-    trust: 100,
-    type: "OFFICIAL",
-  },
-  {
-    id: "FED_ALL",
-    name: "Federal Reserve Press Releases",
-    url: "https://www.federalreserve.gov/feeds/press_all.xml",
-    trust: 100,
-    type: "OFFICIAL",
-  },
-  {
-    id: "FED_MONETARY",
-    name: "Federal Reserve Monetary Policy",
-    url: "https://www.federalreserve.gov/feeds/press_monetary.xml",
-    trust: 100,
-    type: "OFFICIAL",
-  },
-  {
-    id: "CFTC_GENERAL",
-    name: "CFTC General Press Releases",
-    url: "https://www.cftc.gov/RSS/RSSGP/rssgp.xml",
-    trust: 100,
-    type: "OFFICIAL",
-  },
-  {
-    id: "CFTC_ENFORCEMENT",
-    name: "CFTC Enforcement Press Releases",
-    url: "https://www.cftc.gov/RSS/RSSENF/rssenf.xml",
-    trust: 100,
-    type: "OFFICIAL",
-  },
-] as const;
+async function getPostEntryDfSuiGoal(
+  matchId,
+  entryMinute
+) {
 
-// Keep X queries narrow to control noise and API usage.
-// We search crypto/macro terms plus selected primary accounts.
-const X_QUERY =
-  '((bitcoin OR BTC OR ethereum OR ETH OR solana OR SOL OR XRP OR BNB OR crypto OR cryptocurrency OR stablecoin OR ETF OR "interest rates" OR FOMC) ' +
-  '(from:SECGov OR from:federalreserve OR from:CFTC OR from:WhiteHouse OR from:Ripple OR from:solana OR from:ethereum)) -is:retweet';
-
-type NewsItem = {
-  id: string;
-  source_id: string;
-  source_name: string;
-  source_type: string;
-  source_trust: number;
-  title: string;
-  text: string;
-  url: string | null;
-  published_at: string | null;
-  published_ms: number | null;
-  age_minutes: number | null;
-  origin: "RSS" | "X";
-  author?: string | null;
-  metrics?: AnyObj | null;
-};
-
-function decodeXml(s: string): string {
-  return s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function firstXml(block: string, tag: string): string {
-  const re = new RegExp(
-    `<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`,
-    "i"
-  );
-  const m = block.match(re);
-  return m ? decodeXml(m[1]) : "";
-}
-
-function parseDateMs(value: string): number | null {
-  if (!value) return null;
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-function ageMinutes(ms: number | null): number | null {
-  if (ms === null) return null;
-  return Math.max(0, (Date.now() - ms) / 60_000);
-}
-
-function parseRssItems(
-  xml: string,
-  source: (typeof NEWS_FEEDS)[number],
-  limit = 20
-): NewsItem[] {
-  const blocks =
-    xml.match(/<item(?:\s[^>]*)?>[\s\S]*?<\/item>/gi) ??
-    xml.match(/<entry(?:\s[^>]*)?>[\s\S]*?<\/entry>/gi) ??
-    [];
-
-  return blocks.slice(0, limit).map((block, i) => {
-    const title = firstXml(block, "title");
-    const description =
-      firstXml(block, "description") ||
-      firstXml(block, "summary") ||
-      firstXml(block, "content");
-
-    let link = firstXml(block, "link");
-
-    if (!link) {
-      const href = block.match(
-        /<link[^>]+href=["']([^"']+)["'][^>]*>/i
-      );
-      link = href?.[1] ?? "";
-    }
-
-    const date =
-      firstXml(block, "pubDate") ||
-      firstXml(block, "updated") ||
-      firstXml(block, "published");
-
-    const publishedMs = parseDateMs(date);
-
-    const guid =
-      firstXml(block, "guid") ||
-      link ||
-      `${source.id}:${title}:${i}`;
-
-    return {
-      id: guid,
-      source_id: source.id,
-      source_name: source.name,
-      source_type: source.type,
-      source_trust: source.trust,
-      title,
-      text: `${title} ${description}`.trim(),
-      url: link || null,
-      published_at:
-        publishedMs !== null
-          ? new Date(publishedMs).toISOString()
-          : date || null,
-      published_ms: publishedMs,
-      age_minutes: ageMinutes(publishedMs),
-      origin: "RSS" as const,
-    };
-  });
-}
-
-async function fetchOfficialFeed(
-  source: (typeof NEWS_FEEDS)[number]
-): Promise<{
-  ok: boolean;
-  source: string;
-  status: number;
-  items: NewsItem[];
-  error?: string;
-}> {
-  try {
-    const response = await fetch(source.url, {
-      headers: {
-        "user-agent":
-          "cryptobot-readonly/1.3 contact=market-research",
-        accept:
-          "application/rss+xml, application/xml, text/xml, */*",
-      },
-    });
-
-    const text = await response.text();
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        source: source.id,
-        status: response.status,
-        items: [],
-        error: text.slice(0, 250),
-      };
-    }
-
-    return {
-      ok: true,
-      source: source.id,
-      status: response.status,
-      items: parseRssItems(text, source),
-    };
-  } catch (error: any) {
-    return {
-      ok: false,
-      source: source.id,
-      status: 0,
-      items: [],
-      error: error?.message ?? String(error),
-    };
-  }
-}
-
-function xTrust(username: string): number {
-  const u = username.toLowerCase();
-
-  const primary = new Set([
-    "secgov",
-    "federalreserve",
-    "cftc",
-    "whitehouse",
-    "ripple",
-    "solana",
-    "ethereum",
-  ]);
-
-  return primary.has(u) ? 100 : 70;
-}
-
-async function fetchXRecent(env: Env): Promise<{
-  enabled: boolean;
-  ok: boolean;
-  status: number | null;
-  query: string;
-  items: NewsItem[];
-  error?: string;
-}> {
-  const token = env?.X_API_BEARER_TOKEN;
-
-  if (!token) {
-    return {
-      enabled: false,
-      ok: false,
-      status: null,
-      query: X_QUERY,
-      items: [],
-      error: "X_API_BEARER_TOKEN_NOT_CONFIGURED",
-    };
+  if (!matchId) {
+    return null;
   }
 
-  const params = new URLSearchParams({
-    query: X_QUERY,
-    "tweet.fields":
-      "created_at,author_id,public_metrics",
-    expansions: "author_id",
-    "user.fields": "username,verified,name",
-    max_results: "20",
-  });
+
+  const url =
+    FLASHSCORE_DF_SUI_BASE +
+    encodeURIComponent(
+      String(matchId)
+    ) +
+    "?_=" +
+    Date.now();
+
+
+  let response;
 
   try {
-    const response = await fetch(
-      `https://api.x.com/2/tweets/search/recent?${params.toString()}`,
-      {
-        headers: {
-          authorization: `Bearer ${token}`,
-        },
-      }
-    );
 
-    const body = await response.json<any>().catch(() => null);
-
-    if (!response.ok) {
-      return {
-        enabled: true,
-        ok: false,
-        status: response.status,
-        query: X_QUERY,
-        items: [],
-        error:
-          body?.detail ??
-          body?.title ??
-          JSON.stringify(body)?.slice(0, 300) ??
-          "X_API_ERROR",
-      };
-    }
-
-    const users = new Map<string, any>();
-
-    for (const user of body?.includes?.users ?? []) {
-      users.set(String(user?.id ?? ""), user);
-    }
-
-    const items: NewsItem[] = (body?.data ?? []).map(
-      (post: any) => {
-        const user = users.get(String(post?.author_id ?? ""));
-        const username = String(user?.username ?? "unknown");
-        const publishedMs = parseDateMs(post?.created_at ?? "");
-
-        return {
-          id: `x:${post?.id}`,
-          source_id: `X_${username}`,
-          source_name: `@${username}`,
-          source_type: "X_PRIMARY",
-          source_trust: xTrust(username),
-          title: String(post?.text ?? "").slice(0, 180),
-          text: String(post?.text ?? ""),
-          url:
-            username !== "unknown" && post?.id
-              ? `https://x.com/${username}/status/${post.id}`
-              : null,
-          published_at:
-            publishedMs !== null
-              ? new Date(publishedMs).toISOString()
-              : post?.created_at ?? null,
-          published_ms: publishedMs,
-          age_minutes: ageMinutes(publishedMs),
-          origin: "X" as const,
-          author: username,
-          metrics: post?.public_metrics ?? null,
-        };
-      }
-    );
-
-    return {
-      enabled: true,
-      ok: true,
-      status: response.status,
-      query: X_QUERY,
-      items,
-    };
-  } catch (error: any) {
-    return {
-      enabled: true,
-      ok: false,
-      status: 0,
-      query: X_QUERY,
-      items: [],
-      error: error?.message ?? String(error),
-    };
-  }
-}
-
-function dedupeNews(items: NewsItem[]): NewsItem[] {
-  const seen = new Set<string>();
-  const out: NewsItem[] = [];
-
-  for (const item of items) {
-    const key = (
-      item.id ||
-      `${item.source_id}:${item.title}`
-    ).toLowerCase();
-
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(item);
-  }
-
-  return out.sort(
-    (a, b) => (b.published_ms ?? 0) - (a.published_ms ?? 0)
-  );
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function phraseMatch(text: string, phrase: string): boolean {
-  const normalizedText = text.toLowerCase();
-  const normalizedPhrase = phrase.toLowerCase().trim();
-
-  // $TOKEN forms are handled literally.
-  if (normalizedPhrase.startsWith("$")) {
-    return normalizedText.includes(normalizedPhrase);
-  }
-
-  // Use alphanumeric boundaries so "sues" does NOT match "issues".
-  const escaped = escapeRegExp(normalizedPhrase).replace(/\s+/g, "\\s+");
-  const re = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i");
-  return re.test(normalizedText);
-}
-
-function textHas(text: string, words: string[]): boolean {
-  return words.some((w) => phraseMatch(text, w));
-}
-
-function coinRelevance(
-  coin: string,
-  text: string,
-  sourceId: string
-): number {
-  const t = text.toLowerCase();
-
-  const direct: Record<string, string[]> = {
-    BTC: ["bitcoin", " btc", "btc ", "$btc"],
-    ETH: ["ethereum", " ether", " eth", "$eth", "staking"],
-    SOL: ["solana", " sol", "$sol"],
-    XRP: ["xrp", "ripple", "$xrp"],
-    BNB: ["bnb", "binance", "$bnb"],
-    DOGE: ["dogecoin", " doge", "doge ", "$doge"],
-    AVAX: ["avalanche", " avax", "avax ", "$avax"],
-    LINK: ["chainlink", " link", "link ", "$link"],
-    SUI: ["sui network", " sui", "sui ", "$sui"],
-    HYPE: ["hyperliquid", " hype", "hype ", "$hype"],
-  };
-
-  if (textHas(t, direct[coin] ?? [])) return 100;
-
-  // Macro / regulatory stories can affect the whole crypto complex.
-  const broadCrypto = [
-    "crypto",
-    "crypto asset",
-    "crypto assets",
-    "cryptocurrency",
-    "digital asset",
-    "digital assets",
-    "digital commodity",
-    "digital commodities",
-    "stablecoin",
-    "stablecoins",
-    "spot etf",
-    "exchange-traded fund",
-    "blockchain",
-    "perpetual contract",
-    "perpetual contracts",
-    "self-custodial",
-    "self custody",
-  ];
-
-  if (textHas(t, broadCrypto)) {
-    return coin === "BTC" || coin === "ETH" ? 80 : 65;
-  }
-
-  const macro = [
-    "fomc",
-    "federal funds",
-    "interest rate",
-    "rate cut",
-    "rate hike",
-    "monetary policy",
-    "inflation",
-    "liquidity",
-  ];
-
-  if (
-    sourceId.startsWith("CFTC") &&
-    textHas(t, broadCrypto)
-  ) {
-    if (coin === "BTC" || coin === "ETH") return 85;
-    return 70;
-  }
-
-  if (
-    sourceId.startsWith("FED") &&
-    textHas(t, macro)
-  ) {
-    if (coin === "BTC") return 75;
-    if (coin === "ETH") return 65;
-    return 50;
-  }
-
-  return 0;
-}
-
-function classifyDirection(text: string): {
-  signed: number;
-  direction: string;
-  matched_positive: string[];
-  matched_negative: string[];
-} {
-  const positive = [
-    "approve",
-    "approved",
-    "approval",
-    "launch",
-    "adoption",
-    "partnership",
-    "rate cut",
-    "cuts rates",
-    "easing",
-    "legal clarity",
-    "dismiss",
-    "dismissed",
-    "settlement",
-    "wins",
-    "victory",
-    "inflows",
-    "record inflow",
-  ];
-
-  const negative = [
-    "charges",
-    "charged",
-    "lawsuit",
-    "sues",
-    "fraud",
-    "hack",
-    "hacked",
-    "exploit",
-    "ban",
-    "banned",
-    "reject",
-    "rejected",
-    "rate hike",
-    "raises rates",
-    "enforcement",
-    "investigation",
-    "outflows",
-    "liquidation",
-    "sanction",
-  ];
-
-  const p = positive.filter((x) => phraseMatch(text, x));
-  const n = negative.filter((x) => phraseMatch(text, x));
-
-  const raw = clampSigned((p.length - n.length) * 25);
-
-  const policyUnchanged = textHas(text, [
-    "maintain the target range",
-    "kept rates unchanged",
-    "rates unchanged",
-    "unchanged target range",
-  ]);
-
-  return {
-    signed: raw,
-    direction:
-      raw === 0 && policyUnchanged
-        ? "NEUTRAL_POLICY_UNCHANGED"
-        : sideLabel(raw, 5),
-    matched_positive: p,
-    matched_negative: n,
-    policy_unchanged: policyUnchanged,
-  };
-}
-
-function estimateImpact(
-  item: NewsItem,
-  relevance: number,
-  directionStrength: number
-): number {
-  const t = item.text.toLowerCase();
-
-  let impact = 25;
-
-  if (
-    textHas(t, [
-      "bitcoin",
-      "ethereum",
-      "xrp",
-      "ripple",
-      "solana",
-      "bnb",
-      "binance",
-      "crypto",
-      "digital asset",
-    ])
-  ) {
-    impact += 20;
-  }
-
-  if (
-    textHas(t, [
-      "sec",
-      "federal reserve",
-      "fomc",
-      "interest rate",
-      "etf",
-      "enforcement",
-      "lawsuit",
-      "approve",
-      "approved",
-      "hack",
-      "exploit",
-      "ban",
-    ])
-  ) {
-    impact += 25;
-  }
-
-  if (item.source_trust >= 95) impact += 10;
-  if (relevance >= 90) impact += 10;
-  if (directionStrength >= 50) impact += 10;
-
-  return clamp(impact);
-}
-
-function newsDecay(
-  ageMin: number | null,
-  highImpactContext = false
-): number {
-  if (ageMin === null) return 0;
-
-  // Scalping engine: stale news must not influence a live entry.
-  // Normal stories expire after 6h. Major macro/regulatory context
-  // may retain a decaying tail for up to 24h.
-  const hardExpiryMin = highImpactContext ? 24 * 60 : 6 * 60;
-
-  if (ageMin > hardExpiryMin) return 0;
-
-  const tau = highImpactContext ? 90 : 14;
-  return Math.exp(-ageMin / tau);
-}
-
-function classifyNewsForCoin(item: NewsItem, coin: string) {
-  const relevance = coinRelevance(
-    coin,
-    item.text,
-    item.source_id
-  );
-
-  const dir = classifyDirection(item.text);
-  const impact = estimateImpact(
-    item,
-    relevance,
-    Math.abs(dir.signed)
-  );
-
-  // Deterministic confidence: primary-source + explicit directional terms.
-  let confidence = 45;
-  if (item.source_trust >= 95) confidence += 25;
-  if (relevance >= 80) confidence += 15;
-  if (Math.abs(dir.signed) >= 25) confidence += 15;
-  confidence = clamp(confidence);
-
-  const highImpactContext =
-    item.source_trust >= 95 &&
-    relevance >= 75 &&
-    impact >= 75;
-
-  const freshness =
-    item.age_minutes === null
-      ? "UNKNOWN"
-      : item.age_minutes <= 5
-      ? "BREAKING_0_5M"
-      : item.age_minutes <= 30
-      ? "FRESH_5_30M"
-      : item.age_minutes <= 120
-      ? "RECENT_30_120M"
-      : item.age_minutes <= 360
-      ? "AGING_2_6H"
-      : "STALE";
-
-  const decay = newsDecay(
-    item.age_minutes,
-    highImpactContext
-  );
-
-  const base =
-    (item.source_trust / 100) *
-    (relevance / 100) *
-    (impact / 100) *
-    (confidence / 100) *
-    decay *
-    100;
-
-  const signed =
-    dir.signed === 0
-      ? 0
-      : Math.sign(dir.signed) * base;
-
-  return {
-    id: item.id,
-    origin: item.origin,
-    source: item.source_name,
-    source_trust: item.source_trust,
-    title: item.title,
-    url: item.url,
-    published_at: item.published_at,
-    age_minutes:
-      item.age_minutes === null
-        ? null
-        : round(item.age_minutes, 2),
-
-    coin,
-    relevance,
-    impact,
-    confidence,
-    decay: round(decay, 4),
-    freshness,
-    active_for_live_signal: decay > 0,
-    expired: decay === 0,
-
-    direction: sideLabel(signed, 1),
-    raw_direction_score: dir.signed,
-    score_signed: round(signed),
-    score_long: signed > 0 ? round(signed) : 0,
-    score_short: signed < 0 ? round(Math.abs(signed)) : 0,
-
-    matched_positive: dir.matched_positive,
-    matched_negative: dir.matched_negative,
-    policy_unchanged: dir.policy_unchanged,
-  };
-}
-
-function aggregateNewsForCoin(
-  coin: string,
-  items: NewsItem[]
-) {
-  const classified = items
-    .map((x) => classifyNewsForCoin(x, coin))
-    .filter((x) => x.relevance > 0)
-    .sort(
-      (a, b) =>
-        Math.abs(b.score_signed) -
-        Math.abs(a.score_signed)
-    );
-
-  // Prevent many similar low-value stories from simply summing to 100.
-  // Strongest item dominates, next items provide confirmation.
-  const active = classified.filter(
-    (x) => x.active_for_live_signal
-  );
-
-  const top = active.slice(0, 5);
-
-  let signed = 0;
-
-  const weights = [1.0, 0.45, 0.25, 0.15, 0.10];
-
-  for (let i = 0; i < top.length; i++) {
-    signed += top[i].score_signed * weights[i];
-  }
-
-  signed = clampSigned(signed);
-
-  const strongest = top[0] ?? null;
-
-  const breaking =
-    strongest !== null &&
-    strongest.source_trust >= 95 &&
-    strongest.relevance >= 80 &&
-    strongest.impact >= 75 &&
-    strongest.confidence >= 80 &&
-    (strongest.age_minutes ?? 9999) <= 15;
-
-  return {
-    coin,
-    items_considered: classified.length,
-    active_items: active.length,
-    expired_items: classified.length - active.length,
-    top_items: top,
-    signed_score: round(signed),
-    long_score: signed > 0 ? round(signed) : 0,
-    short_score: signed < 0 ? round(Math.abs(signed)) : 0,
-    bias: sideLabel(signed, 5),
-    breaking_high_impact: breaking,
-  };
-}
-
-async function collectNews(env: Env) {
-  const [feedResults, x] = await Promise.all([
-    Promise.all(NEWS_FEEDS.map((feed) => fetchOfficialFeed(feed))),
-    fetchXRecent(env),
-  ]);
-
-  const official = feedResults.flatMap((x) => x.items);
-
-  const all = dedupeNews([
-    ...official,
-    ...x.items,
-  ]);
-
-  return {
-    timestamp: Date.now(),
-    datetime: new Date().toISOString(),
-    official_feeds: feedResults.map((x) => ({
-      source: x.source,
-      ok: x.ok,
-      status: x.status,
-      items: x.items.length,
-      error: x.error ?? null,
-    })),
-    x: {
-      enabled: x.enabled,
-      ok: x.ok,
-      status: x.status,
-      items: x.items.length,
-      error: x.error ?? null,
-      query: x.query,
-    },
-    total_items: all.length,
-    items: all,
-  };
-}
-
-function combineMarketAndNews(
-  market: any,
-  news: any
-) {
-  const marketSigned = clampSigned(
-    Number(market?.signed_score ?? 0)
-  );
-
-  const newsSigned = clampSigned(
-    Number(news?.signed_score ?? 0)
-  );
-
-  // V1.5.1:
-  // No active news = do not dilute a valid market signal with zero.
-  // Active normal news = 70/30.
-  // Breaking high-impact news = 40/60.
-  const activeNewsItems = Number(
-    news?.active_items ?? 0
-  );
-
-  let marketWeight = 1.00;
-  let newsWeight = 0.00;
-  let mode = "MARKET_ONLY_NO_ACTIVE_NEWS";
-
-  if (activeNewsItems > 0) {
-    marketWeight = 0.70;
-    newsWeight = 0.30;
-    mode = "NORMAL_NEWS_ACTIVE";
-  }
-
-  if (
-    activeNewsItems > 0 &&
-    news?.breaking_high_impact
-  ) {
-    marketWeight = 0.40;
-    newsWeight = 0.60;
-    mode = "BREAKING_NEWS";
-  }
-
-  const signed = clampSigned(
-    marketSigned * marketWeight +
-    newsSigned * newsWeight
-  );
-
-  const longScore = signed > 0 ? clamp(signed) : 0;
-  const shortScore = signed < 0 ? clamp(Math.abs(signed)) : 0;
-  const strength = Math.max(longScore, shortScore);
-
-  let status = "NO_TRADE";
-
-  if (strength >= 80) status = "STRONG";
-  else if (strength >= 65) status = "WATCH";
-  else if (strength >= 50) status = "WEAK";
-
-  return {
-    mode,
-    weights: {
-      market: marketWeight,
-      news_x: newsWeight,
-    },
-    components: {
-      market_signed: round(marketSigned),
-      news_x_signed: round(newsSigned),
-    },
-    signed_score: round(signed),
-    long_score: round(longScore),
-    short_score: round(shortScore),
-    bias: sideLabel(signed, 10),
-    status,
-    execution_allowed: false,
-    meaning:
-      "Combined market/news alignment score, not probability of profit",
-  };
-}
-
-async function buildNewsOnly(env: Env) {
-  const collected = await collectNews(env);
-
-  const sourceHealth = {
-    configured_official_feeds: NEWS_FEEDS.length,
-    working_official_feeds: collected.official_feeds.filter(
-      (x: any) => x.ok
-    ).length,
-    failed_official_feeds: collected.official_feeds.filter(
-      (x: any) => !x.ok
-    ).length,
-    x_enabled: collected.x.enabled,
-    x_ok: collected.x.ok,
-  };
-
-  return {
-    ...collected,
-    source_health: sourceHealth,
-    scores: Object.fromEntries(
-      TRACKED_COINS.map((coin) => [
-        coin,
-        aggregateNewsForCoin(coin, collected.items),
-      ])
-    ),
-  };
-}
-
-async function buildFinalSignal(
-  coin: string,
-  env: Env,
-  preloadedNews?: any
-) {
-  const started = Date.now();
-
-  const [marketSignal, newsData] = await Promise.all([
-    buildSignal(coin, env),
-    preloadedNews
-      ? Promise.resolve(preloadedNews)
-      : buildNewsOnly(env),
-  ]);
-
-  const news =
-    newsData?.scores?.[coin] ??
-    aggregateNewsForCoin(coin, newsData?.items ?? []);
-
-  const final = combineMarketAndNews(
-    marketSignal.market,
-    news
-  );
-
-  return {
-    source: {
-      market: "HYPERLIQUID",
-      news: "OFFICIAL_RSS",
-      x:
-        newsData?.x?.enabled
-          ? "X_API_V2"
-          : "DISABLED_NO_TOKEN",
-    },
-    coin,
-    timestamp: Date.now(),
-    datetime: new Date().toISOString(),
-    processing_ms: Date.now() - started,
-
-    price: marketSignal.price,
-
-    market: marketSignal.market,
-    chart: marketSignal.chart,
-    microstructure: marketSignal.microstructure,
-    derivatives: marketSignal.derivatives,
-
-    news_x: news,
-
-    final,
-
-    execution: {
-      enabled: false,
-      paper_trade: false,
-      real_trade: false,
-    },
-  };
-}
-
-
-// ============================================================
-// DEBUG
-// ============================================================
-
-async function debugHyperliquid() {
-  const started = Date.now();
-
-  try {
-    const [mids, meta] = await Promise.all([
-      getAllMids(),
-      getMetaAndContexts(),
-    ]);
-
-    return {
-      success: true,
-      source: "HYPERLIQUID",
-      endpoint: HYPERLIQUID_INFO,
-      latency_ms: Date.now() - started,
-      tracked_coins: TRACKED_COINS,
-      mids_found: Object.fromEntries(
-        TRACKED_COINS.map((coin) => [
-          coin,
-          mids?.[coin] ?? null,
-        ])
-      ),
-      meta_response: Array.isArray(meta),
-      meta_parts: Array.isArray(meta) ? meta.length : 0,
-    };
-  } catch (error: any) {
-    return {
-      success: false,
-      source: "HYPERLIQUID",
-      latency_ms: Date.now() - started,
-      error: error?.message ?? String(error),
-    };
-  }
-}
-
-// ============================================================
-// WORKER
-// ============================================================
-
-
-// ============================================================
-// V1.6.9 SAFE LEGACY REPAIR
-// Repairs historical CLOSED episodes whose stored signal lifetime
-// exceeded the hard 30-minute episode cap. This is research/data
-// cleanup only; it does not change scoring or trading thresholds.
-// ============================================================
-async function repairLegacyOver30mEpisodes(
-  env: Env,
-  requestedCoin: string | null = null,
-  limit = 100
-): Promise<any> {
-  if (!env.DB) return { success:false, error:"D1_NOT_BOUND", legacy_found:0, repaired:0, unrecoverable:0, failed:0, diagnostics:[] };
-
-  await ensurePaperTables(env);
-  const where = requestedCoin
-    ? `status='CLOSED' AND coin=? AND (signal_lifetime_minutes > 30 OR (end_ts IS NOT NULL AND end_ts-start_ts > 1800000) OR (end_reason='MAX_30M' AND (end_ts IS NULL OR end_ts < start_ts OR signal_lifetime_minutes < 0)))`
-    : `status='CLOSED' AND (signal_lifetime_minutes > 30 OR (end_ts IS NOT NULL AND end_ts-start_ts > 1800000) OR (end_reason='MAX_30M' AND (end_ts IS NULL OR end_ts < start_ts OR signal_lifetime_minutes < 0)))`;
-  const sql = `SELECT * FROM signal_episodes WHERE ${where} ORDER BY start_ts ASC LIMIT ?`;
-  const rows:any = requestedCoin
-    ? await env.DB.prepare(sql).bind(requestedCoin, limit).all()
-    : await env.DB.prepare(sql).bind(limit).all();
-  const legacy:any[] = rows?.results ?? [];
-  const diagnostics:any[] = [];
-  let repaired=0, unrecoverable=0, failed=0;
-  const MAX_DISTANCE_MS = 90 * 1000; // must be genuinely near +30m
-
-  for (const ep of legacy) {
-    try {
-      const startTs=Number(ep.start_ts);
-      const targetTs=startTs + 30*60000;
-      const snap:any = await env.DB.prepare(`
-        SELECT ts, price FROM market_snapshots
-        WHERE coin=? AND ts>=? AND ts<=?
-        ORDER BY ABS(ts-?) ASC LIMIT 1
-      `).bind(ep.coin, targetTs-MAX_DISTANCE_MS, targetTs+MAX_DISTANCE_MS, targetTs).first();
-
-      const snapTs = snap ? Number(snap.ts) : NaN;
-      const snapPrice = snap ? Number(snap.price) : NaN;
-      const valid = Number.isFinite(snapTs) && Number.isFinite(snapPrice) && snapTs >= startTs && Math.abs(snapTs-targetTs) <= MAX_DISTANCE_MS;
-
-      if (!valid) {
-        // Do not invent a 30m close. Quarantine corrupted/overlong legacy row
-        // from lifetime research while preserving its start and fixed-horizon fields.
-        await env.DB.prepare(`UPDATE signal_episodes SET
-          end_ts=NULL, end_datetime=NULL, end_price=NULL,
-          end_reason='LEGACY_30M_UNRECOVERABLE',
-          signal_lifetime_minutes=NULL, lifetime_return_pct=NULL,
-          lifetime_mfe_pct=NULL, lifetime_mae_pct=NULL,
-          lifetime_tp_hit=0, lifetime_sl_hit=0,
-          lifetime_first_barrier=NULL, lifetime_first_barrier_ts=NULL,
-          updated_at=CURRENT_TIMESTAMP
-          WHERE id=? AND status='CLOSED'`).bind(ep.id).run();
-        unrecoverable++;
-        diagnostics.push({id:ep.id,coin:ep.coin,success:false,quarantined:true,reason:'NO_SNAPSHOT_WITHIN_90S_OF_30M',target_ts:targetTs,target_datetime:new Date(targetTs).toISOString()});
-        continue;
-      }
-
-      const synthetic={...ep,end_ts:snapTs,end_datetime:new Date(snapTs).toISOString(),end_price:snapPrice,end_reason:'MAX_30M'};
-      const lifetime=await computeSignalLifetimeOutcome(env, synthetic);
-      if (!lifetime || Number(lifetime.signal_lifetime_minutes) < 0 || Number(lifetime.signal_lifetime_minutes) > 31.5) {
-        failed++;
-        diagnostics.push({id:ep.id,coin:ep.coin,success:false,reason:'SAFE_LIFETIME_VALIDATION_FAILED'});
-        continue;
-      }
-      await env.DB.prepare(`UPDATE signal_episodes SET
-        end_ts=?, end_datetime=?, end_price=?, end_reason='MAX_30M',
-        signal_lifetime_minutes=?, lifetime_return_pct=?, lifetime_mfe_pct=?, lifetime_mae_pct=?,
-        lifetime_tp_hit=?, lifetime_sl_hit=?, lifetime_first_barrier=?, lifetime_first_barrier_ts=?,
-        updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='CLOSED'`).bind(
-          snapTs,new Date(snapTs).toISOString(),snapPrice,
-          lifetime.signal_lifetime_minutes,lifetime.lifetime_return_pct,lifetime.lifetime_mfe_pct,lifetime.lifetime_mae_pct,
-          lifetime.lifetime_tp_hit,lifetime.lifetime_sl_hit,lifetime.lifetime_first_barrier,lifetime.lifetime_first_barrier_ts,ep.id
-        ).run();
-      repaired++;
-      diagnostics.push({id:ep.id,coin:ep.coin,success:true,target_30m_ts:targetTs,snapshot_ts:snapTs,snapshot_distance_seconds:round(Math.abs(snapTs-targetTs)/1000),signal_lifetime_minutes:lifetime.signal_lifetime_minutes});
-    } catch(error:any) {
-      failed++;
-      diagnostics.push({id:ep.id,coin:ep.coin,success:false,error:error?.message ?? String(error)});
-    }
-  }
-  return {success:failed===0,legacy_found:legacy.length,repaired,unrecoverable,failed,diagnostics};
-}
-
-
-async function updateForwardLongShadow(env:any):Promise<void>{
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS forward_long_shadow (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      crossing_id INTEGER UNIQUE,
-      coin TEXT NOT NULL,
-      side TEXT NOT NULL,
-      crossing_ts INTEGER NOT NULL,
-      crossing_datetime TEXT,
-      entry_price REAL NOT NULL,
-      score REAL,
-      tp_pct REAL NOT NULL DEFAULT 0.50,
-      sl_pct REAL NOT NULL DEFAULT 0.15,
-      tp_price REAL,
-      sl_price REAL,
-      status TEXT NOT NULL DEFAULT 'OPEN',
-      exit_type TEXT,
-      exit_ts INTEGER,
-      exit_datetime TEXT,
-      exit_price REAL,
-      gross_return_pct REAL,
-      fee_pct REAL NOT NULL DEFAULT 0.07,
-      net_return_pct REAL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
-
-  // A crossing is eligible only while still incomplete, so deployment does not backfill historical completed rows.
-  const fresh:any=await env.DB.prepare(`
-    SELECT id, coin, side, crossing_ts, crossing_datetime, crossing_price, crossing_score
-    FROM signal_65_crossings
-    WHERE side='LONG' AND outcome_complete=0
-    ORDER BY crossing_ts ASC
-  `).all();
-
-  for(const c of (fresh?.results??[])){
-    const entry=Number(c.crossing_price);
-    if(!Number.isFinite(entry)||entry<=0) continue;
-    await env.DB.prepare(`
-      INSERT OR IGNORE INTO forward_long_shadow
-      (crossing_id,coin,side,crossing_ts,crossing_datetime,entry_price,score,tp_pct,sl_pct,tp_price,sl_price,status,fee_pct)
-      VALUES(?,?,?,?,?,?,?,0.50,0.15,?,?,'OPEN',0.07)
-    `).bind(
-      c.id,c.coin,"LONG",c.crossing_ts,c.crossing_datetime,entry,Number(c.crossing_score??0),
-      entry*1.005,entry*0.9985
-    ).run();
-  }
-
-  const open:any=await env.DB.prepare(`
-    SELECT * FROM forward_long_shadow WHERE status='OPEN' ORDER BY crossing_ts ASC
-  `).all();
-
-  for(const t of (open?.results??[])){
-    const snaps:any=await env.DB.prepare(`
-      SELECT ts, datetime, price
-      FROM market_snapshots
-      WHERE coin=? AND ts>? AND ts<=?
-      ORDER BY ts ASC
-    `).bind(t.coin,t.crossing_ts,t.crossing_ts+30*60*1000).all();
-
-    const arr:any[]=snaps?.results??[];
-    let exitType:string|null=null, exitPrice:number|null=null, exitTs:number|null=null, exitDt:string|null=null;
-    for(const s of arr){
-      const px=Number(s.price);
-      if(px>=Number(t.tp_price)){ exitType="TP"; exitPrice=Number(t.tp_price); exitTs=s.ts; exitDt=s.datetime; break; }
-      if(px<=Number(t.sl_price)){ exitType="SL"; exitPrice=Number(t.sl_price); exitTs=s.ts; exitDt=s.datetime; break; }
-    }
-
-    const now=Date.now();
-    if(!exitType && now>=Number(t.crossing_ts)+30*60*1000){
-      const last=arr.length?arr[arr.length-1]:null;
-      if(last){
-        exitType="TIME_30M"; exitPrice=Number(last.price); exitTs=last.ts; exitDt=last.datetime;
-      }
-    }
-    if(!exitType||exitPrice===null) continue;
-
-    const gross=(exitPrice/Number(t.entry_price)-1)*100;
-    const net=gross-0.07;
-    await env.DB.prepare(`
-      UPDATE forward_long_shadow
-      SET status='CLOSED',exit_type=?,exit_ts=?,exit_datetime=?,exit_price=?,
-          gross_return_pct=?,net_return_pct=?,updated_at=CURRENT_TIMESTAMP
-      WHERE id=?
-    `).bind(exitType,exitTs,exitDt,exitPrice,gross,net,t.id).run();
-  }
-}
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "GET, OPTIONS",
-          "access-control-allow-headers": "content-type",
-        },
-      });
-    }
-
-    if (request.method !== "GET") {
-      return json(
+    response =
+      await fetch(
+        url,
         {
-          success: false,
-          error: "METHOD_NOT_ALLOWED",
-        },
-        405
-      );
-    }
-
-    // ROOT
-    if (url.pathname === "/") {
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "READ_ONLY",
-        trading: "DISABLED",
-        source: "HYPERLIQUID",
-        tracked_coins: TRACKED_COINS,
-
-        engines: {
-          chart: true,
-          closed_candle_fix: true,
-          order_book: true,
-          derivatives_context: true,
-          oi_change: true,
-          d1_snapshot_history: true,
-          l2_persistence: true,
-          news_x: true,
-          x_optional_bearer_token: true,
-          official_rss: true,
-          fast_news_engine: true,
-          cftc_rss: true,
-          stale_news_hard_expiry: true,
-          paper_trading: true,
-          real_trading: false,
-        },
-
-        endpoints: {
-          health: "/health",
-          market: "/market",
-          candles:
-            "/candles?coin=BTC&interval=1m&limit=60",
-          book: "/book?coin=BTC",
-          chart: "/chart?coin=BTC",
-          charts: "/charts",
-          signal: "/signal?coin=BTC",
-          signals: "/signals",
-          news: "/news",
-          news_score: "/news-score?coin=BTC",
-          final_signal: "/final-signal?coin=BTC",
-          final_signals: "/final-signals",
-          history: "/history?coin=BTC&minutes=20",
-          snapshot_status: "/snapshot-status?coin=BTC",
-          paper_status: "/paper-status",
-          paper_candidate: "/paper-candidate?coin=BTC",
-          paper_trades: "/paper-trades?status=ALL&limit=50",
-          paper_summary: "/paper-summary",
-          paper_analytics: "/paper-analytics",
-          paper_observations: "/paper-observations?limit=100",
-          episodes: "/episodes?limit=50",
-          episode_analytics: "/episode-analytics",
-          episode_candidates: "/episode-candidates",
-          crossings_65: "/crossings-65?limit=100",
-          control_crossings_60_64: "/crossings-60-64?limit=100",
-          control_60_64_analytics: "/crossing-60-64-analytics",
-          control_60_64_tp_sl_matrix: "/tp-sl-matrix-60-64",
-          crossing_65_analytics: "/crossing-65-analytics",
-          tp_sl_matrix: "/tp-sl-matrix",
-          tp_sl_matrix_by_side: "/tp-sl-matrix-by-side",
-          forward_long_shadow: "/forward-long-shadow",
-          debug: "/debug-hyperliquid",
-        },
-
-        next_version:
-          "V1.9 — AFTER V1.8 LOAD + SIGNAL DATA REVIEW",
-      });
-    }
-
-    // HEALTH
-    if (url.pathname === "/health") {
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        status: "ONLINE",
-        mode: "READ_ONLY",
-        trading: false,
-        timestamp: Date.now(),
-      });
-    }
-
-    // MARKET
-    if (url.pathname === "/market") {
-      try {
-        return json({
-          success: true,
-          ...(await getMarket()),
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "MARKET_FETCH_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // CANDLES
-    if (url.pathname === "/candles") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      const interval =
-        url.searchParams.get("interval") ?? "1m";
-
-      let limit = Number(
-        url.searchParams.get("limit") ?? "60"
-      );
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      if (
-        !(ALLOWED_INTERVALS as readonly string[]).includes(
-          interval
-        )
-      ) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_INTERVAL",
-            allowed: ALLOWED_INTERVALS,
-          },
-          400
-        );
-      }
-
-      if (!Number.isFinite(limit)) limit = 60;
-
-      limit = Math.max(
-        1,
-        Math.min(500, Math.floor(limit))
-      );
-
-      try {
-        return json({
-          success: true,
-          ...(await getCandles(coin, interval, limit)),
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "CANDLE_FETCH_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // BOOK
-    if (url.pathname === "/book") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      try {
-        return json({
-          success: true,
-          ...(await getBook(coin)),
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "BOOK_FETCH_FAILED",
-            coin,
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // CHART
-    if (url.pathname === "/chart") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      try {
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          ...(await buildChart(coin)),
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "CHART_ENGINE_FAILED",
-            coin,
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // CHARTS
-    if (url.pathname === "/charts") {
-      const started = Date.now();
-
-      try {
-        const results = await Promise.all(
-          TRACKED_COINS.map((coin) => buildChart(coin))
-        );
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          source: "HYPERLIQUID",
-          trading: "DISABLED",
-          timestamp: Date.now(),
-          processing_ms: Date.now() - started,
-          total: results.length,
-          charts: results,
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "ALL_CHARTS_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // SIGNAL
-    if (url.pathname === "/signal") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      try {
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          trading: "DISABLED",
-          ...(await buildSignal(coin, env)),
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "SIGNAL_ENGINE_FAILED",
-            coin,
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // SIGNALS
-    if (url.pathname === "/signals") {
-      const started = Date.now();
-
-      try {
-        const results = await Promise.all(
-          TRACKED_COINS.map((coin) => buildSignal(coin, env))
-        );
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          source: "HYPERLIQUID",
-          trading: "DISABLED",
-          timestamp: Date.now(),
-          processing_ms: Date.now() - started,
-          total: results.length,
-          signals: results,
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "ALL_SIGNALS_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // NEWS RAW + SCORES
-    if (url.pathname === "/news") {
-      try {
-        const data = await buildNewsOnly(env);
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          ...data,
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "NEWS_ENGINE_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // NEWS SCORE FOR ONE COIN
-    if (url.pathname === "/news-score") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      try {
-        const data = await buildNewsOnly(env);
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          coin,
-          x: data.x,
-          official_feeds: data.official_feeds,
-          news_x: data.scores[coin],
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "NEWS_SCORE_FAILED",
-            coin,
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // FINAL MARKET + NEWS SIGNAL
-    if (url.pathname === "/final-signal") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      try {
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          trading: "DISABLED",
-          ...(await buildFinalSignal(coin, env)),
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "FINAL_SIGNAL_FAILED",
-            coin,
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // ALL FINAL SIGNALS
-    if (url.pathname === "/final-signals") {
-      const started = Date.now();
-
-      try {
-        // Load news once and reuse it for all five coins.
-        const newsData = await buildNewsOnly(env);
-
-        const results = await Promise.all(
-          TRACKED_COINS.map((coin) =>
-            buildFinalSignal(coin, env, newsData)
-          )
-        );
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "READ_ONLY",
-          trading: "DISABLED",
-          timestamp: Date.now(),
-          processing_ms: Date.now() - started,
-          total: results.length,
-          x: newsData.x,
-          official_feeds: newsData.official_feeds,
-          signals: results,
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "ALL_FINAL_SIGNALS_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // V1.6.6 EPISODE CANDIDATES DIAGNOSTIC
-    // Shows why each tracked coin is or is not creating an episode.
-    // READ ONLY: does not create/close episodes or paper trades.
-    if (url.pathname === "/episode-candidates") {
-      if (!env.DB) {
-        return json(
-          { success: false, error: "D1_NOT_BOUND" },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-      const started = Date.now();
-
-      try {
-        // One news load reused across all five coins, matching /final-signals.
-        const newsData = await buildNewsOnly(env);
-        const finalSignals = await Promise.all(
-          TRACKED_COINS.map((coin) =>
-            buildFinalSignal(coin, env, newsData)
-          )
-        );
-
-        const candidates: any[] = [];
-
-        for (let i = 0; i < TRACKED_COINS.length; i++) {
-          const coin = TRACKED_COINS[i];
-          const fs: any = finalSignals[i];
-          const signed = Number(fs?.final?.signed_score ?? 0);
-          const absScore = Math.abs(signed);
-          const side = signed >= 0 ? "LONG" : "SHORT";
-
-          const activeEpisode: any = await env.DB.prepare(`
-            SELECT *
-            FROM signal_episodes
-            WHERE coin = ? AND status = 'ACTIVE'
-            ORDER BY start_ts DESC
-            LIMIT 1
-          `).bind(coin).first();
-
-          const lastEpisode: any = await env.DB.prepare(`
-            SELECT *
-            FROM signal_episodes
-            WHERE coin = ?
-            ORDER BY start_ts DESC
-            LIMIT 1
-          `).bind(coin).first();
-
-          const lastObservation: any = await env.DB.prepare(`
-            SELECT *
-            FROM paper_signal_observations
-            WHERE coin = ?
-            ORDER BY ts DESC
-            LIMIT 1
-          `).bind(coin).first();
-
-          const lastSnapshot: any = await env.DB.prepare(`
-            SELECT *
-            FROM market_snapshots
-            WHERE coin = ?
-            ORDER BY ts DESC
-            LIMIT 1
-          `).bind(coin).first();
-
-          let episodeAction = "NO_EPISODE";
-          let reason = "BELOW_50";
-
-          if (activeEpisode) {
-            const ageMin =
-              (Date.now() - Number(activeEpisode.start_ts)) / 60000;
-
-            if (absScore < PAPER_OBSERVATION_MIN_SCORE) {
-              episodeAction = "WOULD_CLOSE_ACTIVE";
-              reason = "SCORE_BELOW_50";
-            } else if (String(activeEpisode.side) !== side) {
-              episodeAction = "WOULD_CLOSE_AND_FLIP";
-              reason = "DIRECTION_FLIP";
-            } else if (ageMin >= 30) {
-              episodeAction = "WOULD_CLOSE_ACTIVE";
-              reason = "MAX_30M";
-            } else {
-              episodeAction = "EPISODE_CONTINUES";
-              reason = "ACTIVE_SAME_DIRECTION";
-            }
-          } else if (absScore >= PAPER_OBSERVATION_MIN_SCORE) {
-            episodeAction = "WOULD_START_EPISODE";
-            reason = "SCORE_AT_OR_ABOVE_50";
-          }
-
-          candidates.push({
-            coin,
-            price: fs?.price ?? null,
-            current_final_score: round(signed),
-            side,
-            abs_score: round(absScore),
-            episode_threshold: PAPER_OBSERVATION_MIN_SCORE,
-            episode_eligible: absScore >= PAPER_OBSERVATION_MIN_SCORE,
-            paper_entry_threshold: PAPER_ENTRY_SCORE,
-            paper_entry_eligible: absScore >= PAPER_ENTRY_SCORE,
-            episode_action_now: episodeAction,
-            reason,
-            history_mode:
-              fs?.market?.weights?.mode ?? null,
-            market_signed:
-              fs?.market?.signed_score ?? null,
-            news_signed:
-              fs?.news_x?.signed_score ?? null,
-            components: {
-              chart_signed:
-                fs?.market?.components?.chart_signed ?? null,
-              order_flow_persistent_signed:
-                fs?.market?.components?.order_flow_persistent_signed ?? null,
-              oi_change_signed:
-                fs?.market?.components?.oi_change_signed ?? null,
-              funding_premium_signed:
-                fs?.market?.components?.funding_premium_signed ?? null,
-            },
-            current_episode: activeEpisode ?? null,
-            last_episode: lastEpisode ?? null,
-            last_raw_observation: lastObservation ?? null,
-            last_snapshot: lastSnapshot ?? null,
-          });
+          method: "GET",
+          headers:
+            FLASHSCORE_HEADERS,
+          cache: "no-store"
         }
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "EPISODE_CANDIDATES_DIAGNOSTIC",
-          trading: "REAL_TRADING_DISABLED",
-          read_only: true,
-          timestamp: Date.now(),
-          processing_ms: Date.now() - started,
-          thresholds: {
-            episode_abs_score: PAPER_OBSERVATION_MIN_SCORE,
-            paper_entry_abs_score: PAPER_ENTRY_SCORE,
-          },
-          summary: {
-            tracked: candidates.length,
-            episode_eligible_now: candidates.filter(
-              (x) => x.episode_eligible
-            ).length,
-            active_episodes: candidates.filter(
-              (x) => x.current_episode !== null
-            ).length,
-            coins_with_any_episode: candidates.filter(
-              (x) => x.last_episode !== null
-            ).length,
-          },
-          candidates,
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            worker: "cryptobot",
-            version: VERSION,
-            error: "EPISODE_CANDIDATES_DIAGNOSTIC_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // V1.6.5 FORCE CLOSED EPISODE BACKFILL
-    // READ/RESEARCH endpoint: recalculates lifetime fields for CLOSED episodes
-    // whose lifetime outcome has not yet been measured, and returns each step.
-    if (url.pathname === "/episode-backfill") {
-      if (!env.DB) {
-        return json(
-          { success: false, error: "D1_NOT_BOUND" },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-
-      const requestedCoin = String(
-        url.searchParams.get("coin") ?? ""
-      ).trim().toUpperCase();
-
-      if (requestedCoin && !validCoin(requestedCoin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      const limit = Math.max(
-        1,
-        Math.min(
-          Number(url.searchParams.get("limit") ?? 20),
-          100
-        )
       );
 
-      // V1.6.5 FIX: fetch CLOSED episodes without filtering on any
-      // lifetime column. Some D1 rows created before the lifetime migration
-      // were not being selected reliably by the previous SQL predicate.
-      // Missing lifetime fields are filtered in JavaScript instead.
-      const query = requestedCoin
-        ? `
-          SELECT *
-          FROM signal_episodes
-          WHERE coin = ?
-            AND status = 'CLOSED'
-          ORDER BY start_ts ASC
-          LIMIT ?
-        `
-        : `
-          SELECT *
-          FROM signal_episodes
-          WHERE status = 'CLOSED'
-          ORDER BY start_ts ASC
-          LIMIT ?
-        `;
+  } catch (error) {
 
-      const closed: any = requestedCoin
-        ? await env.DB.prepare(query).bind(requestedCoin, limit).all()
-        : await env.DB.prepare(query).bind(limit).all();
+    return null;
+  }
 
-      const closedRows: any[] = closed?.results ?? [];
 
-      // V1.6.5 FIX: force every CLOSED episode through the lifetime
-      // calculation. Do not depend on migrated lifetime column values here.
-      // The calculation is deterministic, so rerunning this endpoint is safe.
-      const pendingRows: any[] = closedRows;
+  if (!response.ok) {
+    return null;
+  }
 
-      const diagnostics: any[] = [];
-      let updated = 0;
-      let failed = 0;
 
-      for (const ep of pendingRows) {
-        try {
-          const snapshots: any = await env.DB.prepare(`
-            SELECT COUNT(*) AS count
-            FROM market_snapshots
-            WHERE coin = ?
-              AND ts >= ?
-              AND ts <= ?
-          `).bind(
-            ep.coin,
-            Number(ep.start_ts),
-            Number(ep.end_ts)
-          ).first();
+  const text =
+    await response.text();
 
-          const lifetime = await computeSignalLifetimeOutcome(
-            env,
-            ep
-          );
 
-          if (!lifetime) {
-            failed += 1;
-            diagnostics.push({
-              id: ep.id,
-              coin: ep.coin,
-              side: ep.side,
-              status: ep.status,
-              snapshots_found: Number(snapshots?.count ?? 0),
-              calculation_success: false,
-              update_success: false,
-              reason: "LIFETIME_CALCULATION_RETURNED_NULL",
-              inputs: {
-                start_ts: ep.start_ts,
-                end_ts: ep.end_ts,
-                start_price: ep.start_price,
-                end_price: ep.end_price,
-              },
-            });
-            continue;
-          }
+  if (!text) {
+    return null;
+  }
 
-          const write: any = await env.DB.prepare(`
-            UPDATE signal_episodes
-            SET
-              signal_lifetime_minutes = ?,
-              lifetime_return_pct = ?,
-              lifetime_mfe_pct = ?,
-              lifetime_mae_pct = ?,
-              lifetime_tp_hit = ?,
-              lifetime_sl_hit = ?,
-              lifetime_first_barrier = ?,
-              lifetime_first_barrier_ts = ?,
-              updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-              AND status = 'CLOSED'
-          `).bind(
-            lifetime.signal_lifetime_minutes,
-            lifetime.lifetime_return_pct,
-            lifetime.lifetime_mfe_pct,
-            lifetime.lifetime_mae_pct,
-            lifetime.lifetime_tp_hit,
-            lifetime.lifetime_sl_hit,
-            lifetime.lifetime_first_barrier,
-            lifetime.lifetime_first_barrier_ts,
-            ep.id
-          ).run();
 
-          const verify: any = await env.DB.prepare(`
-            SELECT
-              signal_lifetime_minutes,
-              lifetime_return_pct,
-              lifetime_mfe_pct,
-              lifetime_mae_pct,
-              lifetime_tp_hit,
-              lifetime_sl_hit,
-              lifetime_first_barrier,
-              lifetime_first_barrier_ts
-            FROM signal_episodes
-            WHERE id = ?
-          `).bind(ep.id).first();
-
-          const updateSuccess =
-            verify?.lifetime_return_pct !== null &&
-            verify?.lifetime_return_pct !== undefined;
-
-          if (updateSuccess) updated += 1;
-          else failed += 1;
-
-          diagnostics.push({
-            id: ep.id,
-            coin: ep.coin,
-            side: ep.side,
-            snapshots_found: Number(snapshots?.count ?? 0),
-            calculation_success: true,
-            calculated: lifetime,
-            d1_write: {
-              success: write?.success ?? null,
-              changes: write?.meta?.changes ?? null,
-            },
-            update_success: updateSuccess,
-            stored: verify ?? null,
-          });
-        } catch (error: any) {
-          failed += 1;
-          diagnostics.push({
-            id: ep.id,
-            coin: ep.coin,
-            side: ep.side,
-            calculation_success: false,
-            update_success: false,
-            error: error?.message ?? String(error),
-          });
-        }
-      }
-
-      return json({
-        success: failed === 0,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "LIFETIME_BACKFILL_DIAGNOSTIC",
-        trading: "REAL_TRADING_DISABLED",
-        requested_coin: requestedCoin || "ALL",
-        closed_episodes_found: closedRows.length,
-        episodes_found: pendingRows.length,
-        episodes_updated: updated,
-        episodes_failed: failed,
-        diagnostics,
-      });
-    }
-
-    // V1.6.10 REPAIR DIAGNOSTIC — read-only inspection of legacy rows #4/#5.
-    // No database mutations are performed by this endpoint.
-    if (url.pathname === "/episode-repair-diagnostic") {
-      if (!env.DB) {
-        return json({ success: false, error: "D1_NOT_BOUND" }, 503);
-      }
-
-      await ensurePaperTables(env);
-
-      const result: any = await env.DB.prepare(`
-        SELECT * FROM signal_episodes
-        WHERE id IN (4,5)
-        ORDER BY id ASC
-      `).all();
-
-      const rows: any[] = result?.results ?? [];
-      const diagnostics = rows.map((ep: any) => {
-        const startTs = Number(ep.start_ts);
-        const endTs = ep.end_ts == null ? null : Number(ep.end_ts);
-        const lifetime = ep.signal_lifetime_minutes == null
-          ? null
-          : Number(ep.signal_lifetime_minutes);
-        const endReason = ep.end_reason == null ? null : String(ep.end_reason);
-
-        const checks = {
-          status_closed: String(ep.status) === "CLOSED",
-          lifetime_over_30: Number.isFinite(lifetime as number) && (lifetime as number) > 30,
-          stored_duration_over_30: Number.isFinite(startTs) && Number.isFinite(endTs as number) && ((endTs as number) - startTs) > 1800000,
-          end_before_start: Number.isFinite(startTs) && Number.isFinite(endTs as number) && (endTs as number) < startTs,
-          lifetime_negative: Number.isFinite(lifetime as number) && (lifetime as number) < 0,
-          end_reason_max_30m: endReason === "MAX_30M",
-          end_reason_unrecoverable: endReason === "LEGACY_30M_UNRECOVERABLE",
-        };
-
-        const matches_v169_selector =
-          checks.status_closed && (
-            checks.lifetime_over_30 ||
-            checks.stored_duration_over_30 ||
-            (checks.end_reason_max_30m && (
-              ep.end_ts == null ||
-              checks.end_before_start ||
-              checks.lifetime_negative
-            ))
-          );
-
-        return {
-          id: ep.id,
-          coin: ep.coin,
-          side: ep.side,
-          status: ep.status,
-          start_ts: ep.start_ts,
-          start_datetime: ep.start_datetime,
-          end_ts: ep.end_ts,
-          end_datetime: ep.end_datetime,
-          end_reason: ep.end_reason,
-          signal_lifetime_minutes: ep.signal_lifetime_minutes,
-          computed_duration_minutes: Number.isFinite(startTs) && Number.isFinite(endTs as number)
-            ? round(((endTs as number) - startTs) / 60000)
-            : null,
-          checks,
-          matches_v169_selector,
-        };
-      });
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "REPAIR_DIAGNOSTIC_READ_ONLY",
-        trading: "REAL_TRADING_DISABLED",
-        read_only: true,
-        requested_ids: [4,5],
-        rows_found: rows.length,
-        diagnostics,
-      });
-    }
-
-    // V1.6.9 LEGACY REPAIR — manually repair historical episodes >30m/corrupt.
-    if (url.pathname === "/episode-legacy-repair") {
-      if (!env.DB) {
-        return json({ success: false, error: "D1_NOT_BOUND" }, 503);
-      }
-
-      const requestedCoinRaw = String(
-        url.searchParams.get("coin") ?? ""
-      ).trim().toUpperCase();
-      const requestedCoin = requestedCoinRaw || null;
-
-      if (requestedCoin && !validCoin(requestedCoin)) {
-        return json(
-          { success: false, error: "INVALID_COIN", allowed: TRACKED_COINS },
-          400
-        );
-      }
-
-      const limit = Math.max(
-        1,
-        Math.min(Number(url.searchParams.get("limit") ?? 100), 500)
-      );
-
-      const result = await repairLegacyOver30mEpisodes(
-        env,
-        requestedCoin,
-        limit
-      );
-
-      return json({
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "LEGACY_30M_REPAIR",
-        trading: "REAL_TRADING_DISABLED",
-        requested_coin: requestedCoin ?? "ALL",
-        ...result,
-      });
-    }
-
-    // V1.6 DEDUPLICATED SIGNAL EPISODES
-    if (url.pathname === "/crossings-60-64") {
-      if(!env.DB)return json({success:false,error:"D1_NOT_BOUND"},503);
-      await ensurePaperTables(env);
-      const limit=Math.max(1,Math.min(Number(url.searchParams.get("limit")??100),500));
-      const r:any=await env.DB.prepare(`SELECT * FROM signal_60_64_crossings ORDER BY crossing_ts DESC LIMIT ?`).bind(limit).all();
-      return json({success:true,worker:"cryptobot",version:VERSION,mode:"60_64_CONTROL_CROSSINGS",trading:"REAL_TRADING_DISABLED",range:"60 <= score < 65",total:r?.results?.length??0,crossings:r?.results??[]});
-    }
-
-    if (url.pathname === "/crossing-60-64-analytics") {
-      if(!env.DB)return json({success:false,error:"D1_NOT_BOUND"},503);
-      await ensurePaperTables(env);
-      const r:any=await env.DB.prepare(`SELECT * FROM signal_60_64_crossings WHERE outcome_complete=1 ORDER BY crossing_ts ASC`).all();
-      const rows:any[]=r?.results??[];
-      const avg=(key:string)=>rows.length?round(rows.reduce((s:any,x:any)=>s+Number(x[key]??0),0)/rows.length,4):null;
-      return json({success:true,worker:"cryptobot",version:VERSION,mode:"60_64_CONTROL_ANALYTICS",trading:"REAL_TRADING_DISABLED",
-        methodology:{cohort:"first observed score from 60 inclusive to 65 exclusive inside an active episode",paper_entry:false,purpose:"control group against >=65 crossings"},
-        completed:rows.length,
-        averages:{return_1m_pct:avg("return_1m_pct"),return_5m_pct:avg("return_5m_pct"),return_15m_pct:avg("return_15m_pct"),return_30m_pct:avg("return_30m_pct"),mfe_pct:avg("mfe_pct"),mae_pct:avg("mae_pct")},
-        by_side:["LONG","SHORT"].map(side=>{const a=rows.filter(x=>x.side===side);const av=(k:string)=>a.length?round(a.reduce((s,x)=>s+Number(x[k]??0),0)/a.length,4):null;return {side,count:a.length,avg_30m_pct:av("return_30m_pct"),avg_mfe_pct:av("mfe_pct"),avg_mae_pct:av("mae_pct")}})
-      });
-    }
-
-    if (url.pathname === "/crossings-65") {
-      if (!env.DB) return json({success:false,error:"D1_NOT_BOUND"},503);
-      await ensurePaperTables(env);
-      const limit=Math.max(1,Math.min(Number(url.searchParams.get("limit")??100),500));
-      const r:any=await env.DB.prepare(`SELECT * FROM signal_65_crossings ORDER BY crossing_ts DESC LIMIT ?`).bind(limit).all();
-      return json({success:true,worker:"cryptobot",version:VERSION,mode:"65_CROSSING_RESEARCH",trading:"REAL_TRADING_DISABLED",threshold:PAPER_ENTRY_SCORE,total:r?.results?.length??0,crossings:r?.results??[]});
-    }
-
-    if (url.pathname === "/tp-sl-matrix-60-64") {
-      if (!env.DB) return json({success:false,error:"D1_NOT_BOUND"},503);
-      await ensurePaperTables(env);
-
-      const q:any=await env.DB.prepare(`
-        SELECT id,coin,side,crossing_ts,crossing_price,crossing_score,
-               return_30m_pct,outcome_complete
-        FROM signal_60_64_crossings
-        WHERE outcome_complete=1
-        ORDER BY crossing_ts ASC
-      `).all();
-      const crossings:any[]=q?.results??[];
-
-      if(!crossings.length){
-        return json({success:true,worker:"cryptobot",version:VERSION,
-          mode:"TP_SL_MATRIX_60_64_CONTROL_RESEARCH",trading:"REAL_TRADING_DISABLED",
-          crossings_used:0,combinations:0,top_by_net_return:[],matrix:[]});
-      }
-
-      // V1.8.4 DATA WINDOW FIX:
-      // Merge only the actual +30m crossing windows per coin.
-      // This avoids loading the entire time span between the oldest/newest crossing.
-      const byCoin=new Map<string,{start:number,end:number}[]>();
-      for(const c of crossings){
-        const t=Number(c.crossing_ts);
-        if(!Number.isFinite(t)) continue;
-        const coin=String(c.coin);
-        if(!byCoin.has(coin)) byCoin.set(coin,[]);
-        byCoin.get(coin)!.push({start:t,end:t+30*60*1000});
-      }
-
-      const mergedWindows:{coin:string,start:number,end:number}[]=[];
-      for(const [coin,windows] of byCoin){
-        windows.sort((a,b)=>a.start-b.start);
-        let cur:any=null;
-        for(const w of windows){
-          if(!cur) cur={coin,start:w.start,end:w.end};
-          else if(w.start<=cur.end){
-            cur.end=Math.max(cur.end,w.end);
-          }else{
-            mergedWindows.push(cur);
-            cur={coin,start:w.start,end:w.end};
-          }
-        }
-        if(cur) mergedWindows.push(cur);
-      }
-
-      const snapshotsByCoin=new Map<string,any[]>();
-      let snapshotsLoaded=0;
-      let snapshotQueries=0;
-
-      // One query per merged real window, not per TP/SL combination.
-      for(const w of mergedWindows){
-        const r:any=await env.DB.prepare(`
-          SELECT coin,ts,price
-          FROM market_snapshots
-          WHERE coin=? AND ts>=? AND ts<=?
-          ORDER BY ts ASC
-        `).bind(w.coin,w.start,w.end).all();
-        snapshotQueries++;
-        const rows:any[]=r?.results??[];
-        snapshotsLoaded+=rows.length;
-        if(!snapshotsByCoin.has(w.coin)) snapshotsByCoin.set(w.coin,[]);
-        snapshotsByCoin.get(w.coin)!.push(...rows);
-      }
-
-      for(const rows of snapshotsByCoin.values())
-        rows.sort((a:any,b:any)=>Number(a.ts)-Number(b.ts));
-
-      const prepared=crossings.map((c:any)=>{
-        const t=Number(c.crossing_ts),end=t+30*60*1000;
-        const all=snapshotsByCoin.get(String(c.coin))??[];
-        const snaps=all.filter((s:any)=>Number(s.ts)>=t&&Number(s.ts)<=end);
-        return {...c,_snaps:snaps};
-      });
-
-      const tpValues=[0.20,0.25,0.30,0.35,0.40,0.50];
-      const slValues=[0.15,0.20,0.25,0.30,0.35,0.40];
-      const feePct=PAPER_FEE_RATE_PER_SIDE*2*100;
-      const matrix:any[]=[];
-
-      for(const tp of tpValues) for(const sl of slValues){
-        let tpFirst=0,slFirst=0,timeExit=0,grossSum=0;
-        const netReturns:number[]=[];
-        for(const c of prepared){
-          const entryPrice=Number(c.crossing_price);
-          if(!Number.isFinite(entryPrice)||entryPrice<=0) continue;
-          let gross:number|null=null,hit:string|null=null;
-          for(const x of c._snaps){
-            const px=Number(x.price);
-            if(!Number.isFinite(px)||px<=0) continue;
-            const r=c.side==="SHORT"
-              ?((entryPrice-px)/entryPrice)*100
-              :((px-entryPrice)/entryPrice)*100;
-            if(r>=tp){gross=tp;hit="TP";break}
-            if(r<=-sl){gross=-sl;hit="SL";break}
-          }
-          if(hit==="TP")tpFirst++;
-          else if(hit==="SL")slFirst++;
-          else{
-            timeExit++;
-            const r=Number(c.return_30m_pct);
-            gross=Number.isFinite(r)?r:0;
-          }
-          grossSum+=Number(gross??0);
-          netReturns.push(Number(gross??0)-feePct);
-        }
-        const netSum=netReturns.reduce((a,b)=>a+b,0);
-        const a=[...netReturns].sort((x,y)=>x-y);
-        const med=!a.length?null:(a.length%2?a[Math.floor(a.length/2)]:(a[a.length/2-1]+a[a.length/2])/2);
-        matrix.push({
-          tp_pct:tp,sl_pct:sl,completed:netReturns.length,
-          tp_first:tpFirst,sl_first:slFirst,time_exit_30m:timeExit,
-          gross_return_sum_pct:round(grossSum,4),
-          net_return_sum_pct:round(netSum,4),
-          avg_net_return_pct:netReturns.length?round(netSum/netReturns.length,4):null,
-          median_net_return_pct:med===null?null:round(med,4),
-          pnl_usd_at_100_notional_each:round(netSum,4),
-          profitable_after_fees:netSum>0
-        });
-      }
-
-      const ranked=[...matrix].sort((a:any,b:any)=>Number(b.net_return_sum_pct)-Number(a.net_return_sum_pct));
-
-      return json({
-        success:true,worker:"cryptobot",version:VERSION,
-        mode:"TP_SL_MATRIX_60_64_CONTROL_RESEARCH",trading:"REAL_TRADING_DISABLED",
-        performance:{
-          crossing_query:1,
-          snapshot_queries:snapshotQueries,
-          total_d1_queries:1+snapshotQueries,
-          merged_data_windows:mergedWindows.length,
-          raw_crossing_windows:crossings.length,
-          snapshots_loaded:snapshotsLoaded,
-          calculation:"IN_MEMORY",
-          optimization:"ONLY_ACTUAL_MERGED_30M_CROSSING_WINDOWS"
-        },
-        methodology:{
-          trigger:"completed 60-64 control crossings only",
-          replay:"minute market_snapshots only inside each crossing +30m window",
-          tp_values_pct:tpValues,sl_values_pct:slValues,
-          round_trip_fee_pct:round(feePct,4),
-          time_exit:"directional return_30m_pct if neither sampled barrier is reached",
-          limitation:"minute sampled prices can miss intraminute TP/SL touches; research only"
-        },
-        crossings_used:crossings.length,combinations:matrix.length,
-        current_config:{tp_pct:PAPER_TP_PCT,sl_pct:PAPER_SL_PCT},
-        top_by_net_return:ranked.slice(0,10),matrix
-      });
-    }
-
-
-    if (url.pathname === "/forward-long-shadow") {
-      await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS forward_long_shadow (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          crossing_id INTEGER UNIQUE,
-          coin TEXT NOT NULL,
-          side TEXT NOT NULL,
-          crossing_ts INTEGER NOT NULL,
-          crossing_datetime TEXT,
-          entry_price REAL NOT NULL,
-          score REAL,
-          tp_pct REAL NOT NULL DEFAULT 0.50,
-          sl_pct REAL NOT NULL DEFAULT 0.15,
-          tp_price REAL,
-          sl_price REAL,
-          status TEXT NOT NULL DEFAULT 'OPEN',
-          exit_type TEXT,
-          exit_ts INTEGER,
-          exit_datetime TEXT,
-          exit_price REAL,
-          gross_return_pct REAL,
-          fee_pct REAL NOT NULL DEFAULT 0.07,
-          net_return_pct REAL,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-      `).run();
-
-      const rows:any = await env.DB.prepare(`
-        SELECT id, crossing_id, coin, side, crossing_ts, crossing_datetime,
-               entry_price, score, tp_pct, sl_pct, tp_price, sl_price,
-               status, exit_type, exit_ts, exit_datetime, exit_price,
-               gross_return_pct, fee_pct, net_return_pct
-        FROM forward_long_shadow
-        ORDER BY crossing_ts DESC
-        LIMIT 200
-      `).all();
-
-      const trades:any[] = rows?.results ?? [];
-      const closed = trades.filter((x:any)=>x.status==="CLOSED");
-      const wins = closed.filter((x:any)=>x.exit_type==="TP").length;
-      const losses = closed.filter((x:any)=>x.exit_type==="SL").length;
-      const time = closed.filter((x:any)=>x.exit_type==="TIME_30M").length;
-      const net = closed.reduce((s:number,x:any)=>s+Number(x.net_return_pct??0),0);
-
-      return json({
-        success:true,
-        worker:"cryptobot",
-        version:VERSION,
-        mode:"FORWARD_LONG_SHADOW_READABLE",
-        trading:"REAL_TRADING_DISABLED",
-        strategy:{
-          threshold:">=65",
-          side:"LONG",
-          tp_pct:0.50,
-          sl_pct:0.15,
-          fee_round_trip_pct:0.07,
-          max_hold_minutes:30,
-          start_rule:"ONLY crossings first seen after V1.8.8 deploy; old crossings are not backfilled"
-        },
-        summary:{
-          total:trades.length,
-          open:trades.filter((x:any)=>x.status==="OPEN").length,
-          closed:closed.length,
-          tp:wins,
-          sl:losses,
-          time_exit:time,
-          net_return_sum_pct:Number(net.toFixed(4)),
-          pnl_usd_at_100_notional:Number(net.toFixed(2)),
-          pnl_usd_at_1000_notional:Number((net*10).toFixed(2))
-        },
-        columns_explained:{
-          entry:"price when >=65 LONG crossing was first captured",
-          tp:"target +0.50%",
-          sl:"stop -0.15%",
-          result:"OPEN / TP / SL / TIME_30M",
-          net:"result after 0.07% assumed round-trip fee"
-        },
-        trades:trades.map((x:any)=>({
-          id:x.id,
-          coin:x.coin,
-          date:x.crossing_datetime,
-          score:x.score,
-          entry:x.entry_price,
-          tp:x.tp_price,
-          sl:x.sl_price,
-          result:x.status==="OPEN" ? "OPEN" : x.exit_type,
-          exit:x.exit_price,
-          gross_pct:x.gross_return_pct,
-          fee_pct:x.fee_pct,
-          net_pct:x.net_return_pct
-        }))
-      });
-    }
-
-    if (url.pathname === "/tp-sl-matrix-by-side") {
-      if (!env.DB) return json({success:false,error:"D1_NOT_BOUND"},503);
-      await ensurePaperTables(env);
-
-      const side=(url.searchParams.get("side")??"LONG").toUpperCase();
-      if(side!=="LONG"&&side!=="SHORT"){
-        return json({success:false,error:"INVALID_SIDE",allowed:["LONG","SHORT"]},400);
-      }
-
-      const q:any=await env.DB.prepare(`
-        SELECT id,coin,side,crossing_ts,crossing_price,crossing_score,
-               return_30m_pct,outcome_complete
-        FROM signal_65_crossings
-        WHERE outcome_complete=1 AND side=?
-        ORDER BY crossing_ts ASC
-      `).bind(side).all();
-      const crossings:any[]=q?.results??[];
-
-      if(!crossings.length){
-        return json({success:true,worker:"cryptobot",version:VERSION,
-          mode:"TP_SL_MATRIX_BY_SIDE_RESEARCH",trading:"REAL_TRADING_DISABLED",side,
-          crossings_used:0,combinations:0,top_by_net_return:[],matrix:[]});
-      }
-
-      // V1.8.4 DATA WINDOW FIX:
-      // Merge only the actual +30m crossing windows per coin.
-      // This avoids loading the entire time span between the oldest/newest crossing.
-      const byCoin=new Map<string,{start:number,end:number}[]>();
-      for(const c of crossings){
-        const t=Number(c.crossing_ts);
-        if(!Number.isFinite(t)) continue;
-        const coin=String(c.coin);
-        if(!byCoin.has(coin)) byCoin.set(coin,[]);
-        byCoin.get(coin)!.push({start:t,end:t+30*60*1000});
-      }
-
-      const mergedWindows:{coin:string,start:number,end:number}[]=[];
-      for(const [coin,windows] of byCoin){
-        windows.sort((a,b)=>a.start-b.start);
-        let cur:any=null;
-        for(const w of windows){
-          if(!cur) cur={coin,start:w.start,end:w.end};
-          else if(w.start<=cur.end){
-            cur.end=Math.max(cur.end,w.end);
-          }else{
-            mergedWindows.push(cur);
-            cur={coin,start:w.start,end:w.end};
-          }
-        }
-        if(cur) mergedWindows.push(cur);
-      }
-
-      const snapshotsByCoin=new Map<string,any[]>();
-      let snapshotsLoaded=0;
-      let snapshotQueries=0;
-
-      // One query per merged real window, not per TP/SL combination.
-      for(const w of mergedWindows){
-        const r:any=await env.DB.prepare(`
-          SELECT coin,ts,price
-          FROM market_snapshots
-          WHERE coin=? AND ts>=? AND ts<=?
-          ORDER BY ts ASC
-        `).bind(w.coin,w.start,w.end).all();
-        snapshotQueries++;
-        const rows:any[]=r?.results??[];
-        snapshotsLoaded+=rows.length;
-        if(!snapshotsByCoin.has(w.coin)) snapshotsByCoin.set(w.coin,[]);
-        snapshotsByCoin.get(w.coin)!.push(...rows);
-      }
-
-      for(const rows of snapshotsByCoin.values())
-        rows.sort((a:any,b:any)=>Number(a.ts)-Number(b.ts));
-
-      const prepared=crossings.map((c:any)=>{
-        const t=Number(c.crossing_ts),end=t+30*60*1000;
-        const all=snapshotsByCoin.get(String(c.coin))??[];
-        const snaps=all.filter((s:any)=>Number(s.ts)>=t&&Number(s.ts)<=end);
-        return {...c,_snaps:snaps};
-      });
-
-      const tpValues=[0.20,0.25,0.30,0.35,0.40,0.50];
-      const slValues=[0.15,0.20,0.25,0.30,0.35,0.40];
-      const feePct=PAPER_FEE_RATE_PER_SIDE*2*100;
-      const matrix:any[]=[];
-
-      for(const tp of tpValues) for(const sl of slValues){
-        let tpFirst=0,slFirst=0,timeExit=0,grossSum=0;
-        const netReturns:number[]=[];
-        for(const c of prepared){
-          const entryPrice=Number(c.crossing_price);
-          if(!Number.isFinite(entryPrice)||entryPrice<=0) continue;
-          let gross:number|null=null,hit:string|null=null;
-          for(const x of c._snaps){
-            const px=Number(x.price);
-            if(!Number.isFinite(px)||px<=0) continue;
-            const r=c.side==="SHORT"
-              ?((entryPrice-px)/entryPrice)*100
-              :((px-entryPrice)/entryPrice)*100;
-            if(r>=tp){gross=tp;hit="TP";break}
-            if(r<=-sl){gross=-sl;hit="SL";break}
-          }
-          if(hit==="TP")tpFirst++;
-          else if(hit==="SL")slFirst++;
-          else{
-            timeExit++;
-            const r=Number(c.return_30m_pct);
-            gross=Number.isFinite(r)?r:0;
-          }
-          grossSum+=Number(gross??0);
-          netReturns.push(Number(gross??0)-feePct);
-        }
-        const netSum=netReturns.reduce((a,b)=>a+b,0);
-        const a=[...netReturns].sort((x,y)=>x-y);
-        const med=!a.length?null:(a.length%2?a[Math.floor(a.length/2)]:(a[a.length/2-1]+a[a.length/2])/2);
-        matrix.push({
-          tp_pct:tp,sl_pct:sl,completed:netReturns.length,
-          tp_first:tpFirst,sl_first:slFirst,time_exit_30m:timeExit,
-          gross_return_sum_pct:round(grossSum,4),
-          net_return_sum_pct:round(netSum,4),
-          avg_net_return_pct:netReturns.length?round(netSum/netReturns.length,4):null,
-          median_net_return_pct:med===null?null:round(med,4),
-          pnl_usd_at_100_notional_each:round(netSum,4),
-          profitable_after_fees:netSum>0
-        });
-      }
-
-      const ranked=[...matrix].sort((a:any,b:any)=>Number(b.net_return_sum_pct)-Number(a.net_return_sum_pct));
-
-      return json({
-        success:true,worker:"cryptobot",version:VERSION,
-        mode:"TP_SL_MATRIX_BY_SIDE_RESEARCH",trading:"REAL_TRADING_DISABLED",side,
-        performance:{
-          crossing_query:1,
-          snapshot_queries:snapshotQueries,
-          total_d1_queries:1+snapshotQueries,
-          merged_data_windows:mergedWindows.length,
-          raw_crossing_windows:crossings.length,
-          snapshots_loaded:snapshotsLoaded,
-          calculation:"IN_MEMORY",
-          optimization:"ONLY_ACTUAL_MERGED_30M_CROSSING_WINDOWS"
-        },
-        methodology:{
-          trigger:"completed >=65 crossings only",
-          replay:"minute market_snapshots only inside each crossing +30m window",
-          tp_values_pct:tpValues,sl_values_pct:slValues,
-          round_trip_fee_pct:round(feePct,4),
-          time_exit:"directional return_30m_pct if neither sampled barrier is reached",
-          limitation:"minute sampled prices can miss intraminute TP/SL touches; research only"
-        },
-        crossings_used:crossings.length,combinations:matrix.length,
-        current_config:{tp_pct:PAPER_TP_PCT,sl_pct:PAPER_SL_PCT},
-        top_by_net_return:ranked.slice(0,10),matrix
-      });
-    }
-
-    if (url.pathname === "/tp-sl-matrix") {
-      if (!env.DB) return json({success:false,error:"D1_NOT_BOUND"},503);
-      await ensurePaperTables(env);
-
-      const q:any=await env.DB.prepare(`
-        SELECT id,coin,side,crossing_ts,crossing_price,crossing_score,
-               return_30m_pct,outcome_complete
-        FROM signal_65_crossings
-        WHERE outcome_complete=1
-        ORDER BY crossing_ts ASC
-      `).all();
-      const crossings:any[]=q?.results??[];
-
-      if(!crossings.length){
-        return json({success:true,worker:"cryptobot",version:VERSION,
-          mode:"TP_SL_MATRIX_RESEARCH",trading:"REAL_TRADING_DISABLED",
-          crossings_used:0,combinations:0,top_by_net_return:[],matrix:[]});
-      }
-
-      // V1.8.4 DATA WINDOW FIX:
-      // Merge only the actual +30m crossing windows per coin.
-      // This avoids loading the entire time span between the oldest/newest crossing.
-      const byCoin=new Map<string,{start:number,end:number}[]>();
-      for(const c of crossings){
-        const t=Number(c.crossing_ts);
-        if(!Number.isFinite(t)) continue;
-        const coin=String(c.coin);
-        if(!byCoin.has(coin)) byCoin.set(coin,[]);
-        byCoin.get(coin)!.push({start:t,end:t+30*60*1000});
-      }
-
-      const mergedWindows:{coin:string,start:number,end:number}[]=[];
-      for(const [coin,windows] of byCoin){
-        windows.sort((a,b)=>a.start-b.start);
-        let cur:any=null;
-        for(const w of windows){
-          if(!cur) cur={coin,start:w.start,end:w.end};
-          else if(w.start<=cur.end){
-            cur.end=Math.max(cur.end,w.end);
-          }else{
-            mergedWindows.push(cur);
-            cur={coin,start:w.start,end:w.end};
-          }
-        }
-        if(cur) mergedWindows.push(cur);
-      }
-
-      const snapshotsByCoin=new Map<string,any[]>();
-      let snapshotsLoaded=0;
-      let snapshotQueries=0;
-
-      // One query per merged real window, not per TP/SL combination.
-      for(const w of mergedWindows){
-        const r:any=await env.DB.prepare(`
-          SELECT coin,ts,price
-          FROM market_snapshots
-          WHERE coin=? AND ts>=? AND ts<=?
-          ORDER BY ts ASC
-        `).bind(w.coin,w.start,w.end).all();
-        snapshotQueries++;
-        const rows:any[]=r?.results??[];
-        snapshotsLoaded+=rows.length;
-        if(!snapshotsByCoin.has(w.coin)) snapshotsByCoin.set(w.coin,[]);
-        snapshotsByCoin.get(w.coin)!.push(...rows);
-      }
-
-      for(const rows of snapshotsByCoin.values())
-        rows.sort((a:any,b:any)=>Number(a.ts)-Number(b.ts));
-
-      const prepared=crossings.map((c:any)=>{
-        const t=Number(c.crossing_ts),end=t+30*60*1000;
-        const all=snapshotsByCoin.get(String(c.coin))??[];
-        const snaps=all.filter((s:any)=>Number(s.ts)>=t&&Number(s.ts)<=end);
-        return {...c,_snaps:snaps};
-      });
-
-      const tpValues=[0.20,0.25,0.30,0.35,0.40,0.50];
-      const slValues=[0.15,0.20,0.25,0.30,0.35,0.40];
-      const feePct=PAPER_FEE_RATE_PER_SIDE*2*100;
-      const matrix:any[]=[];
-
-      for(const tp of tpValues) for(const sl of slValues){
-        let tpFirst=0,slFirst=0,timeExit=0,grossSum=0;
-        const netReturns:number[]=[];
-        for(const c of prepared){
-          const entryPrice=Number(c.crossing_price);
-          if(!Number.isFinite(entryPrice)||entryPrice<=0) continue;
-          let gross:number|null=null,hit:string|null=null;
-          for(const x of c._snaps){
-            const px=Number(x.price);
-            if(!Number.isFinite(px)||px<=0) continue;
-            const r=c.side==="SHORT"
-              ?((entryPrice-px)/entryPrice)*100
-              :((px-entryPrice)/entryPrice)*100;
-            if(r>=tp){gross=tp;hit="TP";break}
-            if(r<=-sl){gross=-sl;hit="SL";break}
-          }
-          if(hit==="TP")tpFirst++;
-          else if(hit==="SL")slFirst++;
-          else{
-            timeExit++;
-            const r=Number(c.return_30m_pct);
-            gross=Number.isFinite(r)?r:0;
-          }
-          grossSum+=Number(gross??0);
-          netReturns.push(Number(gross??0)-feePct);
-        }
-        const netSum=netReturns.reduce((a,b)=>a+b,0);
-        const a=[...netReturns].sort((x,y)=>x-y);
-        const med=!a.length?null:(a.length%2?a[Math.floor(a.length/2)]:(a[a.length/2-1]+a[a.length/2])/2);
-        matrix.push({
-          tp_pct:tp,sl_pct:sl,completed:netReturns.length,
-          tp_first:tpFirst,sl_first:slFirst,time_exit_30m:timeExit,
-          gross_return_sum_pct:round(grossSum,4),
-          net_return_sum_pct:round(netSum,4),
-          avg_net_return_pct:netReturns.length?round(netSum/netReturns.length,4):null,
-          median_net_return_pct:med===null?null:round(med,4),
-          pnl_usd_at_100_notional_each:round(netSum,4),
-          profitable_after_fees:netSum>0
-        });
-      }
-
-      const ranked=[...matrix].sort((a:any,b:any)=>Number(b.net_return_sum_pct)-Number(a.net_return_sum_pct));
-
-      return json({
-        success:true,worker:"cryptobot",version:VERSION,
-        mode:"TP_SL_MATRIX_RESEARCH",trading:"REAL_TRADING_DISABLED",
-        performance:{
-          crossing_query:1,
-          snapshot_queries:snapshotQueries,
-          total_d1_queries:1+snapshotQueries,
-          merged_data_windows:mergedWindows.length,
-          raw_crossing_windows:crossings.length,
-          snapshots_loaded:snapshotsLoaded,
-          calculation:"IN_MEMORY",
-          optimization:"ONLY_ACTUAL_MERGED_30M_CROSSING_WINDOWS"
-        },
-        methodology:{
-          trigger:"completed >=65 crossings only",
-          replay:"minute market_snapshots only inside each crossing +30m window",
-          tp_values_pct:tpValues,sl_values_pct:slValues,
-          round_trip_fee_pct:round(feePct,4),
-          time_exit:"directional return_30m_pct if neither sampled barrier is reached",
-          limitation:"minute sampled prices can miss intraminute TP/SL touches; research only"
-        },
-        crossings_used:crossings.length,combinations:matrix.length,
-        current_config:{tp_pct:PAPER_TP_PCT,sl_pct:PAPER_SL_PCT},
-        top_by_net_return:ranked.slice(0,10),matrix
-      });
-    }
-
-    if (url.pathname === "/crossing-65-analytics") {
-      if (!env.DB) return json({success:false,error:"D1_NOT_BOUND"},503);
-      await ensurePaperTables(env);
-
-      const totals:any=await env.DB.prepare(`SELECT COUNT(*) crossings,SUM(outcome_complete) completed_30m,AVG(return_1m_pct) avg_1m_pct,AVG(return_5m_pct) avg_5m_pct,AVG(return_15m_pct) avg_15m_pct,AVG(return_30m_pct) avg_30m_pct,AVG(mfe_pct) avg_mfe_pct,AVG(mae_pct) avg_mae_pct,SUM(CASE WHEN first_barrier='TP' THEN 1 ELSE 0 END) tp_first,SUM(CASE WHEN first_barrier='SL' THEN 1 ELSE 0 END) sl_first FROM signal_65_crossings`).first();
-
-      const byCoinSide:any=await env.DB.prepare(`SELECT coin,side,COUNT(*) crossings,SUM(outcome_complete) completed_30m,AVG(crossing_score) avg_crossing_score,AVG(return_1m_pct) avg_1m_pct,AVG(return_5m_pct) avg_5m_pct,AVG(return_15m_pct) avg_15m_pct,AVG(return_30m_pct) avg_30m_pct,AVG(mfe_pct) avg_mfe_pct,AVG(mae_pct) avg_mae_pct,SUM(CASE WHEN first_barrier='TP' THEN 1 ELSE 0 END) tp_first,SUM(CASE WHEN first_barrier='SL' THEN 1 ELSE 0 END) sl_first FROM signal_65_crossings GROUP BY coin,side ORDER BY coin,side`).all();
-
-      // V1.8.1: richer research analytics. No signal/trading logic is changed.
-      const raw:any=await env.DB.prepare(`
-        SELECT id,coin,side,crossing_score,return_1m_pct,return_5m_pct,
-               return_15m_pct,return_30m_pct,mfe_pct,mae_pct,
-               first_barrier,outcome_complete
-        FROM signal_65_crossings
-        ORDER BY crossing_ts ASC
-      `).all();
-      const rows:any[] = raw?.results ?? [];
-
-      const nums=(items:any[], field:string):number[] =>
-        items.map((r:any)=>Number(r?.[field])).filter((v:number)=>Number.isFinite(v));
-
-      const median=(values:number[]):number|null => {
-        if (!values.length) return null;
-        const a=[...values].sort((x,y)=>x-y);
-        const m=Math.floor(a.length/2);
-        return round(a.length%2 ? a[m] : (a[m-1]+a[m])/2,4);
-      };
-
-      const avg=(values:number[]):number|null =>
-        values.length ? round(values.reduce((s,v)=>s+v,0)/values.length,4) : null;
-
-      const bucket65=(score:number):string => {
-        if (score >= 80) return "80+";
-        if (score >= 75) return "75-79";
-        if (score >= 70) return "70-74";
-        return "65-69";
-      };
-
-      const completed=rows.filter((r:any)=>Number(r.outcome_complete)===1 && Number.isFinite(Number(r.return_30m_pct)));
-      const feePct=PAPER_FEE_RATE_PER_SIDE*2*100;
-
-      const strategyFor=(items:any[]) => {
-        const done=items.filter((r:any)=>Number(r.outcome_complete)===1 && Number.isFinite(Number(r.return_30m_pct)));
-        let tp=0,sl=0,timeExit=0;
-        const grossReturns:number[]=[];
-        const netReturns:number[]=[];
-        for (const r of done) {
-          let gross:number;
-          if (r.first_barrier==="TP") { gross=PAPER_TP_PCT; tp++; }
-          else if (r.first_barrier==="SL") { gross=-PAPER_SL_PCT; sl++; }
-          else { gross=Number(r.return_30m_pct); timeExit++; }
-          grossReturns.push(gross);
-          netReturns.push(gross-feePct);
-        }
-        const totalNet=netReturns.reduce((s,v)=>s+v,0);
-        return {
-          completed: done.length,
-          tp_first: tp,
-          sl_first: sl,
-          time_exit_30m: timeExit,
-          fee_pct_per_trade: round(feePct,4),
-          gross_return_sum_pct: round(grossReturns.reduce((s,v)=>s+v,0),4),
-          net_return_sum_pct: round(totalNet,4),
-          avg_net_return_pct: avg(netReturns),
-          median_net_return_pct: median(netReturns),
-          pnl_usd_at_100_notional_each: round(totalNet,4),
-          profitable_after_fees: totalNet > 0
-        };
-      };
-
-      const medianReturns={
-        return_1m_pct: median(nums(rows,"return_1m_pct")),
-        return_5m_pct: median(nums(rows,"return_5m_pct")),
-        return_15m_pct: median(nums(rows,"return_15m_pct")),
-        return_30m_pct: median(nums(rows,"return_30m_pct")),
-        mfe_pct: median(nums(rows,"mfe_pct")),
-        mae_pct: median(nums(rows,"mae_pct"))
-      };
-
-      const sides=["LONG","SHORT"].map(side=>{
-        const x=rows.filter((r:any)=>r.side===side);
-        return {
-          side,
-          crossings:x.length,
-          completed_30m:x.filter((r:any)=>Number(r.outcome_complete)===1).length,
-          avg_crossing_score:avg(nums(x,"crossing_score")),
-          avg_1m_pct:avg(nums(x,"return_1m_pct")),
-          avg_5m_pct:avg(nums(x,"return_5m_pct")),
-          avg_15m_pct:avg(nums(x,"return_15m_pct")),
-          avg_30m_pct:avg(nums(x,"return_30m_pct")),
-          median_30m_pct:median(nums(x,"return_30m_pct")),
-          avg_mfe_pct:avg(nums(x,"mfe_pct")),
-          avg_mae_pct:avg(nums(x,"mae_pct")),
-          strategy:strategyFor(x)
-        };
-      }).filter(x=>x.crossings>0);
-
-      const bucketNames=["65-69","70-74","75-79","80+"];
-      const byScoreBucket=bucketNames.map(bucket=>{
-        const x=rows.filter((r:any)=>bucket65(Number(r.crossing_score))===bucket);
-        return {
-          score_bucket:bucket,
-          crossings:x.length,
-          completed_30m:x.filter((r:any)=>Number(r.outcome_complete)===1).length,
-          avg_crossing_score:avg(nums(x,"crossing_score")),
-          avg_1m_pct:avg(nums(x,"return_1m_pct")),
-          avg_5m_pct:avg(nums(x,"return_5m_pct")),
-          avg_15m_pct:avg(nums(x,"return_15m_pct")),
-          avg_30m_pct:avg(nums(x,"return_30m_pct")),
-          median_30m_pct:median(nums(x,"return_30m_pct")),
-          avg_mfe_pct:avg(nums(x,"mfe_pct")),
-          avg_mae_pct:avg(nums(x,"mae_pct")),
-          strategy:strategyFor(x)
-        };
-      }).filter(x=>x.crossings>0);
-
-      return json({
-        success:true,
-        worker:"cryptobot",
-        version:VERSION,
-        mode:"65_CROSSING_ANALYTICS_V2",
-        trading:"REAL_TRADING_DISABLED",
-        methodology:{
-          trigger:"first observed FINAL_SCORE_ABS >= 65 inside each active episode",
-          dedup:"one crossing per episode",
-          horizons_minutes:[1,5,15,30],
-          tp_pct:PAPER_TP_PCT,
-          sl_pct:PAPER_SL_PCT,
-          fee_rate_per_side:PAPER_FEE_RATE_PER_SIDE,
-          round_trip_fee_pct:round(feePct,4),
-          strategy_exit:"TP first => +TP%; SL first => -SL%; otherwise directional 30m return; then subtract round-trip fee",
-          barrier_method:"minute snapshot approximation; not tick-level ordering",
-          historical_note:"Collection starts with V1.7; old episodes are not assigned fabricated crossing timestamps."
-        },
-        totals,
-        median_returns:medianReturns,
-        strategy_simulation:strategyFor(rows),
-        by_side:sides,
-        by_score_bucket:byScoreBucket,
-        by_coin_side:byCoinSide?.results??[]
-      });
-    }
-
-    if (url.pathname === "/episodes") {
-      if (!env.DB) {
-        return json(
-          { success: false, error: "D1_NOT_BOUND" },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-
-      const limit = Math.max(
-        1,
-        Math.min(
-          Number(url.searchParams.get("limit") ?? 50),
-          500
-        )
-      );
-
-      const result: any = await env.DB.prepare(`
-        SELECT *
-        FROM signal_episodes
-        ORDER BY start_ts DESC
-        LIMIT ?
-      `).bind(limit).all();
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "OUTCOME_RESEARCH",
-        total: result?.results?.length ?? 0,
-        episodes: result?.results ?? [],
-      });
-    }
-
-    if (url.pathname === "/episode-analytics") {
-      if (!env.DB) {
-        return json(
-          { success: false, error: "D1_NOT_BOUND" },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-
-      const byBucket: any = await env.DB.prepare(`
-        SELECT
-          start_bucket AS score_bucket,
-          side,
-          COUNT(*) AS episodes,
-          SUM(outcome_complete) AS completed_30m,
-          AVG(signal_lifetime_minutes) AS avg_signal_lifetime_minutes,
-          AVG(lifetime_return_pct) AS avg_lifetime_return_pct,
-          AVG(lifetime_mfe_pct) AS avg_lifetime_mfe_pct,
-          AVG(lifetime_mae_pct) AS avg_lifetime_mae_pct,
-          SUM(CASE WHEN lifetime_first_barrier='TP' THEN 1 ELSE 0 END) AS lifetime_tp_first,
-          SUM(CASE WHEN lifetime_first_barrier='SL' THEN 1 ELSE 0 END) AS lifetime_sl_first,
-          AVG(return_1m_pct) AS avg_1m_pct,
-          AVG(return_5m_pct) AS avg_5m_pct,
-          AVG(return_15m_pct) AS avg_15m_pct,
-          AVG(return_30m_pct) AS avg_30m_pct,
-          AVG(mfe_pct) AS avg_mfe_pct,
-          AVG(mae_pct) AS avg_mae_pct,
-          SUM(CASE WHEN first_barrier='TP' THEN 1 ELSE 0 END) AS tp_first,
-          SUM(CASE WHEN first_barrier='SL' THEN 1 ELSE 0 END) AS sl_first,
-          AVG(peak_score) AS avg_peak_score
-        FROM signal_episodes
-        GROUP BY start_bucket, side
-        ORDER BY
-          CASE start_bucket
-            WHEN '80+' THEN 1
-            WHEN '75-79' THEN 2
-            WHEN '70-74' THEN 3
-            WHEN '65-69' THEN 4
-            WHEN '60-64' THEN 5
-            WHEN '55-59' THEN 6
-            WHEN '50-54' THEN 7
-            ELSE 8
-          END,
-          side
-      `).all();
-
-      const byCoin: any = await env.DB.prepare(`
-        SELECT
-          coin,
-          side,
-          COUNT(*) AS episodes,
-          SUM(outcome_complete) AS completed_30m,
-          AVG(signal_lifetime_minutes) AS avg_signal_lifetime_minutes,
-          AVG(lifetime_return_pct) AS avg_lifetime_return_pct,
-          AVG(lifetime_mfe_pct) AS avg_lifetime_mfe_pct,
-          AVG(lifetime_mae_pct) AS avg_lifetime_mae_pct,
-          SUM(CASE WHEN lifetime_first_barrier='TP' THEN 1 ELSE 0 END) AS lifetime_tp_first,
-          SUM(CASE WHEN lifetime_first_barrier='SL' THEN 1 ELSE 0 END) AS lifetime_sl_first,
-          AVG(return_5m_pct) AS avg_5m_pct,
-          AVG(return_15m_pct) AS avg_15m_pct,
-          AVG(return_30m_pct) AS avg_30m_pct,
-          AVG(mfe_pct) AS avg_mfe_pct,
-          AVG(mae_pct) AS avg_mae_pct,
-          SUM(CASE WHEN first_barrier='TP' THEN 1 ELSE 0 END) AS tp_first,
-          SUM(CASE WHEN first_barrier='SL' THEN 1 ELSE 0 END) AS sl_first
-        FROM signal_episodes
-        GROUP BY coin, side
-        ORDER BY coin, side
-      `).all();
-
-      const totals: any = await env.DB.prepare(`
-        SELECT
-          COUNT(*) AS total_episodes,
-          SUM(CASE WHEN status='ACTIVE' THEN 1 ELSE 0 END) AS active,
-          SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) AS closed,
-          SUM(outcome_complete) AS completed_30m,
-          SUM(CASE WHEN qualifies_entry=1 THEN 1 ELSE 0 END) AS reached_65,
-          SUM(CASE WHEN lifetime_return_pct IS NOT NULL THEN 1 ELSE 0 END) AS lifetime_measured,
-          SUM(CASE WHEN lifetime_first_barrier='TP' THEN 1 ELSE 0 END) AS lifetime_tp_first,
-          SUM(CASE WHEN lifetime_first_barrier='SL' THEN 1 ELSE 0 END) AS lifetime_sl_first,
-          SUM(CASE WHEN first_barrier='TP' THEN 1 ELSE 0 END) AS tp_first,
-          SUM(CASE WHEN first_barrier='SL' THEN 1 ELSE 0 END) AS sl_first
-        FROM signal_episodes
-      `).first();
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "OUTCOME_RESEARCH",
-        trading: "REAL_TRADING_DISABLED",
-        methodology: {
-          episode_start: "FINAL_SCORE_ABS >= 50",
-          dedup:
-            "same coin + same direction remains one episode",
-          episode_end:
-            "score below 50, direction flip, or 30 minutes",
-          signal_lifetime_outcome:
-            "entry -> episode end; measures only while FINAL_SCORE_ABS stays >=50 in same direction",
-          fixed_horizon_outcome:
-            "entry -> 1/5/15/30m regardless of whether the episode has already closed",
-          horizons_minutes: [1, 5, 15, 30],
-          tp_pct: PAPER_TP_PCT,
-          sl_pct: PAPER_SL_PCT,
-          barrier_method:
-            "minute snapshot approximation; not tick-level ordering",
-        },
-        totals,
-        by_score_bucket: byBucket?.results ?? [],
-        by_coin_side: byCoin?.results ?? [],
-      });
-    }
-
-    // V1.5.2 PAPER ANALYTICS
-    if (url.pathname === "/paper-analytics") {
-      if (!env.DB) {
-        return json(
-          { success: false, error: "D1_NOT_BOUND" },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-
-      const buckets = await env.DB.prepare(`
-        SELECT
-          CASE
-            WHEN entry_score >= 80 THEN '80+'
-            WHEN entry_score >= 75 THEN '75-79'
-            WHEN entry_score >= 70 THEN '70-74'
-            WHEN entry_score >= 65 THEN '65-69'
-            ELSE '<65'
-          END AS score_bucket,
-          side,
-          COUNT(*) AS trades,
-          SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) AS closed,
-          SUM(CASE WHEN status='CLOSED' AND net_return_pct > 0 THEN 1 ELSE 0 END) AS wins,
-          AVG(CASE WHEN status='CLOSED' THEN net_return_pct END) AS avg_net_return_pct,
-          SUM(CASE WHEN status='CLOSED' THEN pnl_usd ELSE 0 END) AS pnl_usd,
-          AVG(CASE WHEN status='CLOSED' THEN mfe_pct END) AS avg_mfe_pct,
-          AVG(CASE WHEN status='CLOSED' THEN mae_pct END) AS avg_mae_pct
-        FROM paper_trades
-        GROUP BY score_bucket, side
-        ORDER BY
-          CASE score_bucket
-            WHEN '80+' THEN 1
-            WHEN '75-79' THEN 2
-            WHEN '70-74' THEN 3
-            WHEN '65-69' THEN 4
-            ELSE 5
-          END,
-          side
-      `).all();
-
-      const coins = await env.DB.prepare(`
-        SELECT
-          coin,
-          side,
-          COUNT(*) AS trades,
-          SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) AS closed,
-          SUM(CASE WHEN status='CLOSED' AND net_return_pct > 0 THEN 1 ELSE 0 END) AS wins,
-          AVG(CASE WHEN status='CLOSED' THEN net_return_pct END) AS avg_net_return_pct,
-          SUM(CASE WHEN status='CLOSED' THEN pnl_usd ELSE 0 END) AS pnl_usd,
-          AVG(CASE WHEN status='CLOSED' THEN mfe_pct END) AS avg_mfe_pct,
-          AVG(CASE WHEN status='CLOSED' THEN mae_pct END) AS avg_mae_pct
-        FROM paper_trades
-        GROUP BY coin, side
-        ORDER BY coin, side
-      `).all();
-
-      const exits = await env.DB.prepare(`
-        SELECT
-          exit_reason,
-          COUNT(*) AS trades,
-          AVG(net_return_pct) AS avg_net_return_pct,
-          SUM(pnl_usd) AS pnl_usd
-        FROM paper_trades
-        WHERE status='CLOSED'
-        GROUP BY exit_reason
-        ORDER BY trades DESC
-      `).all();
-
-      const observations = await env.DB.prepare(`
-        SELECT
-          score_bucket,
-          side,
-          COUNT(*) AS observations,
-          SUM(qualifies_entry) AS qualified
-        FROM paper_signal_observations
-        GROUP BY score_bucket, side
-        ORDER BY
-          CASE score_bucket
-            WHEN '80+' THEN 1
-            WHEN '75-79' THEN 2
-            WHEN '70-74' THEN 3
-            WHEN '65-69' THEN 4
-            WHEN '60-64' THEN 5
-            WHEN '55-59' THEN 6
-            WHEN '50-54' THEN 7
-            ELSE 8
-          END,
-          side
-      `).all();
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "PAPER_ONLY",
-        trading: "REAL_TRADING_DISABLED",
-        summary: await paperSummary(env),
-        by_score_bucket: buckets?.results ?? [],
-        by_coin_side: coins?.results ?? [],
-        by_exit_reason: exits?.results ?? [],
-        shadow_observations_50_plus:
-          observations?.results ?? [],
-        note:
-          "50-64 observations are research samples only and do not change the paper-entry threshold.",
-      });
-    }
-
-    if (url.pathname === "/paper-observations") {
-      if (!env.DB) {
-        return json(
-          { success: false, error: "D1_NOT_BOUND" },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-
-      const limit = Math.max(
-        1,
-        Math.min(
-          Number(url.searchParams.get("limit") ?? 100),
-          500
-        )
-      );
-
-      const result = await env.DB.prepare(`
-        SELECT *
-        FROM paper_signal_observations
-        ORDER BY ts DESC
-        LIMIT ?
-      `).bind(limit).all();
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "RESEARCH_OBSERVATIONS",
-        observation_min_score:
-          PAPER_OBSERVATION_MIN_SCORE,
-        paper_entry_score:
-          PAPER_ENTRY_SCORE,
-        total: result?.results?.length ?? 0,
-        observations: result?.results ?? [],
-      });
-    }
-
-    // FINAL SIGNAL -> PAPER ENTRY DIAGNOSTIC
-    if (url.pathname === "/paper-candidate") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      try {
-        const finalSignal = await buildFinalSignal(
-          coin,
-          env
-        );
-
-        const score = Math.abs(
-          Number(finalSignal.final?.signed_score ?? 0)
-        );
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          mode: "PAPER_ONLY",
-          trading: "REAL_TRADING_DISABLED",
-          coin,
-          price: finalSignal.price,
-          market: finalSignal.market,
-          news_x: finalSignal.news_x,
-          final: finalSignal.final,
-          paper_entry_check: {
-            qualifies:
-              score >= PAPER_ENTRY_SCORE &&
-              score >= PAPER_MIN_SCORE_GAP,
-            side:
-              Number(finalSignal.final?.signed_score ?? 0) >= 0
-                ? "LONG"
-                : "SHORT",
-            score: round(score),
-            required_score: PAPER_ENTRY_SCORE,
-            required_gap: PAPER_MIN_SCORE_GAP,
-            note:
-              "Diagnostic only. This HTTP endpoint never opens a paper trade.",
-          },
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "PAPER_CANDIDATE_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // PAPER TRADING — READ ONLY REPORTING
-    if (url.pathname === "/paper-trades") {
-      if (!env.DB) {
-        return json(
-          {
-            success: false,
-            error: "D1_NOT_BOUND",
-            required_binding: "DB",
-          },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-
-      const status = (
-        url.searchParams.get("status") ?? "ALL"
-      ).toUpperCase();
-
-      const coin = (
-        url.searchParams.get("coin") ?? ""
-      ).toUpperCase();
-
-      const limit = Math.max(
-        1,
-        Math.min(
-          Number(url.searchParams.get("limit") ?? 50),
-          200
-        )
-      );
-
-      let sql = `
-        SELECT *
-        FROM paper_trades
-        WHERE 1 = 1
-      `;
-      const binds: any[] = [];
-
-      if (status === "OPEN" || status === "CLOSED") {
-        sql += ` AND status = ?`;
-        binds.push(status);
-      }
-
-      if (coin && validCoin(coin)) {
-        sql += ` AND coin = ?`;
-        binds.push(coin);
-      }
-
-      sql += ` ORDER BY entry_ts DESC LIMIT ?`;
-      binds.push(limit);
-
-      const result = await env.DB.prepare(sql)
-        .bind(...binds)
-        .all();
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "PAPER_ONLY",
-        filters: {
-          status,
-          coin: coin || null,
-          limit,
-        },
-        total: result?.results?.length ?? 0,
-        trades: result?.results ?? [],
-      });
-    }
-
-    if (url.pathname === "/paper-summary") {
-      if (!env.DB) {
-        return json(
-          {
-            success: false,
-            error: "D1_NOT_BOUND",
-            required_binding: "DB",
-          },
-          503
-        );
-      }
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "PAPER_ONLY",
-        summary: await paperSummary(env),
-      });
-    }
-
-    if (url.pathname === "/paper-status") {
-      if (!env.DB) {
-        return json(
-          {
-            success: false,
-            error: "D1_NOT_BOUND",
-            required_binding: "DB",
-          },
-          503
-        );
-      }
-
-      await ensurePaperTables(env);
-
-      const open = await env.DB.prepare(`
-        SELECT *
-        FROM paper_trades
-        WHERE status = 'OPEN'
-        ORDER BY entry_ts DESC
-      `).all();
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "PAPER_ONLY",
-        trading: "REAL_TRADING_DISABLED",
-        open_trades: open?.results ?? [],
-        summary: await paperSummary(env),
-      });
-    }
-
-    // SNAPSHOT HISTORY
-    if (url.pathname === "/history") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      const minutes = Math.max(
-        1,
-        Math.min(
-          Number(url.searchParams.get("minutes") ?? 20),
-          1440
-        )
-      );
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      if (!env.DB) {
-        return json(
-          {
-            success: false,
-            error: "D1_NOT_BOUND",
-            required_binding: "DB",
-          },
-          503
-        );
-      }
-
-      const rows = await getRecentSnapshots(
-        env,
-        coin,
-        minutes,
-        500
-      );
-
-      return json({
-        success: true,
-        worker: "cryptobot",
-        version: VERSION,
-        coin,
-        minutes,
-        total: rows.length,
-        snapshots: rows,
-      });
-    }
-
-    // CURRENT HISTORY / ΔOI DIAGNOSTIC
-    if (url.pathname === "/snapshot-status") {
-      const coin = (
-        url.searchParams.get("coin") ?? "BTC"
-      ).toUpperCase();
-
-      if (!validCoin(coin)) {
-        return json(
-          {
-            success: false,
-            error: "INVALID_COIN",
-            allowed: TRACKED_COINS,
-          },
-          400
-        );
-      }
-
-      try {
-        const signal = await buildSignal(coin, env);
-
-        return json({
-          success: true,
-          worker: "cryptobot",
-          version: VERSION,
-          coin,
-          d1_bound: dbReady(env),
-          history: signal.history,
-          derivatives: {
-            open_interest:
-              signal.derivatives.open_interest,
-            open_interest_change:
-              signal.derivatives.open_interest_change,
-            open_interest_change_status:
-              signal.derivatives.open_interest_change_status,
-          },
-          market: signal.market,
-        });
-      } catch (error: any) {
-        return json(
-          {
-            success: false,
-            error: "SNAPSHOT_STATUS_FAILED",
-            message: error?.message ?? String(error),
-          },
-          500
-        );
-      }
-    }
-
-    // DEBUG
-    if (url.pathname === "/debug-hyperliquid") {
-      return json({
-        worker: "cryptobot",
-        version: VERSION,
-        mode: "READ_ONLY",
-        ...(await debugHyperliquid()),
-      });
-    }
-
-    return json(
-      {
-        success: false,
-        error: "NOT_FOUND",
-        path: url.pathname,
-      },
-      404
+  const parsed =
+    parseDfSuiEvents(
+      text
     );
-  },
 
-  async scheduled(
-    _controller: any,
-    env: Env,
-    _ctx: any
-  ): Promise<void> {
-      await updateForwardLongShadow(env);
 
-    if (!env.DB) {
-      console.log(
-        "V1.4 snapshot skipped: D1 binding DB is missing"
+  const goals =
+    parsed.events
+      .filter(
+        isConfirmedDfSuiGoal
+      )
+      .map(
+        event => {
+
+          const minuteInfo =
+            parseDfSuiMinuteInfo(
+              event?.minute
+            );
+
+          return {
+            event,
+            minute:
+              minuteInfo?.effective ??
+              null,
+            minuteInfo
+          };
+        }
+      )
+      .filter(
+        item =>
+          item.minute !== null &&
+          item.minute > entryMinute &&
+          isFirstHalfDfSuiEvent(
+            item.event,
+            item.minuteInfo
+          )
+      )
+      .sort(
+        (a, b) =>
+          a.minute -
+          b.minute
       );
+
+
+  if (
+    goals.length < 1
+  ) {
+    return null;
+  }
+
+
+  const first =
+    goals[0];
+
+
+  return {
+    minute:
+      first.minute,
+
+    minute_display:
+      first.event?.minute ??
+      null,
+
+    score:
+      first.event?.score ??
+      null,
+
+    participant:
+      first.event?.participant ??
+      null,
+
+    kind:
+      first.event?.kind ??
+      first.event?.type ??
+      "Goal"
+  };
+}
+
+
+// ============================================================
+// DF_SUI EVENT PARSER
+// ============================================================
+
+function parseDfSuiEvents(
+  text
+) {
+
+  const events = [];
+
+  const fields =
+    String(
+      text || ""
+    ).split("¬");
+
+
+  let context = {
+    section: null,
+    ia: null,
+    minute: null,
+    home_score: null,
+    away_score: null
+  };
+
+
+  let current = {};
+
+
+  function finishCurrent() {
+
+    const kind =
+      cleanDfSuiValue(
+        current.IK
+      );
+
+
+    if (!kind) {
+
+      current = {};
+
       return;
     }
 
-    await ensureSnapshotTable(env);
 
-    // V1.6.9: safe idempotent legacy cleanup. Once repaired to <=30m, a row
-    // no longer matches and will not be touched again.
-    try {
-      await repairLegacyOver30mEpisodes(env, null, 100);
-    } catch (error: any) {
-      console.log(
-        "V1.6.9 safe legacy repair failed:",
-        error?.message ?? String(error)
-      );
-    }
-
-    // Fetch news once per cron run, not once per coin.
-    // A feed failure must not stop market snapshots/paper tracking.
-    let newsData: any = null;
-
-    try {
-      newsData = await buildNewsOnly(env);
-    } catch (error: any) {
-      console.log(
-        "V1.5.1 news preload failed:",
-        error?.message ?? String(error)
-      );
-    }
-
-    const results = await Promise.allSettled(
-      TRACKED_COINS.map(async (coin) => {
-        const signal = await buildSignal(coin, env);
-        await saveSnapshot(env, signal);
-
-        const news =
-          newsData?.scores?.[coin] ??
-          {
-            coin,
-            items_considered: 0,
-            active_items: 0,
-            expired_items: 0,
-            top_items: [],
-            signed_score: 0,
-            long_score: 0,
-            short_score: 0,
-            bias: "NEUTRAL",
-            breaking_high_impact: false,
-          };
-
-        const final = combineMarketAndNews(
-          signal.market,
-          news
-        );
-
-        const finalSignal = {
-          coin,
-          price: signal.price,
-          market: signal.market,
-          news_x: news,
-          final,
-        };
-
-        // V1.6: update 1m/5m/15m/30m outcomes for
-        // previously opened independent signal episodes.
-        await updateEpisodeOutcomes(
-          env,
-          coin
-        );
-
-        // Keep raw minute observations for backward comparison.
-        const observation =
-          await recordPaperObservation(
-            env,
-            signal,
-            finalSignal
-          );
-
-        // Deduplicated signal episode engine.
-        const episode =
-          await processSignalEpisode(
-            env,
-            signal,
-            finalSignal
-          );
-
-        // >=65 primary research + separate 60-64 control cohort.
-        await update65CrossingOutcomes(env, coin);
-        await update6064CrossingOutcomes(env, coin);
-        const crossing65 = await record65Crossing(env, signal, finalSignal);
-        const crossing6064 = await record6064Crossing(env, signal, finalSignal);
-
-        // PAPER ONLY. No real order path exists here.
-        const paper = await processPaperCoin(
-          env,
-          signal,
-          finalSignal
-        );
-
-        return {
-          coin,
-          price: signal.price,
-          market_score: signal.market?.signed_score ?? 0,
-          news_score: news?.signed_score ?? 0,
-          active_news_items: news?.active_items ?? 0,
-          final_score: final?.signed_score ?? 0,
-          final_mode: final?.mode ?? null,
-          observation,
-          episode,
-          crossing65,
-          crossing6064,
-          oi: signal.derivatives?.open_interest ?? null,
-          order_flow:
-            signal.microstructure?.order_flow?.signed_score ?? 0,
-          paper,
-        };
-      })
+    events.push(
+      {
+        kind,
+        type:
+          kind,
+        minute:
+          context.minute,
+        section:
+          context.section,
+        ia:
+          context.ia,
+        participant:
+          cleanDfSuiValue(
+            current.IF
+          ),
+        participant_code:
+          cleanDfSuiValue(
+            current.IE
+          ),
+        participant_id:
+          cleanDfSuiValue(
+            current.IM
+          ),
+        participant_url:
+          cleanDfSuiValue(
+            current.IU
+          ),
+        score: {
+          home:
+            numberOrNull(
+              context.home_score
+            ),
+          away:
+            numberOrNull(
+              context.away_score
+            )
+        }
+      }
     );
+
+
+    current = {};
+  }
+
+
+  for (
+    const rawField of fields
+  ) {
+
+    if (!rawField) {
+      continue;
+    }
+
+
+    const field =
+      String(
+        rawField
+      ).replace(
+        /^~/,
+        ""
+      );
+
+
+    const i =
+      field.indexOf(
+        "÷"
+      );
+
+
+    if (
+      i === -1
+    ) {
+      continue;
+    }
+
+
+    const key =
+      field
+        .slice(
+          0,
+          i
+        )
+        .trim();
+
+
+    const value =
+      field.slice(
+        i + 1
+      );
+
+
+    if (
+      key === "AC"
+    ) {
+
+      if (current.IK) {
+        finishCurrent();
+      }
+
+      context.section =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IA"
+    ) {
+
+      if (current.IK) {
+        finishCurrent();
+      }
+
+      context.ia =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IB"
+    ) {
+
+      if (current.IK) {
+        finishCurrent();
+      }
+
+      context.minute =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "INX"
+    ) {
+
+      context.home_score =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IOX"
+    ) {
+
+      context.away_score =
+        cleanDfSuiValue(
+          value
+        );
+
+      continue;
+    }
+
+
+    if (
+      key === "IE" &&
+      current.IK
+    ) {
+
+      finishCurrent();
+    }
+
+
+    if (
+      key === "IE" ||
+      key === "IF" ||
+      key === "IU" ||
+      key === "ICT" ||
+      key === "IK" ||
+      key === "IM"
+    ) {
+
+      current[
+        key
+      ] =
+        value;
+    }
+  }
+
+
+  if (
+    current.IK
+  ) {
+
+    finishCurrent();
+  }
+
+
+  return {
+    events
+  };
+}
+
+
+// ============================================================
+// DF_SUI GOAL FILTER
+// ============================================================
+
+function isConfirmedDfSuiGoal(
+  event
+) {
+
+  const kind =
+    String(
+      event?.kind ||
+      event?.type ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+  if (!kind) {
+    return false;
+  }
+
+
+  if (
+    kind.includes(
+      "disallowed"
+    ) ||
+    kind.includes(
+      "cancelled"
+    ) ||
+    kind.includes(
+      "canceled"
+    ) ||
+    kind.includes(
+      "var overturn"
+    )
+  ) {
+
+    return false;
+  }
+
+
+  return (
+    kind === "goal" ||
+    kind === "own goal" ||
+    kind === "penalty goal"
+  );
+}
+
+
+// ============================================================
+// DF_SUI MINUTE PARSER
+// Examples: 32' => 32, 45+2' => 47
+// ============================================================
+
+function parseDfSuiMinuteInfo(
+  value
+) {
+
+  const raw =
+    String(
+      value ?? ""
+    ).trim();
+
+  const text =
+    raw.replace(
+      /['’"]/g,
+      ""
+    );
+
+  if (!text) {
+    return null;
+  }
+
+  const plus =
+    text.match(
+      /^(\d+)\s*\+\s*(\d+)$/
+    );
+
+  if (plus) {
+
+    const base =
+      Number(plus[1]);
+
+    const added =
+      Number(plus[2]);
+
+    if (
+      Number.isFinite(base) &&
+      Number.isFinite(added)
+    ) {
+      return {
+        raw,
+        base,
+        added,
+        effective:
+          base + added,
+        stoppage: true
+      };
+    }
+  }
+
+  const direct =
+    Number(
+      text.match(/\d+/)?.[0]
+    );
+
+  if (!Number.isFinite(direct)) {
+    return null;
+  }
+
+  return {
+    raw,
+    base: direct,
+    added: 0,
+    effective: direct,
+    stoppage: false
+  };
+}
+
+
+function isFirstHalfDfSuiEvent(
+  event,
+  minuteInfo
+) {
+
+  if (!minuteInfo) {
+    return false;
+  }
+
+  const sectionText =
+    [
+      event?.section,
+      event?.ia
+    ]
+      .map(
+        value =>
+          String(value ?? "")
+            .trim()
+            .toUpperCase()
+      )
+      .filter(Boolean)
+      .join(" ");
+
+  // Explicit second-half context always wins.
+  if (
+    /(^|\s)(2H|2ND HALF|SECOND HALF|2P)(\s|$)/.test(
+      sectionText
+    )
+  ) {
+    return false;
+  }
+
+  // V6.7.10.5:
+  // Explicit FIRST-HALF context is stronger than the raw displayed
+  // minute. Some feeds can expose stoppage as direct 46/47/etc
+  // instead of 45+N. Accept it only when the event context itself
+  // explicitly says first half.
+  const explicitFirstHalf =
+    /(^|\s)(1H|1ST HALF|FIRST HALF|1P)(\s|$)/.test(
+      sectionText
+    );
+
+  if (
+    explicitFirstHalf &&
+    minuteInfo.effective <= 60
+  ) {
+    return true;
+  }
+
+  // Flashscore-style 45+N is first-half stoppage time.
+  if (
+    minuteInfo.stoppage === true &&
+    minuteInfo.base === 45
+  ) {
+    return true;
+  }
+
+  // Normal first-half clock.
+  if (
+    minuteInfo.stoppage === false &&
+    minuteInfo.effective <= 45
+  ) {
+    return true;
+  }
+
+  // A direct 46/47/50 is intentionally NOT treated as 1H.
+  // This prevents 2H events from becoming false 1H GOAL HITs.
+  return false;
+}
+
+
+function parseDfSuiMinute(
+  value
+) {
+
+  return (
+    parseDfSuiMinuteInfo(
+      value
+    )?.effective ??
+    null
+  );
+}
+
+
+function cleanDfSuiValue(
+  value
+) {
+
+  const text =
+    String(
+      value ??
+      ""
+    ).trim();
+
+
+  return text || null;
+}
+
+
+// ============================================================
+// SECOND HALF DETECTION
+// ============================================================
+
+function isSecondHalfStarted(m) {
+
+  const values = [
+    m?.period,
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state,
+    m?.phase
+  ];
+
+  for (
+    const value of values
+  ) {
+
+    if (
+      hasSecondHalfValue(
+        value
+      )
+    ) {
+      return true;
+    }
+  }
+
+
+  const nestedValues = [
+    m?.period?.type,
+    m?.period?.name,
+    m?.period?.short,
+    m?.period?.long,
+    m?.status?.type,
+    m?.status?.name,
+    m?.status?.short,
+    m?.status?.long,
+    m?.match_status?.type,
+    m?.match_status?.name,
+    m?.match_status?.short,
+    m?.match_status?.long,
+    m?.state?.type,
+    m?.state?.name,
+    m?.state?.short,
+    m?.state?.long,
+    m?.phase?.type,
+    m?.phase?.name,
+    m?.phase?.short,
+    m?.phase?.long
+  ];
+
+
+  for (
+    const value of nestedValues
+  ) {
+
+    if (
+      hasSecondHalfValue(
+        value
+      )
+    ) {
+      return true;
+    }
+  }
+
+
+  return false;
+}
+
+
+function hasSecondHalfValue(
+  value
+) {
+
+  const text =
+    String(
+      value || ""
+    )
+      .toUpperCase()
+      .trim();
+
+  if (!text)
+    return false;
+
+
+  return (
+    text === "2H" ||
+    text === "2ND HALF" ||
+    text === "2ND HALF." ||
+    text === "SECOND" ||
+    text === "SECOND HALF" ||
+    text === "SECOND-HALF" ||
+    text === "SECOND_HALF" ||
+    text === "2ND_HALF" ||
+    text === "2H STARTED" ||
+    text === "SECOND HALF STARTED" ||
+    text.includes(
+      "SECOND HALF"
+    ) ||
+    text.includes(
+      "2ND HALF"
+    )
+  );
+}
+
+
+// ============================================================
+// REAL GOAL MINUTE
+// ============================================================
+
+function getRealGoalMinute(
+  m,
+  entryHome,
+  entryAway,
+  entryMinute,
+  currentMinute
+) {
+
+  const candidates = [];
+
+
+  if (
+    Array.isArray(
+      m?.goals
+    )
+  ) {
+    candidates.push(
+      ...m.goals
+    );
+  }
+
+
+  if (
+    Array.isArray(
+      m?.events
+    )
+  ) {
+    candidates.push(
+      ...m.events
+    );
+  }
+
+
+  if (
+    Array.isArray(
+      m?.incidents
+    )
+  ) {
+    candidates.push(
+      ...m.incidents
+    );
+  }
+
+
+  if (
+    Array.isArray(
+      m?.goal_events
+    )
+  ) {
+    candidates.push(
+      ...m.goal_events
+    );
+  }
+
+
+  const validGoals = [];
+
+
+  for (
+    const event of candidates
+  ) {
+
+    if (
+      !event ||
+      typeof event !==
+        "object"
+    ) {
+      continue;
+    }
+
+
+    if (
+      !isGoalEvent(event)
+    )
+      continue;
+
+
+    const minute =
+      extractEventMinute(
+        event
+      );
+
+
+    if (
+      minute === null
+    )
+      continue;
+
+
+    if (
+      minute <= 0 ||
+      minute > 130
+    ) {
+      continue;
+    }
+
+
+    if (
+      minute <= entryMinute
+    ) {
+      continue;
+    }
+
+
+    validGoals.push(
+      minute
+    );
+  }
+
+
+  if (
+    validGoals.length > 0
+  ) {
+
+    validGoals.sort(
+      (a, b) =>
+        a - b
+    );
+
+    return validGoals[0];
+  }
+
+
+  if (
+    currentMinute >
+      entryMinute &&
+    currentMinute <= 45
+  ) {
+
+    return currentMinute;
+  }
+
+
+  return null;
+}
+
+
+function isGoalEvent(event) {
+
+  const values = [
+    event?.type,
+    event?.event_type,
+    event?.incident_type,
+    event?.incidentType,
+    event?.kind,
+    event?.name,
+    event?.description,
+    event?.action,
+    event?.incident,
+    event?.event
+  ];
+
+
+  for (
+    const value of values
+  ) {
+
+    const text =
+      String(
+        value || ""
+      )
+        .toLowerCase()
+        .trim();
+
+
+    if (
+      text === "goal" ||
+      text === "goals" ||
+      text.includes(
+        "goal"
+      )
+    ) {
+      return true;
+    }
+  }
+
+
+  if (
+    event?.is_goal === true ||
+    event?.isGoal === true ||
+    event?.goal === true
+  ) {
+    return true;
+  }
+
+
+  return false;
+}
+
+
+function extractEventMinute(
+  event
+) {
+
+  const values = [
+    event?.minute,
+    event?.minute_display,
+    event?.minuteDisplay,
+    event?.match_minute,
+    event?.incident_minute,
+    event?.time_minute
+  ];
+
+
+  for (
+    const value of values
+  ) {
+
+    const minute =
+      parseMinuteValue(
+        value
+      );
+
+
+    if (
+      minute !== null
+    )
+      return minute;
+  }
+
+
+  const directTime =
+    parseMinuteValue(
+      event?.time
+    );
+
+
+  if (
+    directTime !== null
+  ) {
+    return directTime;
+  }
+
+
+  const nested = [
+    event?.time,
+    event?.match_time,
+    event?.clock
+  ];
+
+
+  for (
+    const value of nested
+  ) {
+
+    if (
+      !value ||
+      typeof value !==
+        "object"
+    ) {
+      continue;
+    }
+
+
+    const minute =
+      parseMinuteValue(
+        value?.minute ??
+        value?.display ??
+        value?.value
+      );
+
+
+    if (
+      minute !== null
+    ) {
+      return minute;
+    }
+  }
+
+
+  return null;
+}
+
+
+function parseMinuteValue(
+  value
+) {
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return null;
+  }
+
+
+  if (
+    typeof value ===
+      "number"
+  ) {
+
+    return Number.isFinite(
+      value
+    )
+      ? Math.floor(
+          value
+        )
+      : null;
+  }
+
+
+  const text =
+    String(
+      value
+    ).trim();
+
+
+  if (!text)
+    return null;
+
+
+  const apostrophe =
+    text.match(
+      /^(\d{1,3})\s*['′]/
+    );
+
+
+  if (
+    apostrophe
+  ) {
+    return Number(
+      apostrophe[1]
+    );
+  }
+
+
+  const clock =
+    text.match(
+      /^(\d{1,3}):(\d{1,2})/
+    );
+
+
+  if (
+    clock
+  ) {
+    return Number(
+      clock[1]
+    );
+  }
+
+
+  const added =
+    text.match(
+      /^(\d{1,3})\s*\+\s*(\d{1,2})/
+    );
+
+
+  if (
+    added
+  ) {
+
+    return (
+      Number(
+        added[1]
+      ) +
+      Number(
+        added[2]
+      )
+    );
+  }
+
+
+  const plain =
+    text.match(
+      /^(\d{1,3})$/
+    );
+
+
+  if (
+    plain
+  ) {
+    return Number(
+      plain[1]
+    );
+  }
+
+
+  return null;
+}
+
+
+// ============================================================
+// LIVE PERIOD — /entries V6.7.2
+// ============================================================
+
+function normalizeLivePeriod(
+  m
+) {
+
+  const values = [
+    m?.period,
+    m?.phase,
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state
+  ];
+
+  for (
+    const value of values
+  ) {
+
+    const text =
+      String(
+        value ?? ""
+      )
+        .trim()
+        .toUpperCase();
+
+    if (!text)
+      continue;
+
+    if (
+      text === "1H" ||
+      text === "1ST HALF" ||
+      text === "FIRST HALF" ||
+      text === "1P"
+    ) {
+      return "1H";
+    }
+
+    if (
+      text === "HT" ||
+      text === "HALFTIME" ||
+      text === "HALF TIME" ||
+      text === "HALF-TIME"
+    ) {
+      return "HT";
+    }
+
+    if (
+      text === "2H" ||
+      text === "2ND HALF" ||
+      text === "SECOND HALF" ||
+      text === "2P"
+    ) {
+      return "2H";
+    }
+
+    if (
+      text === "FT" ||
+      text === "FINISHED" ||
+      text === "FULL TIME" ||
+      text === "FULL-TIME"
+    ) {
+      return "FT";
+    }
+  }
+
+  return null;
+}
+
+
+// ============================================================
+// FIRST HALF FINISHED
+// ============================================================
+
+function isFirstHalfFinished(m) {
+
+  const values = [
+    m?.status,
+    m?.status_type,
+    m?.match_status,
+    m?.state,
+    m?.phase,
+    m?.period
+  ];
+
+
+  for (
+    const value of values
+  ) {
+
+    if (
+      hasHalfTimeValue(
+        value
+      )
+    ) {
+      return true;
+    }
+  }
+
+
+  const nestedValues = [
+    m?.status?.type,
+    m?.status?.name,
+    m?.status?.short,
+    m?.status?.long,
+    m?.match_status?.type,
+    m?.match_status?.name,
+    m?.match_status?.short,
+    m?.match_status?.long,
+    m?.state?.type,
+    m?.state?.name,
+    m?.state?.short,
+    m?.state?.long
+  ];
+
+
+  for (
+    const value of nestedValues
+  ) {
+
+    if (
+      hasHalfTimeValue(
+        value
+      )
+    ) {
+      return true;
+    }
+  }
+
+
+  return false;
+}
+
+
+function hasHalfTimeValue(
+  value
+) {
+
+  const text =
+    String(
+      value || ""
+    )
+      .toUpperCase()
+      .trim();
+
+
+  return (
+    text === "HT" ||
+    text === "HALFTIME" ||
+    text === "HALF TIME" ||
+    text === "HALF-TIME" ||
+    text === "1H FINISHED" ||
+    text === "FIRST HALF FINISHED" ||
+    text === "END OF FIRST HALF" ||
+    text === "END OF 1H" ||
+    text === "1H END"
+  );
+}
+
+
+// ============================================================
+// CLOUDBET ODDS — HUNTER ENTRY
+// MATCHER V7.3.1 FAST_HUNTER
+//
+// Matcher already reads Cloudbet directly.
+// Tracker only consumes secure match + exact odds.
+//
+// BEST EFFORT:
+// Any failure returns null.
+// Hunter ENTRY is NEVER blocked.
+// ============================================================
+
+async function getCloudbetOddsForHunter(
+  env,
+  m,
+  hunterScore
+) {
+
+  if (!env.MATCHER) {
+    return {
+      success: false,
+      matcher_reason: "MATCHER_BINDING_MISSING",
+      matcher_attempts: 0,
+      event_id: null
+    };
+  }
+
+  const split = splitHunterMatchName(m?.match || m?.name || "");
+  const home = String(
+    m?.home ?? m?.homeTeam ?? m?.home_name ?? m?.home?.name ?? split.home ?? ""
+  ).trim();
+  const away = String(
+    m?.away ?? m?.awayTeam ?? m?.away_name ?? m?.away?.name ?? split.away ?? ""
+  ).trim();
+
+  if (!home || !away) {
+    return {
+      success: false,
+      matcher_reason: "HUNTER_TEAMS_MISSING",
+      matcher_attempts: 0,
+      event_id: null
+    };
+  }
+
+  const hunterSignal = [{
+    type: "HUNTER_ENTRY",
+    signal: "HUNTER_ENTRY",
+    match: m?.match ?? `${home} - ${away}`,
+    match_id: m?.id ?? null,
+    home,
+    away,
+    league: m?.league ?? m?.tournament ?? m?.competition ?? null,
+    competition: m?.competition ?? m?.league ?? m?.tournament ?? null,
+    country: m?.country ?? null,
+    entry_minute: Number(m?.minute ?? 0),
+    current_minute: Number(m?.minute ?? 0),
+    hunter_score: hunterScore
+  }];
+
+  const matcherPath =
+    "/match?threshold=0.45&signals=" +
+    encodeURIComponent(JSON.stringify(hunterSignal));
+
+  let lastDiagnostic = {
+    success: false,
+    event_id: null,
+    matcher_reason: "MATCHER_NO_RESULT",
+    matcher_attempts: 0,
+    classification: null,
+    match_mode: null,
+    cloudbet_minute: null,
+    minute_difference: null,
+    candidate_evaluations: null,
+    minute_candidates: null,
+    best_candidate: null
+  };
+
+  for (let attempt = 1; attempt <= MATCHER_ENTRY_ATTEMPTS; attempt++) {
+    try {
+      const matcherResponse = await env.MATCHER.fetch(
+        new Request("https://matcher.internal" + matcherPath, {
+          method: "GET",
+          headers: { "Accept": "application/json" }
+        })
+      );
+
+      if (!matcherResponse.ok) {
+        const text = await matcherResponse.text();
+        lastDiagnostic = {
+          ...lastDiagnostic,
+          matcher_reason: "MATCHER_HTTP_" + matcherResponse.status,
+          matcher_attempts: attempt,
+          matcher_error: text.substring(0, 160)
+        };
+      } else {
+        const matcherData = await matcherResponse.json();
+        const hunterResults = Array.isArray(matcherData?.hunter_results)
+          ? matcherData.hunter_results
+          : [];
+        const result = hunterResults.find(item =>
+          String(item?.signal?.match_id ?? "") === String(m?.id ?? "")
+        ) ?? hunterResults[0] ?? null;
+
+        const diagnostics = result?.diagnostics ?? matcherData?.diagnostics ?? {};
+        const scoring = result?.matcher_scoring ?? {};
+
+        lastDiagnostic = {
+          success: false,
+          event_id: result?.cloudbet?.event_id ?? result?.cloudbet?.id ?? null,
+          matcher_reason:
+            result?.reason ??
+            matcherData?.reason ??
+            (matcherData?.success === true ? "MATCHER_NO_SECURE_MATCH" : "MATCHER_SUCCESS_FALSE"),
+          matcher_attempts: attempt,
+          classification: result?.classification ?? null,
+          match_mode: result?.matchMode ?? result?.match_mode ?? null,
+          cloudbet_minute:
+            diagnostics?.cloudbet_minute ?? result?.cloudbet?.minute ?? null,
+          minute_difference:
+            diagnostics?.minute_difference ?? null,
+          candidate_evaluations:
+            diagnostics?.candidate_evaluations ?? null,
+          minute_candidates:
+            diagnostics?.minute_candidates ?? null,
+          best_candidate:
+            diagnostics?.best_candidate ?? diagnostics?.best ?? null,
+          matcher_score: numberOrNull(scoring?.total),
+          home_score: numberOrNull(scoring?.home_score),
+          away_score: numberOrNull(scoring?.away_score)
+        };
+
+        const secure =
+          matcherData?.success === true &&
+          result?.status === "MATCH" &&
+          result?.classification === "CONFIDENT_MATCH" &&
+          result?.security?.secure_match === true &&
+          lastDiagnostic.event_id !== null;
+
+        if (secure) {
+          const odds = result?.odds ?? null;
+          const rawPrice = numberOrNull(odds?.price ?? odds?.raw_price);
+          const selectionStatus = String(
+            odds?.selection_status ?? odds?.status ?? ""
+          ).trim().toUpperCase();
+          const oddsAvailable =
+            odds?.available === true &&
+            rawPrice !== null && rawPrice > 1 &&
+            (!selectionStatus || selectionStatus === "SELECTION_ENABLED");
+
+          return {
+            ...lastDiagnostic,
+            success: true,
+            matcher_reason: result?.reason ?? "CONFIDENT_MATCH",
+            match: result?.cloudbet?.match ?? null,
+            cloudbet_status: result?.cloudbet?.status ?? null,
+            price: oddsAvailable ? rawPrice : null,
+            odds_available: oddsAvailable,
+            selection_status: selectionStatus || null,
+            max_stake: oddsAvailable ? numberOrNull(odds?.max_stake ?? odds?.maxStake) : null,
+            min_stake: oddsAvailable ? numberOrNull(odds?.min_stake ?? odds?.minStake) : null,
+            probability: oddsAvailable ? numberOrNull(odds?.probability) : null,
+            market_url: odds?.market_url ?? odds?.marketUrl ??
+              "soccer.total_goals_period_first_half/over?total=0.5",
+            secure_match: true
+          };
+        }
+      }
+    } catch (error) {
+      lastDiagnostic = {
+        ...lastDiagnostic,
+        matcher_reason: "MATCHER_EXCEPTION",
+        matcher_attempts: attempt,
+        matcher_error: error?.message || String(error)
+      };
+    }
+
+    // Retry only after a failed strict lookup. No thresholds/names are relaxed.
+    if (attempt < MATCHER_ENTRY_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, MATCHER_RETRY_DELAY_MS));
+    }
+  }
+
+  console.log(
+    "CLOUDBET MATCHER UNMATCHED",
+    m?.match || "",
+    lastDiagnostic.matcher_reason,
+    "attempts=" + lastDiagnostic.matcher_attempts
+  );
+
+  return lastDiagnostic;
+}
+
+
+// ============================================================
+// V6.7.9.2 — AI MATCHER PARALLEL RESCUE
+// ============================================================
+function buildAiHunterPayload(m, hunterScore) {
+  const rawMatch = m?.match || m?.name || "";
+  const split = splitHunterMatchName(rawMatch);
+  const home = String(m?.home ?? m?.homeTeam ?? m?.home_name ?? m?.home?.name ?? split.home ?? "").trim();
+  const away = String(m?.away ?? m?.awayTeam ?? m?.away_name ?? m?.away?.name ?? split.away ?? "").trim();
+  return {
+    type: "HUNTER_ENTRY", signal: "HUNTER_ENTRY", match_id: m?.id ?? null,
+    match: rawMatch || `${home} - ${away}`, match_name: rawMatch || `${home} - ${away}`,
+    home, away,
+    competition: m?.competition ?? m?.league ?? m?.tournament ?? null,
+    league: m?.league ?? m?.tournament ?? m?.competition ?? null,
+    country: m?.country ?? null,
+    entry_minute: numberOrNull(m?.minute), current_minute: numberOrNull(m?.minute),
+    hunter_score: numberOrNull(hunterScore),
+    score: { home: numberOrNull(m?.score?.home) ?? 0, away: numberOrNull(m?.score?.away) ?? 0 },
+    resolve_mode: "FALLBACK_SEARCH"
+  };
+}
+
+async function getAiMatchForHunter(env, m, hunterScore) {
+  if (!env.AI_MATCHER) return { success:false, accepted:false, event_id:null, confidence:null, reason:"AI_MATCHER_BINDING_MISSING", source:"AI" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await env.AI_MATCHER.fetch(new Request("https://ai-matcher.internal/resolve", {
+      method:"POST", headers:{"content-type":"application/json","accept":"application/json"},
+      body:JSON.stringify(buildAiHunterPayload(m,hunterScore)), signal:controller.signal
+    }));
+    const rawText = await response.text();
+    let data = null;
+    try { data = rawText ? JSON.parse(rawText) : null; }
+    catch { return { success:false, accepted:false, event_id:null, confidence:null, reason:"AI_MATCHER_INVALID_JSON", source:"AI" }; }
+    if (!response.ok || data?.success !== true) return { success:false, accepted:false, event_id:null, confidence:null, reason:data?.error || `AI_MATCHER_HTTP_${response.status}`, source:"AI" };
+    const result = data?.result ?? {};
+    const rawId = result?.event_id ?? result?.candidate?.event_id ?? result?.candidate?.id ?? null;
+    const eventId = rawId == null || String(rawId).trim()==="" ? null : String(rawId).trim();
+    const confidence = numberOrNull(result?.confidence);
+    const categoryGuardOk = result?.category_guard?.ok === true;
+    const accepted = result?.accepted === true && eventId !== null && confidence !== null && confidence >= 0.90 && categoryGuardOk;
+    return {
+      success:accepted, accepted, event_id:accepted ? eventId : null,
+      match:accepted ? (result?.cloudbet_match ?? result?.candidate?.match ?? null) : null,
+      confidence, category_guard_ok:categoryGuardOk,
+      reason:accepted ? (result?.reason || "AI_MATCH_ACCEPTED") :
+        (confidence !== null && confidence < 0.90 ? "AI_CONFIDENCE_BELOW_090" :
+        (!categoryGuardOk ? "AI_CATEGORY_GUARD_FAILED" : (result?.reason || "AI_MATCH_NOT_ACCEPTED"))),
+      source:"AI"
+    };
+  } catch(error) {
+    return { success:false, accepted:false, event_id:null, confidence:null,
+      reason:error?.name === "AbortError" ? "AI_MATCHER_TIMEOUT" : "AI_MATCHER_EXCEPTION",
+      error:error?.message || String(error), source:"AI" };
+  } finally { clearTimeout(timeout); }
+}
+
+function aiMatchToCloudbetResult(ai) {
+  if (ai?.success !== true || ai?.accepted !== true || !ai?.event_id || numberOrNull(ai?.confidence) === null || Number(ai?.confidence) < 0.90 || ai?.category_guard_ok !== true) {
+    return { success:false, event_id:null, match:null, matcher_reason:ai?.reason || "AI_NO_MATCH", matcher_attempts:0, matcher_score:null, match_source:"AI", ai_confidence:numberOrNull(ai?.confidence), secure_match:false };
+  }
+  return {
+    success:true, event_id:String(ai.event_id), match:ai?.match ?? null,
+    matcher_reason:ai?.reason || "AI_MATCHED", matcher_attempts:0,
+    matcher_score:numberOrNull(ai?.confidence), secure_match:true, match_source:"AI",
+    ai_confidence:numberOrNull(ai?.confidence), price:null, odds_available:false,
+    max_stake:null, min_stake:null, probability:null, selection_status:null,
+    market_url:"soccer.total_goals_period_first_half/over?total=0.5"
+  };
+}
+
+async function resolveParallelMatchForHunter(env, m, hunterScore) {
+  // BOTH start before either is awaited.
+  const mechanicalPromise = getCloudbetOddsForHunter(env,m,hunterScore);
+  const aiPromise = getAiMatchForHunter(env,m,hunterScore);
+  let mechanical;
+  try { mechanical = await mechanicalPromise; }
+  catch(error) { mechanical={success:false,event_id:null,matcher_reason:"MATCHER_EXCEPTION",matcher_attempts:0,matcher_error:error?.message||String(error)}; }
+  if (mechanical?.success === true && mechanical?.event_id) {
+    return {...mechanical,match_source:"MECHANICAL",ai_started_in_parallel:true};
+  }
+  let ai;
+  try { ai = await aiPromise; }
+  catch(error) { ai={success:false,accepted:false,event_id:null,confidence:null,reason:"AI_MATCHER_EXCEPTION",error:error?.message||String(error)}; }
+  if (ai?.success === true && ai?.accepted === true && ai?.event_id) {
+    return {...aiMatchToCloudbetResult(ai),mechanical_reason:mechanical?.matcher_reason??"MATCHER_NO_MATCH",mechanical_attempts:mechanical?.matcher_attempts??0,ai_started_in_parallel:true};
+  }
+  return {
+    success:false,event_id:null,match:null,
+    matcher_reason:ai?.reason ?? mechanical?.matcher_reason ?? "MATCHERS_NO_MATCH",
+    matcher_attempts:mechanical?.matcher_attempts??0,
+    mechanical_reason:mechanical?.matcher_reason??null,ai_reason:ai?.reason??null,
+    ai_confidence:numberOrNull(ai?.confidence),secure_match:false,match_source:"UNMATCHED",ai_started_in_parallel:true
+  };
+}
+
+// ============================================================
+// MATCH NAME SPLIT FOR MATCHER
+// ============================================================
+
+function splitHunterMatchName(
+  value
+) {
+
+  const text =
+    String(
+      value || ""
+    ).trim();
+
+
+  if (!text) {
+
+    return {
+      home: null,
+      away: null
+    };
+  }
+
+
+  const separators = [
+    " - ",
+    " v ",
+    " vs ",
+    " VS ",
+    " @ "
+  ];
+
+
+  for (
+    const separator of
+      separators
+  ) {
+
+    const index =
+      text.indexOf(
+        separator
+      );
+
+
+    if (
+      index >= 0
+    ) {
+
+      return {
+        home:
+          text
+            .slice(
+              0,
+              index
+            )
+            .trim(),
+
+        away:
+          text
+            .slice(
+              index +
+              separator.length
+            )
+            .trim()
+      };
+    }
+  }
+
+
+  return {
+    home: null,
+    away: null
+  };
+}
+
+
+// ============================================================
+// BET WORKER PREFLIGHT — TELEGRAM ONLY
+//
+// Bet Worker V7.3.1 remains the ONLY authority for BET READY.
+// Tracker does NOT duplicate:
+// - current market / selection verification
+// - current odds refresh
+// - account authentication
+// - balance
+// - min/max stake
+//
+// IMPORTANT:
+// This is READ/DRY-RUN preflight only.
+// It NEVER places a real wager.
+// Any failure returns NOT READY and never blocks Hunter ENTRY.
+// ============================================================
+
+async function getBetReadyForHunter(
+  env,
+  m,
+  cloudbet
+) {
+
+  const eventId =
+    cloudbet?.event_id ??
+    null;
+
+
+  if (!env.BET_WORKER) {
+
+    return {
+      checked: false,
+      ready: false,
+      reason:
+        "BET_WORKER_BINDING_MISSING",
+      action:
+        "NOT_CHECKED",
+      current_odds:
+        null,
+      max_stake:
+        null,
+      account_balance:
+        null
+    };
+  }
+
+
+  try {
+
+    // V6.7.6:
+//
+// 1. DAILY REPORT: OPEN count
+// 2. DAILY REPORT: average real Cloudbet ENTRY odds
+// 3. DAILY REPORT: break-even odds
+// 4. DAILY REPORT: exact P/L from each resolved signal with known entry_odds
+// 5. DAILY REPORT: ROI based only on resolved signals with known entry_odds
+// 6. Minute groups include OPEN / Avg odds / Break-even / P/L / ROI
+// 7. Missing odds are excluded from financial P/L/ROI, never invented
+// 8. Hunter / Matcher / Bet Worker / tracking logic unchanged
+//
+// V6.7.5:
+//
+    // Send THIS exact matched event directly to Bet Worker.
+    // No general /run and no search through ready/pending/skipped arrays.
+    const rawMatch =
+      m?.match ??
+      m?.name ??
+      null;
+
+    const split =
+      splitHunterMatchName(
+        rawMatch
+      );
+
+    const oldMatcherEventId =
+      eventId === null ||
+      eventId === undefined ||
+      String(eventId).trim() === ""
+        ? null
+        : String(eventId);
+
+    const oldMatcherSecure =
+      cloudbet?.success === true &&
+      oldMatcherEventId !== null;
+
+    const payload = {
+      event_id:
+        oldMatcherEventId,
+
+      // V6.7.8 — synchronize deterministic matcher with AI matcher.
+      // A secure old-matcher event becomes an identity lock.
+      matcher_sync: {
+        old_matcher_event_id:
+          oldMatcherEventId,
+        old_matcher_locked:
+          oldMatcherSecure,
+        old_matcher_score:
+          numberOrNull(
+            cloudbet?.matcher_score
+          ),
+        ai_mode:
+          oldMatcherSecure
+            ? "VERIFY_LOCKED_EVENT"
+            : "FALLBACK_SEARCH"
+      },
+
+      match_id:
+        m?.id ??
+        m?.match_id ??
+        null,
+
+      match:
+        rawMatch,
+
+      match_name:
+        rawMatch,
+
+      home:
+        m?.home ??
+        split.home ??
+        null,
+
+      away:
+        m?.away ??
+        split.away ??
+        null,
+
+      competition:
+        m?.league ??
+        m?.tournament ??
+        m?.competition ??
+        null,
+
+      league:
+        m?.league ??
+        m?.tournament ??
+        m?.competition ??
+        null,
+
+      entry_minute:
+        numberOrNull(
+          m?.minute
+        ),
+
+      hunter_score:
+        numberOrNull(
+          m?.goal_signal?.score ??
+          m?.hunter_score
+        ),
+
+      entry_odds:
+        numberOrNull(
+          cloudbet?.entry_odds
+        ),
+
+      max_stake:
+        numberOrNull(
+          cloudbet?.max_stake
+        ),
+
+      matcher_score:
+        numberOrNull(
+          cloudbet?.matcher_score
+        )
+    };
+
+
+    const response =
+      await env.BET_WORKER.fetch(
+        new Request(
+          "https://bet-worker.internal/preflight",
+          {
+            method:
+              "POST",
+
+            headers: {
+              "Accept":
+                "application/json",
+
+              "Content-Type":
+                "application/json"
+            },
+
+            body:
+              JSON.stringify(
+                payload
+              )
+          }
+        )
+      );
+
+
+    if (!response.ok) {
+
+      const responseText =
+        await response.text();
+
+      return {
+        checked: false,
+        ready: false,
+        reason:
+          "BET_WORKER_HTTP_" +
+          response.status +
+          (
+            responseText
+              ? " | " +
+                responseText.substring(
+                  0,
+                  160
+                )
+              : ""
+          ),
+        action:
+          "ERROR",
+        current_odds:
+          null,
+        max_stake:
+          null,
+        account_balance:
+          null
+      };
+    }
+
+
+    const data =
+      await response.json();
+
+
+    if (
+      data?.success !== true
+    ) {
+
+      return {
+        checked:
+          true,
+
+        ready:
+          false,
+
+        reason:
+          data?.reason ??
+          data?.error ??
+          "BET_WORKER_SUCCESS_FALSE",
+
+        action:
+          data?.action ??
+          "ERROR",
+
+        current_odds:
+          numberOrNull(
+            data?.current_odds
+          ),
+
+        max_stake:
+          numberOrNull(
+            data?.max_stake
+          ),
+
+        account_balance:
+          numberOrNull(
+            data?.account_balance ??
+            data?.account?.balance
+          ),
+
+        event_id:
+          data?.event_id ??
+          null,
+
+        cloudbet_match:
+          data?.ai_match?.cloudbet_match ??
+          null,
+
+        ai_confidence:
+          numberOrNull(
+            data?.ai_match?.confidence
+          )
+      };
+    }
+
+
+    return {
+      checked:
+        true,
+
+      ready:
+        data?.ready ===
+          true,
+
+      reason:
+        data?.reason ??
+        (
+          data?.ready === true
+            ? "ALL_PREFLIGHT_CHECKS_PASSED"
+            : "PREFLIGHT_NOT_READY"
+        ),
+
+      action:
+        data?.action ??
+        (
+          data?.ready === true
+            ? "READY_TO_BET"
+            : "NOT_READY"
+        ),
+
+      current_odds:
+        numberOrNull(
+          data?.current_odds
+        ),
+
+      max_stake:
+        numberOrNull(
+          data?.max_stake
+        ),
+
+      account_balance:
+        numberOrNull(
+          data?.account_balance ??
+          data?.account?.balance
+        ),
+
+      event_id:
+        data?.event_id ??
+        null,
+
+      cloudbet_match:
+        data?.ai_match?.cloudbet_match ??
+        null,
+
+      ai_confidence:
+        numberOrNull(
+          data?.ai_match?.confidence
+        )
+    };
+
+
+  } catch (error) {
+
+    return {
+      checked:
+        false,
+
+      ready:
+        false,
+
+      reason:
+        "BET_WORKER_ERROR: " +
+        (
+          error?.message ||
+          String(error)
+        ),
+
+      action:
+        "ERROR",
+
+      current_odds:
+        null,
+
+      max_stake:
+        null,
+
+      account_balance:
+        null
+    };
+  }
+}
+
+
+// ============================================================
+// CREATE HUNTER ENTRY
+// ============================================================
+
+async function createHunterEntry(
+  env,
+  m,
+  now,
+  local,
+  trackingMap,
+  hunterScore
+) {
+
+  const id =
+    String(
+      m?.id || ""
+    );
+
+
+  if (!id)
+    return;
+
+
+  if (
+    trackingMap.has(id)
+  ) {
+    return;
+  }
+
+
+  const minute =
+    Number(
+      m?.minute ?? 0
+    );
+
+
+  const requiredScore =
+    getRequiredHunterScore(
+      minute
+    );
+
+
+  if (
+    requiredScore === null
+  ) {
+    return;
+  }
+
+
+  if (
+    hunterScore <
+      requiredScore
+  ) {
+    return;
+  }
+
+
+  const home =
+    Number(
+      m?.score?.home ?? 0
+    );
+
+
+  const away =
+    Number(
+      m?.score?.away ?? 0
+    );
+
+
+  const matchName =
+    m?.match ||
+    "Unknown match";
+
+
+  const league =
+    m?.league ||
+    m?.tournament ||
+    m?.competition ||
+    "LIVE";
+
+
+  const goalPressure =
+    numberOrNull(
+      m?.derived?.goal_pressure
+    );
+
+
+  const dangerIndex =
+    numberOrNull(
+      m?.derived?.danger_index
+    );
+
+
+  const attackScore =
+    numberOrNull(
+      m?.derived?.attack_score
+    );
+
+
+  const nowIso =
+    now.toISOString();
+
+
+  // ==========================================================
+  // FIRST INSERT ENTRY
+  //
+  // IMPORTANT:
+  // Hunter is stored BEFORE Cloudbet lookup.
+  // Therefore odds failure cannot lose the Hunter signal.
+  // ==========================================================
+
+  const insert =
+    await env.DB
+      .prepare(`
+        INSERT INTO hunter_signals (
+
+          match_id,
+          match_name,
+          league,
+
+          entry_time,
+          entry_minute,
+
+          hunter_score,
+          goal_pressure,
+          danger_index,
+          attack_score,
+
+          entry_home_score,
+          entry_away_score,
+
+          status,
+          result,
+
+          created_at,
+          updated_at
+
+        )
+
+        SELECT
+
+          ?, ?, ?,
+
+          ?, ?,
+
+          ?, ?, ?, ?,
+
+          ?, ?,
+
+          'TRACKING',
+          NULL,
+
+          ?, ?
+
+        WHERE NOT EXISTS (
+
+          SELECT 1
+          FROM hunter_signals
+          WHERE match_id = ?
+
+        )
+      `)
+      .bind(
+        id,
+        matchName,
+        league,
+        nowIso,
+        minute,
+        hunterScore,
+        goalPressure,
+        dangerIndex,
+        attackScore,
+        home,
+        away,
+        nowIso,
+        nowIso,
+        id
+      )
+      .run();
+
+
+  const changes =
+    Number(
+      insert?.meta?.changes ||
+      0
+    );
+
+
+  if (
+    changes < 1
+  ) {
+    return;
+  }
+
+
+  const insertedId =
+    insert?.meta?.last_row_id ||
+    null;
+
+
+  const signal = {
+    id:
+      insertedId,
+
+    match_id:
+      id,
+
+    match_name:
+      matchName,
+
+    league,
+
+    entry_time:
+      nowIso,
+
+    entry_minute:
+      minute,
+
+    hunter_score:
+      hunterScore,
+
+    goal_pressure:
+      goalPressure,
+
+    danger_index:
+      dangerIndex,
+
+    attack_score:
+      attackScore,
+
+    entry_home_score:
+      home,
+
+    entry_away_score:
+      away,
+
+    telegram_message_id:
+      null
+  };
+
+
+  trackingMap.set(
+    id,
+    signal
+  );
+
+
+  // ==========================================================
+  // CLOUDBET ODDS
+  //
+  // BEST EFFORT.
+  // NEVER cancel Telegram ENTRY.
+  // ==========================================================
+
+  let cloudbetOdds =
+    null;
+
+
+  try {
+
+    cloudbetOdds =
+      await resolveParallelMatchForHunter(
+        env,
+        m,
+        hunterScore
+      );
+
+  } catch (error) {
+
+    console.error(
+      "ENTRY CLOUDBET LOOKUP ERROR",
+      id,
+      error?.message ||
+      String(error)
+    );
+
+    cloudbetOdds =
+      null;
+  }
+
+
+  // ==========================================================
+  // SAVE ENTRY ODDS TO D1
+  // ==========================================================
+
+  if (
+    cloudbetOdds?.success ===
+      true
+  ) {
+
+    try {
+
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            cloudbet_event_id = ?,
+            entry_odds = ?,
+            cloudbet_max_stake = ?,
+            cloudbet_match = ?,
+            odds_available = ?,
+            matcher_score = ?,
+            updated_at = ?
+          WHERE id = ?
+        `)
+        .bind(
+          cloudbetOdds.event_id ?? null,
+          cloudbetOdds.price ?? null,
+          cloudbetOdds.max_stake ?? null,
+          cloudbetOdds.match ?? null,
+          cloudbetOdds.odds_available ? 1 : 0,
+          cloudbetOdds.matcher_score ?? null,
+          nowIso,
+          insertedId
+        )
+        .run();
+
+      console.log(
+        "CLOUDBET ENTRY ODDS SAVED",
+        id,
+        cloudbetOdds.event_id,
+        cloudbetOdds.price
+      );
+
+    } catch (error) {
+
+      // DB odds storage must not block Telegram ENTRY.
+      console.error(
+        "CLOUDBET ODDS DB SAVE ERROR",
+        id,
+        error?.message ||
+        String(error)
+      );
+    }
+
+  } else {
 
     console.log(
-      JSON.stringify({
-        worker: "cryptobot",
-        version: VERSION,
-        action: "SNAPSHOT_CRON",
-        timestamp: Date.now(),
-        results,
-      })
+      "CLOUDBET ENTRY ODDS UNAVAILABLE",
+      id,
+      matchName
     );
-  },
-};
+  }
+
+
+  // ==========================================================
+  // BET READY PREFLIGHT
+  //
+  // Best effort only.
+  // Hunter ENTRY must still be sent if Bet Worker is unavailable.
+  // ==========================================================
+
+  let betReady =
+    null;
+
+
+  try {
+
+    betReady =
+      await getBetReadyForHunter(
+        env,
+        m,
+        cloudbetOdds
+      );
+
+  } catch (error) {
+
+    console.error(
+      "BET READY PREFLIGHT ERROR",
+      id,
+      error?.message ||
+      String(error)
+    );
+
+    betReady = {
+      checked:
+        false,
+      ready:
+        false,
+      reason:
+        "BET_READY_CHECK_FAILED",
+      action:
+        "ERROR",
+      current_odds:
+        null,
+      max_stake:
+        null,
+      account_balance:
+        null
+    };
+  }
+
+
+  // ==========================================================
+  // V6.7.10.14 — PREFLIGHT READY OVERRIDES STALE MATCHER DISPLAY
+  //
+  // If Bet Worker has completed a secure preflight and returned READY,
+  // its locked event_id + exact current odds are authoritative for the
+  // final Cloudbet state. This prevents impossible output such as:
+  // CLOUDBET UNMATCHED / AI_MATCHER_TIMEOUT + BET READY YES.
+  // ==========================================================
+
+  if (
+    betReady?.ready === true &&
+    betReady?.event_id !== null &&
+    betReady?.event_id !== undefined &&
+    String(betReady.event_id).trim() !== "" &&
+    numberOrNull(betReady?.current_odds) !== null &&
+    numberOrNull(betReady?.current_odds) > 1
+  ) {
+    const readyEventId =
+      String(betReady.event_id).trim();
+
+    const readyOdds =
+      numberOrNull(betReady.current_odds);
+
+    cloudbetOdds = {
+      ...(cloudbetOdds || {}),
+      success: true,
+      accepted: true,
+      event_id: readyEventId,
+      match:
+        betReady?.cloudbet_match ??
+        cloudbetOdds?.match ??
+        null,
+      price: readyOdds,
+      entry_odds: readyOdds,
+      odds_available: true,
+      max_stake:
+        numberOrNull(betReady?.max_stake) ??
+        numberOrNull(cloudbetOdds?.max_stake),
+      matcher_score:
+        numberOrNull(betReady?.ai_confidence) ??
+        numberOrNull(cloudbetOdds?.matcher_score),
+      matcher_reason: null,
+      match_source:
+        betReady?.cloudbet_match ||
+        numberOrNull(betReady?.ai_confidence) !== null
+          ? "AI"
+          : (cloudbetOdds?.match_source ?? "PREFLIGHT")
+    };
+
+    try {
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            cloudbet_event_id = ?,
+            entry_odds = ?,
+            cloudbet_max_stake = COALESCE(?, cloudbet_max_stake),
+            cloudbet_match = COALESCE(?, cloudbet_match),
+            odds_available = 1,
+            matcher_score = COALESCE(?, matcher_score),
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+        `)
+        .bind(
+          readyEventId,
+          readyOdds,
+          numberOrNull(betReady?.max_stake),
+          betReady?.cloudbet_match ?? null,
+          numberOrNull(betReady?.ai_confidence),
+          nowIso,
+          insertedId
+        )
+        .run();
+
+      console.log(
+        "PREFLIGHT READY PROMOTED TO FINAL CLOUDBET STATE",
+        id,
+        readyEventId,
+        readyOdds
+      );
+    } catch (error) {
+      console.error(
+        "PREFLIGHT READY DB SYNC ERROR",
+        id,
+        error?.message || String(error)
+      );
+    }
+  }
+
+
+  // ==========================================================
+  // V6.7.9.5 — SYNC AI PREFLIGHT ODDS BACK TO ENTRY ODDS
+  //
+  // AI matcher returns a locked event_id but usually no price.
+  // If Bet Worker preflight finds the exact 1H O0.5 price for
+  // that SAME locked event, treat it as the real ENTRY odds.
+  // This fixes: Entry odds WAITING + Current odds X.XX.
+  // ==========================================================
+
+  const preflightOdds =
+    numberOrNull(
+      betReady?.current_odds
+    );
+
+  const finalEventId =
+    cloudbetOdds?.event_id === null ||
+    cloudbetOdds?.event_id === undefined
+      ? null
+      : String(cloudbetOdds.event_id);
+
+  const preflightEventId =
+    betReady?.event_id === null ||
+    betReady?.event_id === undefined ||
+    String(betReady.event_id).trim() === ""
+      ? finalEventId
+      : String(betReady.event_id);
+
+  const sameLockedEvent =
+    finalEventId !== null &&
+    preflightEventId !== null &&
+    finalEventId === preflightEventId;
+
+  if (
+    cloudbetOdds?.success === true &&
+    sameLockedEvent &&
+    numberOrNull(cloudbetOdds?.price) === null &&
+    preflightOdds !== null &&
+    preflightOdds > 1
+  ) {
+
+    cloudbetOdds = {
+      ...cloudbetOdds,
+      price: preflightOdds,
+      entry_odds: preflightOdds,
+      odds_available: true,
+      max_stake:
+        numberOrNull(betReady?.max_stake) ??
+        numberOrNull(cloudbetOdds?.max_stake)
+    };
+
+    try {
+      await env.DB
+        .prepare(`
+          UPDATE hunter_signals
+          SET
+            entry_odds = ?,
+            cloudbet_max_stake = COALESCE(?, cloudbet_max_stake),
+            odds_available = 1,
+            updated_at = ?
+          WHERE id = ?
+            AND status = 'TRACKING'
+            AND cloudbet_event_id = ?
+            AND entry_odds IS NULL
+        `)
+        .bind(
+          preflightOdds,
+          numberOrNull(betReady?.max_stake),
+          nowIso,
+          insertedId,
+          finalEventId
+        )
+        .run();
+
+      console.log(
+        "AI PREFLIGHT ODDS SYNCED TO ENTRY",
+        id,
+        finalEventId,
+        preflightOdds
+      );
+
+    } catch (error) {
+      console.error(
+        "AI PREFLIGHT ODDS SYNC DB ERROR",
+        id,
+        error?.message || String(error)
+      );
+    }
+  }
+
+  // ==========================================================
+  // TELEGRAM ENTRY
+  // ==========================================================
+
+  const shadowEntry = isShadowEntryMinute(minute);
+
+  // V6.7.10.14:
+  // Public Telegram HUNTER ENTRY is emitted ONLY after Bet Worker
+  // confirms the exact event/market/odds as BET READY and the final
+  // Cloudbet state contains the locked event id + real odds.
+  // UNMATCHED / WAITING / failed preflight remain internal in D1.
+  const finalTelegramReady =
+    betReady?.ready === true &&
+    cloudbetOdds?.success === true &&
+    cloudbetOdds?.event_id !== null &&
+    cloudbetOdds?.event_id !== undefined &&
+    String(cloudbetOdds.event_id).trim() !== "" &&
+    numberOrNull(cloudbetOdds?.price) !== null &&
+    numberOrNull(cloudbetOdds?.price) > 1;
+
+  const telegramMessageId =
+    shadowEntry ||
+    !finalTelegramReady
+      ? null
+      : await sendTelegram(
+          env,
+          formatEntryMessage(
+            m,
+            hunterScore,
+            local,
+            cloudbetOdds,
+            betReady
+          )
+        );
+
+
+  if (
+    telegramMessageId !== null &&
+    telegramMessageId !==
+      undefined
+  ) {
+
+    await env.DB
+      .prepare(`
+        UPDATE hunter_signals
+        SET
+          telegram_message_id = ?,
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'TRACKING'
+      `)
+      .bind(
+        telegramMessageId,
+        nowIso,
+        insertedId
+      )
+      .run();
+
+
+    signal.telegram_message_id =
+      telegramMessageId;
+  }
+}
+
+
+// ============================================================
+// MISSING TRACKING
+// ============================================================
+
+async function finalizeMissingTracking(
+  env,
+  signal,
+  now
+) {
+
+  const entryMinute =
+    Number(
+      signal?.entry_minute ||
+      0
+    );
+
+
+  const safeEntryMinute =
+    Math.max(
+      0,
+      Math.min(
+        42,
+        entryMinute
+      )
+    );
+
+
+  // V6.7.10.4 SAFE MISSING-FEED FALLBACK
+  //
+  // A match disappearing from the V27 live list is NOT proof of HT 0:0.
+  // V6.7.10.3 finalized these signals close to HT, which can create a
+  // false NO_GOAL during a temporary feed transition.
+  //
+  // Return to the conservative timeout. The final DF_SUI goal check
+  // below is still executed before any NO_GOAL is written.
+  const requiredMinutes =
+    Math.max(
+      68,
+      (
+        90 -
+        safeEntryMinute
+      ) +
+      15 +
+      20
+    );
+
+
+  const entryTime =
+    new Date(
+      signal?.entry_time ||
+      signal?.created_at ||
+      ""
+    );
+
+
+  if (
+    Number.isNaN(
+      entryTime.getTime()
+    )
+  ) {
+    return;
+  }
+
+
+  const ageMinutes =
+    (
+      now.getTime() -
+      entryTime.getTime()
+    ) /
+    60000;
+
+
+  if (
+    ageMinutes <
+      requiredMinutes
+  ) {
+    return;
+  }
+
+
+  // One final first-half event check before closing a missing match.
+  // This catches 45+N goals even if the main V27 match disappeared.
+  try {
+    const lateFirstHalfGoal =
+      await getPostEntryDfSuiGoal(
+        String(
+          signal?.match_id ||
+          ""
+        ),
+        safeEntryMinute
+      );
+
+    if (lateFirstHalfGoal) {
+      const goalMinute =
+        lateFirstHalfGoal.minute;
+
+      const afterMinutes =
+        Math.max(
+          0,
+          goalMinute - safeEntryMinute
+        );
+
+      const fakeTrackingMap =
+        new Map([
+          [
+            String(signal?.match_id || ""),
+            signal
+          ]
+        ]);
+
+      await resolveTrackingGoal(
+        env,
+        signal,
+        {
+          id: signal?.match_id,
+          score:
+            lateFirstHalfGoal.score ||
+            {
+              home:
+                Number(signal?.entry_home_score || 0),
+              away:
+                Number(signal?.entry_away_score || 0)
+            }
+        },
+        fakeTrackingMap,
+        String(signal?.match_id || ""),
+        now,
+        goalMinute,
+        afterMinutes,
+        "DF_SUI_1H_MISSING"
+      );
+
+      return;
+    }
+  } catch (error) {
+    console.error(
+      "MISSING DF_SUI ERROR",
+      signal?.match_id,
+      error?.message || String(error)
+    );
+  }
+
+
+  const nowIso =
+    now.toISOString();
+
+
+  const update =
+    await env.DB
+      .prepare(`
+        UPDATE hunter_signals
+        SET
+          status = 'NO_GOAL',
+          result = 'NO GOAL',
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'TRACKING'
+      `)
+      .bind(
+        nowIso,
+        signal.id
+      )
+      .run();
+
+
+  const changes =
+    Number(
+      update?.meta?.changes ||
+      0
+    );
+
+
+  if (
+    changes < 1
+  ) {
+    return;
+  }
+
+
+  if (!isShadowSignal(signal)) {
+    await sendTelegram(
+      env,
+      formatNoGoalMessage(
+        signal,
+        {
+          score: {
+            home:
+              signal?.entry_home_score ??
+              0,
+
+            away:
+              signal?.entry_away_score ??
+              0
+          }
+        }
+      ),
+      signal?.telegram_message_id
+    );
+  }
+}
+
+
+// ============================================================
+// HUNTER FILTER
+// ============================================================
+
+function isHunterCandidate(
+  m,
+  score
+) {
+
+  const minute =
+    Number(
+      m?.minute ?? 0
+    );
+
+
+  const period =
+    String(
+      m?.period || ""
+    ).toUpperCase();
+
+
+  const home =
+    Number(
+      m?.score?.home ?? 0
+    );
+
+
+  const away =
+    Number(
+      m?.score?.away ?? 0
+    );
+
+
+  const firstHalf =
+    period === "1H" ||
+    period === "FIRST" ||
+    period === "FIRST HALF" ||
+    period === "1ST HALF" ||
+    period.includes(
+      "1H"
+    );
+
+
+  if (!firstHalf)
+    return false;
+
+
+  if (
+    home !== 0 ||
+    away !== 0
+  ) {
+    return false;
+  }
+
+
+  if (
+    minute < HUNTER_FROM ||
+    minute > HUNTER_TO
+  ) {
+    return false;
+  }
+
+
+  const requiredScore = getRequiredHunterScore(minute);
+
+  if (requiredScore === null || score < requiredScore) {
+    return false;
+  }
+
+  return true;
+}
+
+
+function getRequiredHunterScore(minute) {
+  const m = Number(minute || 0);
+
+  // V6.7.10.26 — LIVE BET READY TEST FILTER:
+  // only 10–21′ with Hunter Score >=65.
+  if (m >= 10 && m <= 21) return 65;
+
+  return null;
+}
+
+// V6.7.10.26 — TELEGRAM VISIBILITY
+// Telegram ENTRY uses the SAME strategy filter as the live Hunter:
+// 10–21′ and Hunter Score >=65.
+// It does NOT require Cloudbet MATCHED, odds availability or BET READY.
+// Those pipeline states remain informational and BET READY accounting is unchanged.
+function shouldSendHunterEntryToTelegram(minute, hunterScore) {
+  const required = getRequiredHunterScore(minute);
+  if (required === null) return false;
+  return Number(hunterScore || 0) >= required;
+}
+
+
+function isShadowEntryMinute(minute) {
+  const m = Number(minute || 0);
+  return m >= SHADOW_FROM && m <= SHADOW_TO;
+}
+
+function isShadowSignal(signal) {
+  return isShadowEntryMinute(signal?.entry_minute);
+}
+
+
+function getHunterScore(m) {
+
+  const score =
+    numberOrNull(
+      m?.goal_signal?.score
+    );
+
+
+  if (
+    score === null
+  ) {
+    return 0;
+  }
+
+
+  return Math.round(
+    Math.max(
+      0,
+      Math.min(
+        100,
+        score
+      )
+    )
+  );
+}
+
+
+// ============================================================
+// MONTH HELPERS
+// ============================================================
+
+function getBulgarianMonthName(
+  month
+) {
+
+  const months = [
+    "ЯНУАРИ",
+    "ФЕВРУАРИ",
+    "МАРТ",
+    "АПРИЛ",
+    "МАЙ",
+    "ЮНИ",
+    "ЮЛИ",
+    "АВГУСТ",
+    "СЕПТЕМВРИ",
+    "ОКТОМВРИ",
+    "НОЕМВРИ",
+    "ДЕКЕМВРИ"
+  ];
+
+
+  return (
+    months[
+      Number(month) - 1
+    ] ||
+    String(month)
+  );
+}
+
+
+function getMonthKey(
+  dateString
+) {
+
+  const match =
+    String(
+      dateString || ""
+    ).match(
+      /^(\d{4})-(\d{2})/
+    );
+
+
+  if (!match)
+    return null;
+
+
+  return (
+    match[1] +
+    "-" +
+    match[2]
+  );
+}
+
+
+function formatMonthLabel(
+  monthKey
+) {
+
+  const match =
+    String(
+      monthKey || ""
+    ).match(
+      /^(\d{4})-(\d{2})$/
+    );
+
+
+  if (!match)
+    return monthKey;
+
+
+  return (
+    getBulgarianMonthName(
+      Number(
+        match[2]
+      )
+    ) +
+    " " +
+    match[1]
+  );
+}
+
+
+function getSofiaMonthUtcBounds(
+  monthKey
+) {
+
+  const match =
+    String(
+      monthKey || ""
+    ).match(
+      /^(\d{4})-(\d{2})$/
+    );
+
+
+  if (!match)
+    return null;
+
+
+  const year =
+    Number(
+      match[1]
+    );
+
+
+  const month =
+    Number(
+      match[2]
+    );
+
+
+  if (
+    !year ||
+    !month ||
+    month < 1 ||
+    month > 12
+  ) {
+    return null;
+  }
+
+
+  const startDate =
+    `${year}-${String(month).padStart(2, "0")}-01`;
+
+
+  const nextDate =
+    month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+
+  const start =
+    getSofiaDayUtcBounds(
+      startDate
+    );
+
+
+  const end =
+    getSofiaDayUtcBounds(
+      nextDate
+    );
+
+
+  if (
+    !start ||
+    !end
+  ) {
+    return null;
+  }
+
+
+  return {
+    start:
+      start.start,
+
+    end:
+      end.start
+  };
+}
+
+
+function getSofiaDayUtcBounds(
+  dateString
+) {
+
+  const match =
+    String(
+      dateString || ""
+    ).match(
+      /^(\d{4})-(\d{2})-(\d{2})$/
+    );
+
+
+  if (!match)
+    return null;
+
+
+  const year =
+    Number(
+      match[1]
+    );
+
+
+  const month =
+    Number(
+      match[2]
+    );
+
+
+  const day =
+    Number(
+      match[3]
+    );
+
+
+  if (
+    !year ||
+    !month ||
+    !day
+  ) {
+    return null;
+  }
+
+
+  const getOffsetMinutes =
+    utcMillis => {
+
+      const parts =
+        SOFIA_FORMATTER.formatToParts(
+          new Date(
+            utcMillis
+          )
+        );
+
+
+      const get =
+        type => {
+
+          const part =
+            parts.find(
+              p =>
+                p.type === type
+            );
+
+
+          return Number(
+            part?.value
+          );
+        };
+
+
+      const localAsUtc =
+        Date.UTC(
+          get("year"),
+          get("month") - 1,
+          get("day"),
+          get("hour"),
+          get("minute"),
+          get("second")
+        );
+
+
+      return (
+        localAsUtc -
+        utcMillis
+      ) /
+      60000;
+    };
+
+
+  const localMidnightGuess =
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    );
+
+
+  const startOffset =
+    getOffsetMinutes(
+      localMidnightGuess
+    );
+
+
+  const startMillis =
+    localMidnightGuess -
+    startOffset *
+    60000;
+
+
+  const nextLocalMidnightGuess =
+    Date.UTC(
+      year,
+      month - 1,
+      day + 1
+    );
+
+
+  const endOffset =
+    getOffsetMinutes(
+      nextLocalMidnightGuess
+    );
+
+
+  const endMillis =
+    nextLocalMidnightGuess -
+    endOffset *
+    60000;
+
+
+  return {
+    start:
+      new Date(
+        startMillis
+      ).toISOString(),
+
+    end:
+      new Date(
+        endMillis
+      ).toISOString()
+  };
+}
+
+
+// ============================================================
+// MONTH STATISTICS
+// ============================================================
+
+async function getMonthlyStats(
+  env,
+  monthKey
+) {
+
+  const bounds =
+    getSofiaMonthUtcBounds(
+      monthKey
+    );
+
+
+  if (!bounds) {
+
+    return {
+      monthKey,
+      total: 0,
+      goals: 0,
+      noGoals: 0,
+      resolved: 0,
+      rate: 0,
+      avg: null
+    };
+  }
+
+
+  const result =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND ${HUNTER_HISTORY_SQL}
+      `)
+      .bind(
+        bounds.start,
+        bounds.end
+      )
+      .first();
+
+
+  const total =
+    Number(
+      result?.total || 0
+    );
+
+
+  const goals =
+    Number(
+      result?.goals || 0
+    );
+
+
+  const noGoals =
+    Number(
+      result?.no_goals || 0
+    );
+
+
+  const resolved =
+    goals +
+    noGoals;
+
+
+  const rate =
+    resolved > 0
+      ? goals /
+        resolved *
+        100
+      : 0;
+
+
+  const avg =
+    result?.avg_goal_after !==
+      null &&
+    result?.avg_goal_after !==
+      undefined
+      ? Number(
+          result.avg_goal_after
+        )
+      : null;
+
+
+  return {
+    monthKey,
+    total,
+    goals,
+    noGoals,
+    resolved,
+    rate,
+    avg
+  };
+}
+
+
+async function getMonthlyHistory(
+  env,
+  currentMonth
+) {
+
+  const result =
+    await env.DB
+      .prepare(`
+        SELECT created_at
+        FROM hunter_signals
+        WHERE created_at IS NOT NULL
+          AND ${HUNTER_HISTORY_SQL}
+      `)
+      .all();
+
+
+  const monthSet =
+    new Set();
+
+
+  for (
+    const row of
+      result?.results || []
+  ) {
+
+    const createdAt =
+      new Date(
+        row?.created_at
+      );
+
+
+    if (
+      Number.isNaN(
+        createdAt.getTime()
+      )
+    ) {
+      continue;
+    }
+
+
+    const local =
+      getSofiaTime(
+        createdAt
+      );
+
+
+    const key =
+      getMonthKey(
+        local.date
+      );
+
+
+    if (key) {
+      monthSet.add(key);
+    }
+  }
+
+
+  monthSet.add(
+    currentMonth
+  );
+
+
+  const months =
+    Array.from(
+      monthSet
+    )
+      .sort(
+        (a, b) =>
+          b.localeCompare(a)
+      );
+
+
+  const stats = [];
+
+
+  for (
+    const monthKey of months
+  ) {
+
+    stats.push(
+      await getMonthlyStats(
+        env,
+        monthKey
+      )
+    );
+  }
+
+
+  return stats;
+}
+
+
+function formatMonthGraph(
+  goals,
+  noGoals
+) {
+
+  const total =
+    Number(
+      goals || 0
+    ) +
+    Number(
+      noGoals || 0
+    );
+
+
+  if (
+    total <= 0
+  ) {
+
+    return (
+      "🟢 GOAL     —\n" +
+      "🔴 NO GOAL  —"
+    );
+  }
+
+
+  const graphLength =
+    20;
+
+
+  const goalBlocks =
+    Math.round(
+      Number(
+        goals || 0
+      ) /
+      total *
+      graphLength
+    );
+
+
+  const noGoalBlocks =
+    Math.max(
+      0,
+      graphLength -
+      goalBlocks
+    );
+
+
+  const goalBar =
+    "█".repeat(
+      goalBlocks
+    ) +
+    "░".repeat(
+      Math.max(
+        0,
+        graphLength -
+        goalBlocks
+      )
+    );
+
+
+  const noGoalBar =
+    "█".repeat(
+      noGoalBlocks
+    ) +
+    "░".repeat(
+      Math.max(
+        0,
+        graphLength -
+        noGoalBlocks
+      )
+    );
+
+
+  const rate =
+    Number(
+      goals || 0
+    ) /
+    total *
+    100;
+
+
+  const noGoalRate =
+    Number(
+      noGoals || 0
+    ) /
+    total *
+    100;
+
+
+  return (
+`🟢 GOAL     ${goalBar} ${rate.toFixed(1)}%
+🔴 NO GOAL  ${noGoalBar} ${noGoalRate.toFixed(1)}%`
+  );
+}
+
+
+function formatMonthlyBlock(
+  stats
+) {
+
+  return (
+`━━━━━━━━━━━━━━━━
+📅 ${formatMonthLabel(stats.monthKey)}
+━━━━━━━━━━━━━━━━
+
+🎯 ENTRY: ${stats.total}
+
+🟢 GOAL HIT: ${stats.goals}
+
+🔴 NO GOAL: ${stats.noGoals}
+
+📈 Успеваемост:
+${stats.rate.toFixed(1)}%
+
+⏱ Средно до гол:
+${
+  stats.avg !== null
+    ? stats.avg.toFixed(1) +
+      " мин."
+    : "—"
+}
+
+${formatMonthGraph(
+  stats.goals,
+  stats.noGoals
+)}`
+  );
+}
+
+
+// ============================================================
+// CURRENT MONTH DETAIL
+// ============================================================
+
+async function getCurrentMonthDetails(
+  env,
+  monthKey
+) {
+
+  const bounds =
+    getSofiaMonthUtcBounds(
+      monthKey
+    );
+
+
+  if (!bounds) {
+
+    return {
+      scoreRows: [],
+      minuteRows: [],
+      hourRows: [],
+      hourMinuteRows: [],
+      leagueRows: []
+    };
+  }
+
+
+  const scoreResult =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          CASE
+
+            WHEN hunter_score BETWEEN 60 AND 69
+              THEN '60–69'
+
+            WHEN hunter_score BETWEEN 70 AND 79
+              THEN '70–79'
+
+            WHEN hunter_score BETWEEN 80 AND 89
+              THEN '80–89'
+
+            WHEN hunter_score BETWEEN 90 AND 100
+              THEN '90–100'
+
+          END AS score_group,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN result = 'GOAL HIT'
+              AND goal_after_minutes IS NOT NULL
+              THEN goal_after_minutes
+            END
+          ) AS avg_goal_after
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND ${HUNTER_HISTORY_SQL}
+
+        GROUP BY score_group
+
+        ORDER BY
+          CASE score_group
+            WHEN '60–69' THEN 1
+            WHEN '70–79' THEN 2
+            WHEN '80–89' THEN 3
+            WHEN '90–100' THEN 4
+          END
+      `)
+      .bind(
+        bounds.start,
+        bounds.end
+      )
+      .all();
+
+
+  const minuteResult =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          CASE
+
+            WHEN entry_minute BETWEEN 10 AND 25
+              THEN '10–25′'
+
+          END AS minute_group,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND ${HUNTER_HISTORY_SQL}
+          AND entry_minute BETWEEN 10 AND 25
+
+        GROUP BY minute_group
+
+        ORDER BY
+          CASE minute_group
+            WHEN '10–25′' THEN 1
+          END
+      `)
+      .bind(
+        bounds.start,
+        bounds.end
+      )
+      .all();
+
+
+  const hourSource =
+    await env.DB
+      .prepare(`
+        SELECT
+          created_at,
+          entry_minute,
+          result
+        FROM hunter_signals
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND ${HUNTER_HISTORY_SQL}
+      `)
+      .bind(
+        bounds.start,
+        bounds.end
+      )
+      .all();
+
+
+  const hourRows =
+    buildHourRows(
+      hourSource?.results ||
+      []
+    );
+
+
+  const hourMinuteRows =
+    buildHourMinuteRows(
+      hourSource?.results ||
+      []
+    );
+
+
+  const leagueResult =
+    await env.DB
+      .prepare(`
+        SELECT
+          league,
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND ${HUNTER_HISTORY_SQL}
+          AND league IS NOT NULL
+          AND TRIM(league) <> ''
+          AND UPPER(TRIM(league)) <> 'LIVE'
+
+        GROUP BY league
+      `)
+      .bind(
+        bounds.start,
+        bounds.end
+      )
+      .all();
+
+
+  const leagueRows =
+    (
+      leagueResult?.results ||
+      []
+    )
+      .map(row => {
+
+        const total =
+          Number(
+            row?.total || 0
+          );
+
+
+        const goals =
+          Number(
+            row?.goals || 0
+          );
+
+
+        const noGoals =
+          Number(
+            row?.no_goals || 0
+          );
+
+
+        const resolved =
+          goals +
+          noGoals;
+
+
+        const rate =
+          resolved > 0
+            ? goals /
+              resolved *
+              100
+            : 0;
+
+
+        return {
+          league:
+            String(
+              row?.league ||
+              ""
+            ).trim(),
+
+          total,
+
+          goals,
+
+          no_goals:
+            noGoals,
+
+          resolved,
+
+          rate
+        };
+      })
+      .filter(
+        row =>
+          row.league &&
+          row.resolved >=
+            MIN_LEAGUE_RESOLVED
+      );
+
+
+  return {
+    scoreRows:
+      scoreResult?.results ||
+      [],
+
+    minuteRows:
+      minuteResult?.results ||
+      [],
+
+    hourRows,
+
+    hourMinuteRows,
+
+    leagueRows
+  };
+}
+
+
+// ============================================================
+// HOUR GROUPING
+// ============================================================
+
+function buildHourRows(rows) {
+
+  const map =
+    new Map();
+
+
+  for (
+    const group of
+      ENTRY_HOUR_GROUPS
+  ) {
+
+    map.set(
+      group.label,
+      {
+        hour_group:
+          group.label,
+
+        total: 0,
+
+        goals: 0,
+
+        no_goals: 0
+      }
+    );
+  }
+
+
+  for (
+    const row of rows
+  ) {
+
+    const date =
+      new Date(
+        row?.created_at ||
+        ""
+      );
+
+
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      continue;
+    }
+
+
+    const local =
+      getSofiaTime(
+        date
+      );
+
+
+    const hour =
+      Number(
+        local.hour
+      );
+
+
+    const group =
+      ENTRY_HOUR_GROUPS.find(
+        g =>
+          hour >= g.min &&
+          hour <= g.max
+      );
+
+
+    if (!group)
+      continue;
+
+
+    const item =
+      map.get(
+        group.label
+      );
+
+
+    item.total++;
+
+
+    if (
+      row?.result ===
+        "GOAL HIT"
+    ) {
+
+      item.goals++;
+
+    } else if (
+      row?.result ===
+        "NO GOAL"
+    ) {
+
+      item.no_goals++;
+    }
+  }
+
+
+  return ENTRY_HOUR_GROUPS.map(
+    g =>
+      map.get(
+        g.label
+      )
+  );
+}
+
+
+function buildHourMinuteRows(
+  rows
+) {
+
+  const matrix =
+    new Map();
+
+
+  for (
+    const hourGroup of
+      ENTRY_HOUR_GROUPS
+  ) {
+
+    for (
+      const minuteGroup of
+        ENTRY_MINUTE_GROUPS
+    ) {
+
+      const key =
+        hourGroup.label +
+        "|" +
+        minuteGroup.label;
+
+
+      matrix.set(
+        key,
+        {
+          hour_group:
+            hourGroup.label,
+
+          minute_group:
+            minuteGroup.label,
+
+          total: 0,
+
+          goals: 0,
+
+          no_goals: 0
+        }
+      );
+    }
+  }
+
+
+  for (
+    const row of rows
+  ) {
+
+    const date =
+      new Date(
+        row?.created_at ||
+        ""
+      );
+
+
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      continue;
+    }
+
+
+    const local =
+      getSofiaTime(
+        date
+      );
+
+
+    const hour =
+      Number(
+        local.hour
+      );
+
+
+    const entryMinute =
+      Number(
+        row?.entry_minute
+      );
+
+
+    const hourGroup =
+      ENTRY_HOUR_GROUPS.find(
+        g =>
+          hour >= g.min &&
+          hour <= g.max
+      );
+
+
+    const minuteGroup =
+      ENTRY_MINUTE_GROUPS.find(
+        g =>
+          entryMinute >=
+            g.min &&
+          entryMinute <=
+            g.max
+      );
+
+
+    if (
+      !hourGroup ||
+      !minuteGroup
+    ) {
+      continue;
+    }
+
+
+    const key =
+      hourGroup.label +
+      "|" +
+      minuteGroup.label;
+
+
+    const item =
+      matrix.get(key);
+
+
+    if (!item)
+      continue;
+
+
+    item.total++;
+
+
+    if (
+      row?.result ===
+        "GOAL HIT"
+    ) {
+
+      item.goals++;
+
+    } else if (
+      row?.result ===
+        "NO GOAL"
+    ) {
+
+      item.no_goals++;
+    }
+  }
+
+
+  const result = [];
+
+
+  for (
+    const hourGroup of
+      ENTRY_HOUR_GROUPS
+  ) {
+
+    for (
+      const minuteGroup of
+        ENTRY_MINUTE_GROUPS
+    ) {
+
+      const key =
+        hourGroup.label +
+        "|" +
+        minuteGroup.label;
+
+
+      result.push(
+        matrix.get(key)
+      );
+    }
+  }
+
+
+  return result;
+}
+
+
+// ============================================================
+// DAILY MINUTE STATS
+// ============================================================
+
+async function getHunterMinuteStatsForBounds(env, bounds) {
+  if (!bounds) return [];
+
+  const result = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_minute BETWEEN 10 AND 25 THEN '10–25′'
+        END AS minute_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${HUNTER_HISTORY_SQL}
+      GROUP BY minute_group
+      ORDER BY CASE minute_group
+        WHEN '10–25′' THEN 1
+      END
+    `)
+    .bind(bounds.start, bounds.end)
+    .all();
+
+  return result?.results || [];
+}
+
+function formatHunterMinuteStats(rows) {
+  const map = new Map((rows || []).map(row => [row.minute_group, row]));
+  let text = '';
+  for (const group of ENTRY_MINUTE_GROUPS) {
+    const row = map.get(group.label);
+    const total = Number(row?.total || 0);
+    const goals = Number(row?.goals || 0);
+    const noGoals = Number(row?.no_goals || 0);
+    const resolved = goals + noGoals;
+    const rate = resolved > 0 ? goals / resolved * 100 : 0;
+    if (!total) text += `${group.label}: 0 ENTRY\n`;
+    else text += `${group.label}: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%\n`;
+  }
+  return text;
+}
+
+async function getOddsStatsForBounds(env, bounds) {
+  if (!bounds) return null;
+  return await env.DB.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+      AVG(entry_odds) AS avg_entry_odds,
+      SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+      SUM(CASE
+        WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+        WHEN result = 'NO GOAL' THEN -?
+        ELSE 0
+      END) AS profit_loss
+    FROM hunter_signals
+    WHERE created_at >= ?
+      AND created_at < ?
+      AND ${REPORT_ELIGIBLE_SQL}
+  `).bind(REPORT_STAKE, REPORT_STAKE, bounds.start, bounds.end).first();
+}
+
+async function getMinuteStatsForBounds(
+  env,
+  bounds
+) {
+
+  if (!bounds) {
+    return [];
+  }
+
+
+  const result =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          CASE
+
+            WHEN entry_minute BETWEEN 10 AND 25
+              THEN '10–25′'
+
+          END AS minute_group,
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          SUM(
+            CASE
+              WHEN result IS NULL
+                OR result NOT IN ('GOAL HIT', 'NO GOAL')
+              THEN 1
+              ELSE 0
+            END
+          ) AS open_count,
+
+          AVG(
+            CASE
+              WHEN entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN entry_odds
+            END
+          ) AS avg_entry_odds,
+
+          SUM(
+            CASE
+              WHEN result IN ('GOAL HIT', 'NO GOAL')
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN 1
+              ELSE 0
+            END
+          ) AS financial_bets,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN ? * (entry_odds - 1)
+
+              WHEN result = 'NO GOAL'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN -?
+
+              ELSE 0
+            END
+          ) AS profit_loss
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
+          AND entry_minute BETWEEN 10 AND 25
+
+        GROUP BY minute_group
+
+        ORDER BY
+          CASE minute_group
+            WHEN '10–25′' THEN 1
+          END
+      `)
+      .bind(
+        REPORT_STAKE,
+        REPORT_STAKE,
+        bounds.start,
+        bounds.end
+      )
+      .all();
+
+
+  return (
+    result?.results ||
+    []
+  );
+}
+
+
+function formatMoney(
+  value
+) {
+  const n = Number(value || 0);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}`;
+}
+
+
+function formatMinuteStats(
+  rows
+) {
+
+  const map =
+    new Map();
+
+
+  for (
+    const row of
+      rows || []
+  ) {
+
+    map.set(
+      row.minute_group,
+      row
+    );
+  }
+
+
+  let text = "";
+
+
+  for (
+    const group of
+      ENTRY_MINUTE_GROUPS
+  ) {
+
+    const row =
+      map.get(
+        group.label
+      );
+
+
+    if (!row) {
+
+      text +=
+        `${group.label}: 0 ENTRY\n`;
+
+      continue;
+    }
+
+
+    const total =
+      Number(
+        row.total || 0
+      );
+
+
+    const goals =
+      Number(
+        row.goals || 0
+      );
+
+
+    const noGoals =
+      Number(
+        row.no_goals || 0
+      );
+
+
+    const resolved =
+      goals +
+      noGoals;
+
+
+    const open =
+      Math.max(
+        0,
+        total -
+        resolved
+      );
+
+
+    const rate =
+      resolved > 0
+        ? goals /
+          resolved *
+          100
+        : 0;
+
+
+    const breakEven =
+      goals > 0 &&
+      resolved > 0
+        ? resolved /
+          goals
+        : null;
+
+
+    const avgOdds =
+      numberOrNull(
+        row.avg_entry_odds
+      );
+
+
+    const financialBets =
+      Number(
+        row.financial_bets || 0
+      );
+
+
+    const profitLoss =
+      Number(
+        row.profit_loss || 0
+      );
+
+
+    const roi =
+      financialBets > 0
+        ? profitLoss /
+          (
+            financialBets *
+            REPORT_STAKE
+          ) *
+          100
+        : null;
+
+
+    text +=
+      `${group.label}: ` +
+      `${total} ENTRY | ` +
+      `${goals} GOAL | ` +
+      `${noGoals} NO GOAL` +
+      (
+        open > 0
+          ? ` | ${open} OPEN`
+          : ""
+      ) +
+      ` | ${rate.toFixed(1)}%\n` +
+      `   🎲 Avg odds: ${
+        avgOdds !== null
+          ? avgOdds.toFixed(2)
+          : "—"
+      } | ⚖️ BE: ${
+        breakEven !== null
+          ? breakEven.toFixed(2)
+          : "—"
+      }\n` +
+      `   💶 P/L: ${
+        financialBets > 0
+          ? formatMoney(
+              profitLoss
+            ) + " EUR"
+          : "—"
+      } | 📈 ROI: ${
+        roi !== null
+          ? (
+              roi > 0
+                ? "+"
+                : ""
+            ) +
+            roi.toFixed(1) +
+            "%"
+          : "—"
+      } | bets: ${financialBets}\n`;
+  }
+
+
+  return text;
+}
+
+
+async function getBetReadyMinuteStatsForBounds(env, bounds) {
+  if (!bounds) return [];
+
+  const result = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_minute BETWEEN 10 AND 21 THEN '10–21′'
+        END AS minute_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        SUM(
+          CASE
+            WHEN result IS NULL OR result NOT IN ('GOAL HIT', 'NO GOAL')
+            THEN 1 ELSE 0
+          END
+        ) AS open_count,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY minute_group
+      ORDER BY
+        CASE minute_group
+          WHEN '10–21′' THEN 1
+          WHEN '22–25′' THEN 2
+        END
+    `)
+    .bind(REPORT_STAKE, REPORT_STAKE, bounds.start, bounds.end)
+    .all();
+
+  return result?.results || [];
+}
+
+
+
+function formatBetReadyMinuteStats(rows) {
+  const groups = BET_READY_MINUTE_GROUPS.map(group => group.label);
+  const map = new Map();
+
+  for (const row of rows || []) {
+    map.set(String(row?.minute_group || ""), row);
+  }
+
+  const lines = [];
+
+  for (const group of groups) {
+    const row = map.get(group);
+
+    if (!row) {
+      lines.push(`${group}: 0 ENTRY`);
+      continue;
+    }
+
+    const total = Number(row?.total || 0);
+    const goals = Number(row?.goals || 0);
+    const noGoals = Number(row?.no_goals || 0);
+    const open = Number(row?.open_count || 0);
+    const resolved = goals + noGoals;
+    const rate = resolved > 0 ? goals / resolved * 100 : 0;
+
+    const avgOdds = numberOrNull(row?.avg_entry_odds);
+    const financialBets = Number(row?.financial_bets || 0);
+    const profitLoss = Number(row?.profit_loss || 0);
+    const roi = financialBets > 0
+      ? profitLoss / (financialBets * REPORT_STAKE) * 100
+      : null;
+
+    const breakEven = rate > 0 ? 100 / rate : null;
+
+    lines.push(
+      `${group}: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%` +
+      (open > 0 ? ` | ${open} OPEN` : "")
+    );
+
+    if (financialBets > 0 || avgOdds !== null) {
+      lines.push(
+        `   🎲 Avg odds: ${avgOdds !== null ? avgOdds.toFixed(2) : "—"} | ⚖️ BE: ${breakEven !== null ? breakEven.toFixed(2) : "—"}`
+      );
+      lines.push(
+        `   💶 P/L: ${financialBets > 0 ? formatMoney(profitLoss) + " EUR" : "—"} | 📈 ROI: ${roi !== null ? (roi > 0 ? "+" : "") + roi.toFixed(1) + "%" : "—"} | bets: ${financialBets}`
+      );
+    }
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+
+// ============================================================
+// ANALYTICS ONLY — 10–21′ + ENTRY ODDS > 1.50
+// Does NOT change the live BET READY filter.
+async function getBetReadyEarlyOddsOver150Stats(env, start, end) {
+  return await env.DB.prepare(`
+    SELECT COUNT(*) AS total,
+      SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+      SUM(CASE WHEN result IS NULL OR result NOT IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS open_count
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND ${BET_READY_HISTORY_SQL}
+      AND entry_minute BETWEEN 10 AND 21
+      AND entry_odds > 1.50
+  `).bind(start, end).first();
+}
+
+function formatEarlyOddsOver150Row(row) {
+  const total = Number(row?.total || 0);
+  const goals = Number(row?.goals || 0);
+  const noGoals = Number(row?.no_goals || 0);
+  const open = Number(row?.open_count || 0);
+  const resolved = goals + noGoals;
+  const rate = resolved > 0 ? goals / resolved * 100 : 0;
+  return `10–21′ + odds >1.50: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%` +
+    (open > 0 ? ` | ${open} OPEN` : '') + `\n   🧪 Аналитичен филтър — без P/L/ROI`;
+}
+
+
+async function getBetReadyEarlyScoreSplit(env, start, end) {
+  return env.DB.prepare(`
+    SELECT
+      CASE
+        WHEN hunter_score BETWEEN 60 AND 64 THEN '60–64'
+        WHEN hunter_score BETWEEN 65 AND 69 THEN '65–69'
+        WHEN hunter_score >= 70 THEN '70+'
+      END AS score_group,
+      COUNT(*) AS total,
+      SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+      SUM(CASE WHEN result IS NULL OR result NOT IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS open_count
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND ${BET_READY_HISTORY_SQL}
+      AND entry_minute BETWEEN 10 AND 21
+      AND hunter_score >= 60
+    GROUP BY score_group
+    ORDER BY CASE score_group
+      WHEN '60–64' THEN 1
+      WHEN '65–69' THEN 2
+      WHEN '70+' THEN 3
+      ELSE 4
+    END
+  `).bind(start, end).all();
+}
+
+function formatEarlyScoreSplit(result) {
+  const rows = result?.results || [];
+  const map = new Map(rows.map(row => [row.score_group, row]));
+  return ['60–64', '65–69', '70+'].map(group => {
+    const row = map.get(group);
+    const total = Number(row?.total || 0);
+    const goals = Number(row?.goals || 0);
+    const noGoals = Number(row?.no_goals || 0);
+    const open = Number(row?.open_count || 0);
+    const resolved = goals + noGoals;
+    const rate = resolved > 0 ? goals / resolved * 100 : 0;
+    return `10–21′ | Score ${group}: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%` +
+      (open > 0 ? ` | ${open} OPEN` : '');
+  }).join('\n');
+}
+
+// TODAY COMMAND
+// ============================================================
+
+async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 BET READY TODAY") {
+
+  const now = new Date();
+  const local = getSofiaTime(now);
+  const today = requestedDate || local.date;
+  const bounds = getSofiaDayUtcBounds(today);
+
+  if (!bounds) {
+    return `${reportTitle}\n\n📅 ${today}\n\n❌ Не успях да изчисля дневните граници.`;
+  }
+
+  const earlyOddsOver150 = await getBetReadyEarlyOddsOver150Stats(env, bounds.start, bounds.end);
+  const earlyScoreSplit = await getBetReadyEarlyScoreSplit(env, bounds.start, bounds.end);
+
+  const overall = await env.DB
+    .prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(CASE WHEN result = 'GOAL HIT' AND goal_after_minutes IS NOT NULL THEN goal_after_minutes END) AS avg_goal_after,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      bounds.start,
+      bounds.end
+    )
+    .first();
+
+  const scoreResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN hunter_score BETWEEN 60 AND 69 THEN '60–69'
+          WHEN hunter_score BETWEEN 70 AND 79 THEN '70–79'
+          WHEN hunter_score BETWEEN 80 AND 89 THEN '80–89'
+          WHEN hunter_score BETWEEN 90 AND 100 THEN '90–100'
+        END AS score_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY score_group
+    `)
+    .bind(bounds.start, bounds.end)
+    .all();
+
+  const minuteRows = await getBetReadyMinuteStatsForBounds(env, bounds);
+
+  // Full-month recalculation with the CURRENT BET READY filter.
+  // Historical D1 rows are not modified or deleted.
+  const cleanStart = bounds.start;
+
+  const cleanOverall = await env.DB
+    .prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(CASE WHEN result = 'GOAL HIT' AND goal_after_minutes IS NOT NULL THEN goal_after_minutes END) AS avg_goal_after,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      cleanStart,
+      bounds.end
+    )
+    .first();
+
+  const oddsResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_odds >= 1.00 AND entry_odds < 1.40 THEN '1.00–1.39'
+          WHEN entry_odds >= 1.40 AND entry_odds < 1.70 THEN '1.40–1.69'
+          WHEN entry_odds >= 1.70 AND entry_odds < 2.00 THEN '1.70–1.99'
+          WHEN entry_odds >= 2.00 AND entry_odds < 2.50 THEN '2.00–2.49'
+          WHEN entry_odds >= 2.50 AND entry_odds < 3.50 THEN '2.50–3.49'
+          WHEN entry_odds >= 3.50 AND entry_odds < 5.00 THEN '3.50–4.99'
+          ELSE '5.00+'
+        END AS odds_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY odds_group
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      bounds.start,
+      bounds.end
+    )
+    .all();
+
+  const cleanOddsResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_odds >= 1.00 AND entry_odds < 1.40 THEN '1.00–1.39'
+          WHEN entry_odds >= 1.40 AND entry_odds < 1.70 THEN '1.40–1.69'
+          WHEN entry_odds >= 1.70 AND entry_odds < 2.00 THEN '1.70–1.99'
+          WHEN entry_odds >= 2.00 AND entry_odds < 2.50 THEN '2.00–2.49'
+          WHEN entry_odds >= 2.50 AND entry_odds < 3.50 THEN '2.50–3.49'
+          WHEN entry_odds >= 3.50 AND entry_odds < 5.00 THEN '3.50–4.99'
+          ELSE '5.00+'
+        END AS odds_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY odds_group
+    `)
+    .bind(
+      REPORT_STAKE,
+      REPORT_STAKE,
+      cleanStart,
+      bounds.end
+    )
+    .all();
+
+  const total = Number(overall?.total || 0);
+  const goals = Number(overall?.goals || 0);
+  const noGoals = Number(overall?.no_goals || 0);
+  const resolved = goals + noGoals;
+  const open = Math.max(0, total - resolved);
+  const rate = resolved > 0 ? goals / resolved * 100 : 0;
+
+  const avgGoalAfter = numberOrNull(overall?.avg_goal_after);
+  const avgOdds = numberOrNull(overall?.avg_entry_odds);
+  const financialBets = Number(overall?.financial_bets || 0);
+  const profitLoss = Number(overall?.profit_loss || 0);
+  const roi = financialBets > 0
+    ? profitLoss / (financialBets * REPORT_STAKE) * 100
+    : null;
+
+  let message =
+`${reportTitle}
+
+📅 ${today}
+
+🎯 ENTRY: ${total}
+🟢 GOAL HIT: ${goals}
+🔴 NO GOAL: ${noGoals}${open > 0 ? `\n⏳ OPEN: ${open}` : ""}
+
+📈 Успеваемост: ${rate.toFixed(1)}%
+⏱ Средно до гол: ${avgGoalAfter !== null ? avgGoalAfter.toFixed(1) + " мин." : "—"}
+🎲 Avg odds: ${avgOdds !== null ? avgOdds.toFixed(2) : "—"}
+💶 P/L: ${financialBets > 0 ? formatMoney(profitLoss) + " EUR" : "—"}
+📈 ROI: ${roi !== null ? (roi > 0 ? "+" : "") + roi.toFixed(1) + "%" : "—"}
+
+━━━━━━━━━━━━━━━━
+⏱ BET READY — ПО ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+${formatBetReadyMinuteStats(minuteRows)}
+${formatEarlyOddsOver150Row(earlyOddsOver150)}
+
+━━━━━━━━━━━━━━━━
+🔥 10–21′ — ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+${formatEarlyScoreSplit(earlyScoreSplit)}
+
+━━━━━━━━━━━━━━━━
+🔥 BET READY — ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+  const scoreMap = new Map();
+  for (const row of scoreResult?.results || []) {
+    scoreMap.set(row.score_group, row);
+  }
+
+  for (const group of ["60–69", "70–79", "80–89", "90–100"]) {
+    const row = scoreMap.get(group);
+    if (!row) {
+      message += `${group}: 0 ENTRY\n`;
+      continue;
+    }
+
+    const rowTotal = Number(row.total || 0);
+    const rowGoals = Number(row.goals || 0);
+    const rowNoGoals = Number(row.no_goals || 0);
+    const rowResolved = rowGoals + rowNoGoals;
+    const rowRate = rowResolved > 0 ? rowGoals / rowResolved * 100 : 0;
+
+    message += `${group}: ${rowTotal} ENTRY | ${rowGoals} GOAL | ${rowNoGoals} NO GOAL | ${rowRate.toFixed(1)}%\n`;
+  }
+
+  message +=
+`\n━━━━━━━━━━━━━━━━
+🎲 Само мачове с реален entry odds
+🎯 10–21′: Score ≥65 | 22′+ НЕ СЕ ВЗИМАТ
+🕐 Europe/Sofia`;
+
+  return message;
+}
+
+
+// ============================================================
+// SHADOW STATS — /shadowstats
+// Experimental 5–9 minute Hunter population
+// ============================================================
+
+async function buildShadowStats(env) {
+
+  const result = await env.DB
+    .prepare(`
+      SELECT
+        entry_minute,
+        hunter_score,
+        result,
+        goal_after_minutes,
+        entry_odds
+      FROM hunter_signals
+      WHERE entry_minute BETWEEN 5 AND 9
+        AND hunter_score >= 50
+        AND cloudbet_event_id IS NOT NULL
+        AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> ''
+        AND entry_odds IS NOT NULL
+        AND entry_odds > 1
+        AND odds_available = 1
+      ORDER BY created_at ASC
+    `)
+    .all();
+
+  const rows = result?.results || [];
+
+  const total = rows.length;
+  const goals = rows.filter(r => r?.result === "GOAL HIT").length;
+  const noGoals = rows.filter(r => r?.result === "NO GOAL").length;
+  const open = Math.max(0, total - goals - noGoals);
+  const resolved = goals + noGoals;
+  const successRate = resolved > 0 ? goals / resolved * 100 : 0;
+
+  const goalTimes = rows
+    .filter(r => r?.result === "GOAL HIT")
+    .map(r => numberOrNull(r?.goal_after_minutes))
+    .filter(v => v !== null);
+
+  const avgGoalAfter = goalTimes.length
+    ? goalTimes.reduce((a, b) => a + b, 0) / goalTimes.length
+    : null;
+
+  const oddsRows = rows.filter(r => {
+    const odds = numberOrNull(r?.entry_odds);
+    return odds !== null && odds > 1;
+  });
+
+  let oddsPL = 0;
+  let oddsResolved = 0;
+
+  for (const row of oddsRows) {
+    const odds = numberOrNull(row?.entry_odds);
+    if (row?.result === "GOAL HIT") {
+      oddsPL += REPORT_STAKE * (odds - 1);
+      oddsResolved += 1;
+    } else if (row?.result === "NO GOAL") {
+      oddsPL -= REPORT_STAKE;
+      oddsResolved += 1;
+    }
+  }
+
+  const avgOdds = oddsRows.length
+    ? oddsRows.reduce((sum, row) => sum + Number(row.entry_odds), 0) / oddsRows.length
+    : null;
+
+  const oddsROI = oddsResolved > 0
+    ? oddsPL / (oddsResolved * REPORT_STAKE) * 100
+    : null;
+
+  let message =
+`👻 SHADOW BET READY STATS — 5–9′
+
+🧪 Само ранни сигнали, които реално са станали BET READY
+🔥 Минимален Score: 50
+
+🎯 ENTRY: ${total}
+🟢 GOAL HIT: ${goals}
+🔴 NO GOAL: ${noGoals}${open > 0 ? `\n⏳ OPEN: ${open}` : ""}
+
+📈 Успеваемост: ${successRate.toFixed(1)}%
+⏱ Средно до гол: ${avgGoalAfter !== null ? avgGoalAfter.toFixed(1) + " мин." : "—"}
+🎲 Avg odds: ${avgOdds !== null ? avgOdds.toFixed(2) : "—"}
+💶 P/L @ €${REPORT_STAKE.toFixed(0)}: ${oddsResolved ? formatMoney(oddsPL) + " EUR" : "—"}
+📈 ROI: ${oddsROI !== null ? (oddsROI > 0 ? "+" : "") + oddsROI.toFixed(1) + "%" : "—"}
+
+━━━━━━━━━━━━━━━━
+⏱ ПО ТОЧНА ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+`;
+
+  for (let minute = 5; minute <= 9; minute++) {
+    const group = rows.filter(r => Number(r?.entry_minute) === minute);
+    const g = group.filter(r => r?.result === "GOAL HIT").length;
+    const ng = group.filter(r => r?.result === "NO GOAL").length;
+    const resolvedMinute = g + ng;
+    const rate = resolvedMinute > 0 ? g / resolvedMinute * 100 : 0;
+
+    message += group.length
+      ? `${minute}′: ${group.length} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${rate.toFixed(1)}%\n`
+      : `${minute}′: 0 ENTRY\n`;
+  }
+
+  message +=
+`\n━━━━━━━━━━━━━━━━
+🔥 ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+  for (const [minScore, maxScore, label] of [
+    [50, 54, "50–54"],
+    [55, 59, "55–59"],
+    [60, 64, "60–64"],
+    [65, 69, "65–69"],
+    [70, 79, "70–79"],
+    [80, 89, "80–89"],
+    [90, 100, "90–100"]
+  ]) {
+    const group = rows.filter(r => {
+      const score = Number(r?.hunter_score || 0);
+      return score >= minScore && score <= maxScore;
+    });
+    const g = group.filter(r => r?.result === "GOAL HIT").length;
+    const ng = group.filter(r => r?.result === "NO GOAL").length;
+    const resolvedScore = g + ng;
+    const rate = resolvedScore > 0 ? g / resolvedScore * 100 : 0;
+
+    message += group.length
+      ? `${label}: ${group.length} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${rate.toFixed(1)}%\n`
+      : `${label}: 0 ENTRY\n`;
+  }
+
+  message +=
+`\n━━━━━━━━━━━━━━━━
+👻 Само SHADOW BET READY — не влиза в /betstats
+🎲 Cloudbet event + реален entry odds + odds_available
+💾 Не-BET-READY Shadow сигналите не участват в тази команда
+🕐 Europe/Sofia`;
+
+  return message;
+}
+
+
+// ============================================================
+// BET READY HISTORY — /betstats
+// V6.7.10.7
+// ============================================================
+
+async function buildBetReadyStats(env) {
+
+  const now = new Date();
+  const local = getSofiaTime(now);
+  const today = local.date;
+  const currentMonth = getMonthKey(today);
+  const bounds = getSofiaMonthUtcBounds(currentMonth);
+
+  if (!bounds) {
+    return `💰 BET READY STATS\n\n❌ Не успях да изчисля месечните граници.`;
+  }
+
+  const cleanStart =
+    bounds.start > BETSTATS_CLEAN_START_UTC
+      ? bounds.start
+      : BETSTATS_CLEAN_START_UTC;
+
+  const overall = await env.DB
+    .prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(CASE WHEN result = 'GOAL HIT' AND goal_after_minutes IS NOT NULL THEN goal_after_minutes END) AS avg_goal_after,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(CASE WHEN result IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS financial_bets,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+    `)
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
+    .first();
+
+  const dailyResult = await env.DB
+    .prepare(`
+      SELECT
+        substr(datetime(created_at, '+3 hours'), 1, 10) AS day_key,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY day_key
+      ORDER BY day_key DESC
+      LIMIT 10
+    `)
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
+    .all();
+
+  const minuteResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_minute BETWEEN 10 AND 21 THEN '10–21′'
+        END AS minute_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY minute_group
+      ORDER BY CASE minute_group
+        WHEN '10–21′' THEN 1
+        WHEN '22–25′' THEN 2
+      END
+    `)
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
+    .all();
+
+  const earlyOddsOver150 = await getBetReadyEarlyOddsOver150Stats(env, cleanStart, bounds.end);
+  const earlyScoreSplit = await getBetReadyEarlyScoreSplit(env, cleanStart, bounds.end);
+
+  const scoreResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN hunter_score BETWEEN 60 AND 69 THEN '60–69'
+          WHEN hunter_score BETWEEN 70 AND 79 THEN '70–79'
+          WHEN hunter_score BETWEEN 80 AND 89 THEN '80–89'
+          WHEN hunter_score BETWEEN 90 AND 100 THEN '90–100'
+        END AS score_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY score_group
+    `)
+    .bind(cleanStart, bounds.end)
+    .all();
+
+  const oddsResult = await env.DB
+    .prepare(`
+      SELECT
+        CASE
+          WHEN entry_odds >= 1.00 AND entry_odds < 1.40 THEN '1.00–1.39'
+          WHEN entry_odds >= 1.40 AND entry_odds < 1.70 THEN '1.40–1.69'
+          WHEN entry_odds >= 1.70 AND entry_odds < 2.00 THEN '1.70–1.99'
+          WHEN entry_odds >= 2.00 AND entry_odds < 2.50 THEN '2.00–2.49'
+          WHEN entry_odds >= 2.50 AND entry_odds < 3.50 THEN '2.50–3.49'
+          WHEN entry_odds >= 3.50 AND entry_odds < 5.00 THEN '3.50–4.99'
+          ELSE '5.00+'
+        END AS odds_group,
+        COUNT(*) AS total,
+        SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+        SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+        AVG(entry_odds) AS avg_entry_odds,
+        SUM(
+          CASE
+            WHEN result = 'GOAL HIT' THEN ? * (entry_odds - 1)
+            WHEN result = 'NO GOAL' THEN -?
+            ELSE 0
+          END
+        ) AS profit_loss
+      FROM hunter_signals
+      WHERE created_at >= ?
+        AND created_at < ?
+        AND ${BET_READY_HISTORY_SQL}
+      GROUP BY odds_group
+    `)
+    .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
+    .all();
+
+  const total = Number(overall?.total || 0);
+  const goals = Number(overall?.goals || 0);
+  const noGoals = Number(overall?.no_goals || 0);
+  const resolved = goals + noGoals;
+  const open = Math.max(0, total - resolved);
+  const rate = resolved > 0 ? goals / resolved * 100 : 0;
+  const avgGoalAfter = numberOrNull(overall?.avg_goal_after);
+  const avgOdds = numberOrNull(overall?.avg_entry_odds);
+  const financialBets = Number(overall?.financial_bets || 0);
+  const profitLoss = Number(overall?.profit_loss || 0);
+  const roi = financialBets > 0
+    ? profitLoss / (financialBets * REPORT_STAKE) * 100
+    : null;
+
+  let message =
+`💰 BET READY STATS — CURRENT FILTER
+
+📅 ${currentMonth} · целият месец по текущия BET READY филтър
+
+🎯 ENTRY: ${total}
+🟢 GOAL HIT: ${goals}
+🔴 NO GOAL: ${noGoals}${open > 0 ? `\n⏳ OPEN: ${open}` : ""}
+
+📈 Успеваемост: ${rate.toFixed(1)}%
+⏱ Средно до гол: ${avgGoalAfter !== null ? avgGoalAfter.toFixed(1) + " мин." : "—"}
+🎲 Avg odds: ${avgOdds !== null ? avgOdds.toFixed(2) : "—"}
+💶 P/L: ${financialBets > 0 ? formatMoney(profitLoss) + " EUR" : "—"}
+📈 ROI: ${roi !== null ? (roi > 0 ? "+" : "") + roi.toFixed(1) + "%" : "—"}
+
+━━━━━━━━━━━━━━━━
+📆 ПО ДНИ
+━━━━━━━━━━━━━━━━
+`;
+
+  const dailyRows = dailyResult?.results || [];
+  if (!dailyRows.length) {
+    message += `Няма BET READY записи след фикса.\n`;
+  } else {
+    for (const row of dailyRows) {
+      const dTotal = Number(row?.total || 0);
+      const dGoals = Number(row?.goals || 0);
+      const dNoGoals = Number(row?.no_goals || 0);
+      const dResolved = dGoals + dNoGoals;
+      const dOpen = Math.max(0, dTotal - dResolved);
+      const dRate = dResolved > 0 ? dGoals / dResolved * 100 : 0;
+      const dOdds = numberOrNull(row?.avg_entry_odds);
+      const dPL = Number(row?.profit_loss || 0);
+      const dRoi = dResolved > 0 ? dPL / (dResolved * REPORT_STAKE) * 100 : null;
+
+      message += `${row?.day_key || "—"}: ${dTotal} ENTRY | ${dGoals} GOAL | ${dNoGoals} NO GOAL${dOpen ? ` | ${dOpen} OPEN` : ""} | ${dRate.toFixed(1)}%\n`;
+      message += `   🎲 ${dOdds !== null ? dOdds.toFixed(2) : "—"} | 💶 ${dResolved ? formatMoney(dPL) + " EUR" : "—"} | ROI ${dRoi !== null ? (dRoi > 0 ? "+" : "") + dRoi.toFixed(1) + "%" : "—"}\n`;
+    }
+  }
+
+  message += `\n━━━━━━━━━━━━━━━━
+🏦 ВИРТУАЛНА БАНКА · €${BETSTATS_START_BANK.toFixed(2)} START
+━━━━━━━━━━━━━━━━
+`;
+
+  let virtualBank = BETSTATS_START_BANK;
+  const bankRows = [...dailyRows].reverse();
+
+  if (!bankRows.length) {
+    message += `Няма завършени дни.\n`;
+  } else {
+    for (const row of bankRows) {
+      const dGoals = Number(row?.goals || 0);
+      const dNoGoals = Number(row?.no_goals || 0);
+      const dResolved = dGoals + dNoGoals;
+      const dPL = Number(row?.profit_loss || 0);
+      const openingBank = virtualBank;
+
+      // Flat-stake research: the stake stays REPORT_STAKE (10 EUR).
+      // We do not stop the simulation if the virtual bank falls below the stake;
+      // this is a historical accounting curve, not an execution engine.
+      virtualBank += dPL;
+
+      const bankReturn = openingBank !== 0
+        ? dPL / openingBank * 100
+        : null;
+
+      message +=
+        `${row?.day_key || "—"}: €${openingBank.toFixed(2)} → ${dPL >= 0 ? "+" : ""}€${dPL.toFixed(2)} → €${virtualBank.toFixed(2)}` +
+        `${dResolved ? ` | ${dResolved} bets` : ""}` +
+        `${bankReturn !== null ? ` | ${bankReturn >= 0 ? "+" : ""}${bankReturn.toFixed(1)}% bank` : ""}\n`;
+    }
+
+    const totalBankPL = virtualBank - BETSTATS_START_BANK;
+    const bankGrowth = BETSTATS_START_BANK > 0
+      ? totalBankPL / BETSTATS_START_BANK * 100
+      : null;
+
+    message +=
+      `\n💰 Текуща виртуална банка: €${virtualBank.toFixed(2)}\n` +
+      `📊 Промяна: ${totalBankPL >= 0 ? "+" : ""}€${totalBankPL.toFixed(2)}` +
+      `${bankGrowth !== null ? ` | ${bankGrowth >= 0 ? "+" : ""}${bankGrowth.toFixed(1)}% спрямо началната банка` : ""}\n` +
+      `🎯 Flat stake: €${REPORT_STAKE.toFixed(2)} на BET READY`;
+  }
+
+  message += `\n━━━━━━━━━━━━━━━━
+⏱ ПО ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+`;
+
+  const minuteMap = new Map((minuteResult?.results || []).map(row => [row.minute_group, row]));
+  for (const group of BET_READY_MINUTE_GROUPS) {
+    const row = minuteMap.get(group.label);
+    const n = Number(row?.total || 0);
+    const g = Number(row?.goals || 0);
+    const ng = Number(row?.no_goals || 0);
+    const r = g + ng;
+    const hit = r ? g / r * 100 : 0;
+    const av = numberOrNull(row?.avg_entry_odds);
+    const pl = Number(row?.profit_loss || 0);
+    const rr = r ? pl / (r * REPORT_STAKE) * 100 : null;
+    message += n
+      ? `${group.label}: ${n} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${hit.toFixed(1)}%\n   🎲 ${av !== null ? av.toFixed(2) : "—"} | 💶 ${r ? formatMoney(pl) + " EUR" : "—"} | ROI ${rr !== null ? (rr > 0 ? "+" : "") + rr.toFixed(1) + "%" : "—"}\n`
+      : `${group.label}: 0 ENTRY\n`;
+  }
+
+  message += `\n━━━━━━━━━━━━━━━━\n🎯 10–21′ + ODDS > 1.50\n━━━━━━━━━━━━━━━━\n${formatEarlyOddsOver150Row(earlyOddsOver150)}\n`;
+
+  message += `\n━━━━━━━━━━━━━━━━\n🔥 10–21′ — ПО HUNTER SCORE\n━━━━━━━━━━━━━━━━\n${formatEarlyScoreSplit(earlyScoreSplit)}\n`;
+
+  message += `\n━━━━━━━━━━━━━━━━
+🔥 ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+  const scoreMap = new Map((scoreResult?.results || []).map(row => [row.score_group, row]));
+  for (const group of ["60–69", "70–79", "80–89", "90–100"]) {
+    const row = scoreMap.get(group);
+    const n = Number(row?.total || 0);
+    const g = Number(row?.goals || 0);
+    const ng = Number(row?.no_goals || 0);
+    const r = g + ng;
+    message += n
+      ? `${group}: ${n} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${(r ? g / r * 100 : 0).toFixed(1)}%\n`
+      : `${group}: 0 ENTRY\n`;
+  }
+
+  message += `\n━━━━━━━━━━━━━━━━
+🎲 ПО ENTRY ODDS
+━━━━━━━━━━━━━━━━
+`;
+
+  const oddsOrder = ["1.00–1.39","1.40–1.69","1.70–1.99","2.00–2.49","2.50–3.49","3.50–4.99","5.00+"];
+  const oddsMap = new Map((oddsResult?.results || []).map(row => [row.odds_group, row]));
+
+  for (const group of oddsOrder) {
+    const row = oddsMap.get(group);
+    const n = Number(row?.total || 0);
+    const g = Number(row?.goals || 0);
+    const ng = Number(row?.no_goals || 0);
+    const r = g + ng;
+    const hit = r ? g / r * 100 : 0;
+    const av = numberOrNull(row?.avg_entry_odds);
+    const be = av !== null && av > 0 ? 100 / av : null;
+    const pl = Number(row?.profit_loss || 0);
+    const rr = r ? pl / (r * REPORT_STAKE) * 100 : null;
+
+    message += n
+      ? `${group}: ${n} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${hit.toFixed(1)}%\n   🎲 Avg ${av !== null ? av.toFixed(2) : "—"} | ⚖️ BE ${be !== null ? be.toFixed(1) + "%" : "—"}\n   💶 ${r ? formatMoney(pl) + " EUR" : "—"} | ROI ${rr !== null ? (rr > 0 ? "+" : "") + rr.toFixed(1) + "%" : "—"}\n`
+      : `${group}: 0 ENTRY\n`;
+  }
+
+  message += `\n━━━━━━━━━━━━━━━━
+✅ BET READY за целия ${currentMonth}
+🎯 10–21′: Score >=65 | 22′+ НЕ СЕ ВЗИМАТ
+♻️ Старите записи се преизчисляват по същия филтър
+💾 Не са изтрити от D1
+🕐 Europe/Sofia`;
+
+  return message;
+}
+
+
+// ============================================================
+// V6.7.10.15 — PIPELINE DIAGNOSTICS
+// ============================================================
+
+async function buildPipelineDiagnostics(env, searchParams = null) {
+  if (!env.DB) throw new Error("DB binding missing");
+
+  const rawLimit = Number(searchParams?.get?.("limit") ?? 100);
+  const limit = Math.max(1, Math.min(500, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 100));
+  const date = String(searchParams?.get?.("date") || getSofiaTime(new Date()).date);
+  const bounds = getSofiaDayUtcBounds(date);
+  if (!bounds) throw new Error("INVALID_SOFIA_DATE");
+
+  const result = await env.DB.prepare(`
+    SELECT id, match_id, match_name, league, entry_time, entry_minute,
+           hunter_score, cloudbet_event_id, entry_odds, cloudbet_max_stake,
+           cloudbet_match, odds_available, matcher_score, telegram_message_id,
+           status, result, created_at, updated_at
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND entry_minute BETWEEN 10 AND 25
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).bind(bounds.start,bounds.end,limit).all();
+
+  const summary = await env.DB.prepare(`
+    SELECT COUNT(*) AS hunter_total,
+      SUM(CASE WHEN cloudbet_event_id IS NOT NULL AND TRIM(CAST(cloudbet_event_id AS TEXT)) <> '' THEN 1 ELSE 0 END) AS event_id_total,
+      SUM(CASE WHEN entry_odds IS NOT NULL AND entry_odds > 1 AND odds_available = 1 THEN 1 ELSE 0 END) AS odds_ready_total,
+      SUM(CASE WHEN telegram_message_id IS NOT NULL THEN 1 ELSE 0 END) AS telegram_ready_total,
+      SUM(CASE WHEN status='TRACKING' THEN 1 ELSE 0 END) AS tracking,
+      SUM(CASE WHEN result='GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result='NO GOAL' THEN 1 ELSE 0 END) AS no_goals
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND entry_minute BETWEEN 10 AND 25
+  `).bind(bounds.start,bounds.end).first();
+
+  const signals=(result?.results || []).map(row=>{
+    const hasEvent=row?.cloudbet_event_id!==null && row?.cloudbet_event_id!==undefined && String(row.cloudbet_event_id).trim()!=="";
+    const odds=numberOrNull(row?.entry_odds);
+    const oddsReady=hasEvent && odds!==null && odds>1 && Number(row?.odds_available||0)===1;
+    const telegramSent=row?.telegram_message_id!==null && row?.telegram_message_id!==undefined && String(row.telegram_message_id).trim()!=="";
+    return {
+      id:row?.id??null, match_id:row?.match_id??null, match:row?.match_name??null,
+      league:row?.league??null, entry_time:row?.entry_time??null,
+      entry_minute:Number(row?.entry_minute??0), hunter_score:Number(row?.hunter_score??0),
+      cloudbet:{
+        matched:hasEvent,event_id:hasEvent?String(row.cloudbet_event_id):null,
+        match:row?.cloudbet_match??null,matcher_score:numberOrNull(row?.matcher_score),
+        entry_odds:odds,max_stake:numberOrNull(row?.cloudbet_max_stake),
+        odds_available:Number(row?.odds_available||0)===1
+      },
+      pipeline:{hunter:true,event_id:hasEvent,odds_ready:oddsReady,telegram_entry_sent:telegramSent,bet_ready:telegramSent},
+      football:{status:row?.status??null,result:row?.result??null},
+      created_at:row?.created_at??null,updated_at:row?.updated_at??null
+    };
+  });
+
+  const total=Number(summary?.hunter_total||0);
+  const eventIds=Number(summary?.event_id_total||0);
+  const oddsReady=Number(summary?.odds_ready_total||0);
+  const telegramReady=Number(summary?.telegram_ready_total||0);
+
+  return {
+    success:true,version:"V6.7.10.18 10-25 ONLY + BETSTATS FIX",
+    date,timezone:TIME_ZONE,population:"ALL_NORMAL_HUNTER_10_42",
+    summary:{
+      hunter_total:total,event_id_found:eventIds,event_id_missing:Math.max(0,total-eventIds),
+      odds_ready:oddsReady,odds_missing:Math.max(0,total-oddsReady),
+      telegram_bet_ready:telegramReady,telegram_not_sent:Math.max(0,total-telegramReady),
+      tracking:Number(summary?.tracking||0),goals:Number(summary?.goals||0),no_goals:Number(summary?.no_goals||0)
+    },
+    signals
+  };
+}
+
+async function buildPipelineDiagnosticsMessage(env) {
+  const data=await buildPipelineDiagnostics(env,{get:(n)=>n==="limit"?"20":null});
+  const x=data.summary||{};
+  let message=`🧪 HUNTER PIPELINE DIAGNOSTICS
+
+📅 ${data.date}
+🎯 ALL HUNTER: ${x.hunter_total||0}
+🔗 Event ID found: ${x.event_id_found||0}
+❌ Event ID missing: ${x.event_id_missing||0}
+🎲 Odds ready: ${x.odds_ready||0}
+⏳ Odds missing: ${x.odds_missing||0}
+📲 Telegram BET READY: ${x.telegram_bet_ready||0}
+🙈 Telegram not sent: ${x.telegram_not_sent||0}
+
+⚽ GOAL: ${x.goals||0}
+🔴 NO GOAL: ${x.no_goals||0}
+⏱ TRACKING: ${x.tracking||0}
+
+━━━━━━━━━━━━━━━━
+Последни сигнали
+━━━━━━━━━━━━━━━━
+`;
+  for(const row of (data.signals||[])){
+    const cb=row.cloudbet||{};
+    message+=`\n${row.entry_minute}' | ${row.hunter_score}/100 | ${row.match}\nEvent: ${cb.event_id||"—"} | Odds: ${cb.entry_odds!==null&&cb.entry_odds!==undefined?Number(cb.entry_odds).toFixed(2):"—"} | Telegram: ${row.pipeline?.telegram_entry_sent?"YES":"NO"} | ${row.football?.result||row.football?.status||"—"}\n`;
+  }
+  message+=`\n💾 /stats = ALL Hunter 10–42\n✅ /betstats = BET READY only\n📲 ENTRY alerts = BET READY only`;
+  return message;
+}
+
+
+// ============================================================
+// STATS
+// ============================================================
+
+async function buildStats(env) {
+
+  const now =
+    new Date();
+
+
+  const local =
+    getSofiaTime(
+      now
+    );
+
+
+  const today =
+    local.date;
+
+
+  const currentMonth =
+    getMonthKey(
+      today
+    );
+
+
+  const monthlyHistory =
+    await getMonthlyHistory(
+      env,
+      currentMonth
+    );
+
+
+  const currentDetails =
+    await getCurrentMonthDetails(
+      env,
+      currentMonth
+    );
+
+  const currentMonthBounds = getSofiaMonthUtcBounds(currentMonth);
+  const currentOddsStats = await getOddsStatsForBounds(env, currentMonthBounds);
+
+
+  const dailyBounds =
+    getSofiaDayUtcBounds(
+      today
+    );
+
+
+  const daily =
+    dailyBounds
+      ? await env.DB
+          .prepare(`
+            SELECT
+
+              COUNT(*) AS total,
+
+              SUM(
+                CASE
+                  WHEN result = 'GOAL HIT'
+                  THEN 1
+                  ELSE 0
+                END
+              ) AS goals,
+
+              SUM(
+                CASE
+                  WHEN result = 'NO GOAL'
+                  THEN 1
+                  ELSE 0
+                END
+              ) AS no_goals,
+
+              AVG(
+                CASE
+                  WHEN result = 'GOAL HIT'
+                  AND goal_after_minutes IS NOT NULL
+                  THEN goal_after_minutes
+                END
+              ) AS avg_goal_after
+
+            FROM hunter_signals
+
+            WHERE created_at >= ?
+              AND created_at < ?
+              AND ${HUNTER_HISTORY_SQL}
+          `)
+          .bind(
+            dailyBounds.start,
+            dailyBounds.end
+          )
+          .first()
+      : null;
+
+
+  const dailyMinuteRows =
+    await getHunterMinuteStatsForBounds(
+      env,
+      dailyBounds
+    );
+
+
+  const dailyTotal =
+    Number(
+      daily?.total || 0
+    );
+
+
+  const dailyGoals =
+    Number(
+      daily?.goals || 0
+    );
+
+
+  const dailyNoGoals =
+    Number(
+      daily?.no_goals || 0
+    );
+
+
+  const dailyResolved =
+    dailyGoals +
+    dailyNoGoals;
+
+
+  const dailyRate =
+    dailyResolved > 0
+      ? dailyGoals /
+        dailyResolved *
+        100
+      : 0;
+
+
+  const dailyAvg =
+    daily?.avg_goal_after !==
+      null &&
+    daily?.avg_goal_after !==
+      undefined
+      ? Number(
+          daily.avg_goal_after
+        )
+      : null;
+
+
+  let message =
+`📊 HUNTER MONTHLY REPORT
+
+📅 ${formatMonthLabel(
+  currentMonth
+)}
+
+`;
+
+
+  for (
+    const monthStats of
+      monthlyHistory
+  ) {
+
+    message +=
+      formatMonthlyBlock(
+        monthStats
+      ) +
+      "\n\n";
+  }
+
+
+  message +=
+`━━━━━━━━━━━━━━━━
+🎯 ${formatMonthLabel(currentMonth)} — ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+
+  const scoreMap =
+    new Map();
+
+
+  for (
+    const row of
+      currentDetails.scoreRows
+  ) {
+
+    scoreMap.set(
+      row.score_group,
+      row
+    );
+  }
+
+
+  const scoreGroups = [
+    "60–69",
+    "70–79",
+    "80–89",
+    "90–100"
+  ];
+
+
+  for (
+    const group of
+      scoreGroups
+  ) {
+
+    const row =
+      scoreMap.get(group);
+
+
+    if (!row) {
+
+      message +=
+        `${group}: 0 ENTRY\n`;
+
+      continue;
+    }
+
+
+    const rowTotal =
+      Number(
+        row.total || 0
+      );
+
+
+    const rowGoals =
+      Number(
+        row.goals || 0
+      );
+
+
+    const rowNoGoals =
+      Number(
+        row.no_goals || 0
+      );
+
+
+    const rowResolved =
+      rowGoals +
+      rowNoGoals;
+
+
+    const rowRate =
+      rowResolved > 0
+        ? rowGoals /
+          rowResolved *
+          100
+        : 0;
+
+
+    message +=
+      `${group}: ` +
+      `${rowTotal} ENTRY | ` +
+      `${rowGoals} GOAL | ` +
+      `${rowNoGoals} NO GOAL | ` +
+      `${rowRate.toFixed(1)}%\n`;
+  }
+
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+⚽ СРЕДНО ДО ГОЛ ПО SCORE
+━━━━━━━━━━━━━━━━
+`;
+
+
+  for (
+    const group of
+      scoreGroups
+  ) {
+
+    const row =
+      scoreMap.get(
+        group
+      );
+
+
+    const rowAvg =
+      row?.avg_goal_after !==
+        null &&
+      row?.avg_goal_after !==
+        undefined
+        ? Number(
+            row.avg_goal_after
+          )
+        : null;
+
+
+    message +=
+      `${group}: ` +
+      (
+        rowAvg !== null
+          ? rowAvg.toFixed(1) +
+            " мин."
+          : "—"
+      ) +
+      "\n";
+  }
+
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+⏱ ${formatMonthLabel(currentMonth)} — ПО ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+`;
+
+
+  message +=
+    formatHunterMinuteStats(
+      currentDetails.minuteRows
+    );
+
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+🕐 ${formatMonthLabel(currentMonth)} — ПО ЧАС НА ENTRY
+━━━━━━━━━━━━━━━━
+`;
+
+
+  for (
+    const row of
+      currentDetails.hourRows
+  ) {
+
+    const total =
+      Number(
+        row?.total || 0
+      );
+
+
+    const goals =
+      Number(
+        row?.goals || 0
+      );
+
+
+    const noGoals =
+      Number(
+        row?.no_goals || 0
+      );
+
+
+    const resolved =
+      goals +
+      noGoals;
+
+
+    const rate =
+      resolved > 0
+        ? goals /
+          resolved *
+          100
+        : 0;
+
+
+    message +=
+      `${row.hour_group}: ` +
+      `${total} ENTRY | ` +
+      `${goals} GOAL | ` +
+      `${noGoals} NO GOAL | ` +
+      `${rate.toFixed(1)}%\n`;
+  }
+
+
+  const leagueRows =
+    Array.isArray(
+      currentDetails.leagueRows
+    )
+      ? currentDetails.leagueRows
+      : [];
+
+
+  const strongestLeagues =
+    [...leagueRows]
+      .sort(
+        (a, b) =>
+          b.rate - a.rate ||
+          b.resolved -
+            a.resolved ||
+          b.total - a.total ||
+          a.league.localeCompare(
+            b.league
+          )
+      )
+      .slice(
+        0,
+        LEAGUE_TOP_COUNT
+      );
+
+
+  const strongestNames =
+    new Set(
+      strongestLeagues.map(
+        row =>
+          row.league
+      )
+    );
+
+
+  const weakestLeagues =
+    [...leagueRows]
+      .filter(
+        row =>
+          !strongestNames.has(
+            row.league
+          ) ||
+          leagueRows.length <=
+            LEAGUE_TOP_COUNT
+      )
+      .sort(
+        (a, b) =>
+          a.rate - b.rate ||
+          b.resolved -
+            a.resolved ||
+          b.total - a.total ||
+          a.league.localeCompare(
+            b.league
+          )
+      )
+      .slice(
+        0,
+        LEAGUE_BOTTOM_COUNT
+      );
+
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+🏆 ${formatMonthLabel(currentMonth)} — ТОП 10 ЛИГИ
+━━━━━━━━━━━━━━━━
+`;
+
+
+  if (
+    strongestLeagues.length ===
+      0
+  ) {
+
+    message +=
+      `Няма достатъчно данни за лиги (минимум ${MIN_LEAGUE_RESOLVED} приключили сигнала).\n`;
+
+  } else {
+
+    strongestLeagues.forEach(
+      (row, index) => {
+
+        message +=
+          `${index + 1}. ${row.league}\n` +
+          `   ${row.total} ENTRY | ` +
+          `${row.goals} GOAL | ` +
+          `${row.no_goals} NO GOAL | ` +
+          `${row.rate.toFixed(1)}%\n`;
+      }
+    );
+  }
+
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+⚠️ ${formatMonthLabel(currentMonth)} — 10 НАЙ-СЛАБИ ЛИГИ
+━━━━━━━━━━━━━━━━
+`;
+
+
+  if (
+    weakestLeagues.length ===
+      0
+  ) {
+
+    message +=
+      `Няма достатъчно данни за лиги (минимум ${MIN_LEAGUE_RESOLVED} приключили сигнала).\n`;
+
+  } else {
+
+    weakestLeagues.forEach(
+      (row, index) => {
+
+        message +=
+          `${index + 1}. ${row.league}\n` +
+          `   ${row.total} ENTRY | ` +
+          `${row.goals} GOAL | ` +
+          `${row.no_goals} NO GOAL | ` +
+          `${row.rate.toFixed(1)}%\n`;
+      }
+    );
+  }
+
+
+  const oddsTotal = Number(currentOddsStats?.total || 0);
+  const oddsGoals = Number(currentOddsStats?.goals || 0);
+  const oddsNoGoals = Number(currentOddsStats?.no_goals || 0);
+  const oddsResolved = oddsGoals + oddsNoGoals;
+  const oddsRate = oddsResolved > 0 ? oddsGoals / oddsResolved * 100 : 0;
+  const oddsAvg = numberOrNull(currentOddsStats?.avg_entry_odds);
+  const oddsBets = Number(currentOddsStats?.financial_bets || 0);
+  const oddsPL = Number(currentOddsStats?.profit_loss || 0);
+  const oddsROI = oddsBets > 0 ? oddsPL / (oddsBets * REPORT_STAKE) * 100 : null;
+
+  message += `
+━━━━━━━━━━━━━━━━
+💰 ${formatMonthLabel(currentMonth)} — ODDS / BET STATISTICS
+━━━━━━━━━━━━━━━━
+🎯 Qualified: ${oddsTotal}
+🟢 GOAL: ${oddsGoals} | 🔴 NO GOAL: ${oddsNoGoals}
+📈 Success: ${oddsRate.toFixed(1)}%
+🎲 Avg odds: ${oddsAvg !== null ? oddsAvg.toFixed(2) : '—'}
+💶 P/L: ${oddsBets > 0 ? (oddsPL >= 0 ? '+' : '') + oddsPL.toFixed(2) + ' EUR' : '—'}
+📈 ROI: ${oddsROI !== null ? (oddsROI >= 0 ? '+' : '') + oddsROI.toFixed(1) + '%' : '—'}
+🎟 bets: ${oddsBets}
+🎯 Filter: entry_odds > 1 + Score 60/65/70/75/80
+`;
+
+  message +=
+`
+━━━━━━━━━━━━━━━━
+📅 ДНЕШЕН ОТЧЕТ
+━━━━━━━━━━━━━━━━
+
+📅 ${today}
+
+🎯 ENTRY: ${dailyTotal}
+
+🟢 GOAL HIT: ${dailyGoals}
+
+🔴 NO GOAL: ${dailyNoGoals}
+
+📈 Успеваемост:
+${dailyRate.toFixed(1)}%
+
+⏱ Средно до гол:
+${
+  dailyAvg !== null
+    ? dailyAvg.toFixed(1) +
+      " мин."
+    : "—"
+}
+
+━━━━━━━━━━━━━━━━
+⏱ ДНЕС — ПО ENTRY МИНУТА
+━━━━━━━━━━━━━━━━
+${formatHunterMinuteStats(
+  dailyMinuteRows
+)}
+━━━━━━━━━━━━━━━━
+💾 Данните са от hunter_signals
+📚 Hunter history: всички нормални ENTRY 10–42′
+💰 Odds/ROI: отделно само entry_odds > 1 + Score 60/65/70/75/80
+🕐 Daily timezone: Europe/Sofia
+📊 Месеците се изчисляват по Europe/Sofia
+━━━━━━━━━━━━━━━━
+NEXT GOAL HUNTER
+━━━━━━━━━━━━━━━━`;
+
+
+  return message;
+}
+
+
+// ============================================================
+// HOUR × ENTRY MINUTE
+// ============================================================
+
+async function buildHourMinuteStatsMessage(
+  env
+) {
+
+  const now =
+    new Date();
+
+
+  const local =
+    getSofiaTime(
+      now
+    );
+
+
+  const currentMonth =
+    getMonthKey(
+      local.date
+    );
+
+
+  const details =
+    await getCurrentMonthDetails(
+      env,
+      currentMonth
+    );
+
+
+  const rows =
+    Array.isArray(
+      details?.hourMinuteRows
+    )
+      ? details.hourMinuteRows
+      : [];
+
+
+  let message =
+`🧭 ${formatMonthLabel(currentMonth)} — ЧАС × ENTRY МИНУТА
+
+`;
+
+
+  for (
+    const hourGroup of
+      ENTRY_HOUR_GROUPS
+  ) {
+
+    message +=
+`━━━━━━━━━━━━━━━━
+🕐 ${hourGroup.label}
+━━━━━━━━━━━━━━━━
+`;
+
+
+    for (
+      const minuteGroup of
+        ENTRY_MINUTE_GROUPS
+    ) {
+
+      const row =
+        rows.find(
+          r =>
+            r?.hour_group ===
+              hourGroup.label &&
+            r?.minute_group ===
+              minuteGroup.label
+        );
+
+
+      const total =
+        Number(
+          row?.total || 0
+        );
+
+
+      const goals =
+        Number(
+          row?.goals || 0
+        );
+
+
+      const noGoals =
+        Number(
+          row?.no_goals || 0
+        );
+
+
+      const resolved =
+        goals +
+        noGoals;
+
+
+      const rate =
+        resolved > 0
+          ? goals /
+            resolved *
+            100
+          : 0;
+
+
+      if (
+        total === 0
+      ) {
+
+        message +=
+          `${minuteGroup.label}: 0 ENTRY\n`;
+
+      } else {
+
+        message +=
+          `${minuteGroup.label}: ` +
+          `${total} ENTRY | ` +
+          `${goals} GOAL | ` +
+          `${noGoals} NO GOAL | ` +
+          `${rate.toFixed(1)}%\n`;
+      }
+    }
+
+
+    message +=
+      "\n";
+  }
+
+
+  message +=
+`💾 hunter_signals
+📚 Всички Hunter ENTRY 10–42′ (без shadow 5–9′)
+🕐 Europe/Sofia`;
+
+
+  return message;
+}
+
+
+// ============================================================
+// DAILY REPORT
+// ============================================================
+
+async function sendDailyReport(
+  env,
+  local
+) {
+
+  const reportDate =
+    getPreviousSofiaDate(
+      local.date
+    );
+
+
+  const already =
+    await env.DB
+      .prepare(`
+        SELECT id
+        FROM daily_reports
+        WHERE report_date = ?
+        LIMIT 1
+      `)
+      .bind(
+        reportDate
+      )
+      .first();
+
+
+  if (already)
+    return;
+
+
+  const reportBounds =
+    getSofiaDayUtcBounds(
+      reportDate
+    );
+
+
+  if (!reportBounds) {
+
+    throw new Error(
+      "Could not calculate Sofia UTC bounds for " +
+      reportDate
+    );
+  }
+
+
+  const stats =
+    await env.DB
+      .prepare(`
+        SELECT
+
+          COUNT(*) AS total,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+              THEN 1
+              ELSE 0
+            END
+          ) AS goals,
+
+          SUM(
+            CASE
+              WHEN result = 'NO GOAL'
+              THEN 1
+              ELSE 0
+            END
+          ) AS no_goals,
+
+          AVG(
+            CASE
+              WHEN entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN entry_odds
+            END
+          ) AS avg_entry_odds,
+
+          SUM(
+            CASE
+              WHEN result IN ('GOAL HIT', 'NO GOAL')
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN 1
+              ELSE 0
+            END
+          ) AS financial_bets,
+
+          SUM(
+            CASE
+              WHEN result = 'GOAL HIT'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN ? * (entry_odds - 1)
+
+              WHEN result = 'NO GOAL'
+               AND entry_odds IS NOT NULL
+               AND entry_odds > 1
+              THEN -?
+
+              ELSE 0
+            END
+          ) AS profit_loss
+
+        FROM hunter_signals
+
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND ${REPORT_ELIGIBLE_SQL}
+      `)
+      .bind(
+        REPORT_STAKE,
+        REPORT_STAKE,
+        reportBounds.start,
+        reportBounds.end
+      )
+      .first();
+
+
+  const minuteRows =
+    await getMinuteStatsForBounds(
+      env,
+      reportBounds
+    );
+
+
+  const total =
+    Number(
+      stats?.total || 0
+    );
+
+
+  const goals =
+    Number(
+      stats?.goals || 0
+    );
+
+
+  const noGoals =
+    Number(
+      stats?.no_goals || 0
+    );
+
+
+  const resolved =
+    goals +
+    noGoals;
+
+
+  const rate =
+    resolved > 0
+      ? goals /
+        resolved *
+        100
+      : 0;
+
+
+  const open =
+    Math.max(
+      0,
+      total -
+      resolved
+    );
+
+
+  const avgEntryOdds =
+    numberOrNull(
+      stats?.avg_entry_odds
+    );
+
+
+  const breakEvenOdds =
+    goals > 0 &&
+    resolved > 0
+      ? resolved /
+        goals
+      : null;
+
+
+  const financialBets =
+    Number(
+      stats?.financial_bets || 0
+    );
+
+
+  const profitLoss =
+    Number(
+      stats?.profit_loss || 0
+    );
+
+
+  const roi =
+    financialBets > 0
+      ? profitLoss /
+        (
+          financialBets *
+          REPORT_STAKE
+        ) *
+        100
+      : null;
+
+
+  // V6.7.10.0: the automatic midnight report uses the exact same
+  // formatter, filters and minute/score groups as /today.
+  const message = await buildTodayStats(
+    env,
+    reportDate,
+    "📊 HUNTER DAILY FINAL"
+  );
+
+
+  await sendTelegram(
+    env,
+    message
+  );
+
+
+  await env.DB
+    .prepare(`
+      INSERT INTO daily_reports (
+
+        report_date,
+        total,
+        goals,
+        no_goals,
+        success_rate,
+        created_at
+
+      )
+
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    .bind(
+      reportDate,
+      total,
+      goals,
+      noGoals,
+      rate,
+      new Date()
+        .toISOString()
+    )
+    .run();
+}
+
+
+// ============================================================
+// TELEGRAM
+// ============================================================
+
+async function sendTelegram(
+  env,
+  message,
+  replyToMessageId = null
+) {
+
+  const token =
+    env.TELEGRAM_BOT_TOKEN;
+
+
+  const chatId =
+    env.TELEGRAM_CHAT_ID;
+
+
+  const text =
+    String(
+      message || ""
+    );
+
+
+  if (!text)
+    return null;
+
+
+  const chunks =
+    splitTelegramMessage(
+      text,
+      3900
+    );
+
+
+  let firstMessageId =
+    null;
+
+
+  for (
+    let i = 0;
+    i < chunks.length;
+    i++
+  ) {
+
+    const body = {
+      chat_id:
+        chatId,
+
+      text:
+        chunks[i]
+    };
+
+
+    if (
+      i === 0 &&
+      replyToMessageId !==
+        null &&
+      replyToMessageId !==
+        undefined &&
+      String(
+        replyToMessageId
+      ) !== ""
+    ) {
+
+      body.reply_parameters = {
+        message_id:
+          Number(
+            replyToMessageId
+          )
+      };
+    }
+
+
+    const response =
+      await fetch(
+        `https://api.telegram.org/bot${token}/sendMessage`,
+        {
+          method:
+            "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify(
+              body
+            )
+        }
+      );
+
+
+    const responseText =
+      await response.text();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        "Telegram HTTP " +
+        response.status +
+        " | " +
+        responseText.substring(
+          0,
+          500
+        )
+      );
+    }
+
+
+    try {
+
+      const result =
+        JSON.parse(
+          responseText
+        );
+
+
+      if (
+        result?.ok === true &&
+        result?.result?.message_id !==
+          undefined
+      ) {
+
+        const messageId =
+          Number(
+            result.result.message_id
+          );
+
+
+        if (
+          firstMessageId ===
+            null
+        ) {
+
+          firstMessageId =
+            messageId;
+        }
+      }
+
+    } catch (error) {
+
+      console.error(
+        "TELEGRAM RESPONSE PARSE ERROR",
+        error?.message ||
+        String(error)
+      );
+    }
+  }
+
+
+  return firstMessageId;
+}
+
+
+function splitTelegramMessage(
+  text,
+  maxLength = 3900
+) {
+
+  const source =
+    String(
+      text || ""
+    );
+
+
+  if (
+    source.length <=
+      maxLength
+  ) {
+
+    return [
+      source
+    ];
+  }
+
+
+  const lines =
+    source.split(
+      "\n"
+    );
+
+
+  const chunks = [];
+
+
+  let current =
+    "";
+
+
+  for (
+    const line of lines
+  ) {
+
+    const candidate =
+      current
+        ? current +
+          "\n" +
+          line
+        : line;
+
+
+    if (
+      candidate.length <=
+        maxLength
+    ) {
+
+      current =
+        candidate;
+
+      continue;
+    }
+
+
+    if (current) {
+
+      chunks.push(
+        current
+      );
+
+      current =
+        "";
+    }
+
+
+    if (
+      line.length <=
+        maxLength
+    ) {
+
+      current =
+        line;
+
+      continue;
+    }
+
+
+    let remaining =
+      line;
+
+
+    while (
+      remaining.length >
+        maxLength
+    ) {
+
+      chunks.push(
+        remaining.slice(
+          0,
+          maxLength
+        )
+      );
+
+
+      remaining =
+        remaining.slice(
+          maxLength
+        );
+    }
+
+
+    current =
+      remaining;
+  }
+
+
+  if (current) {
+
+    chunks.push(
+      current
+    );
+  }
+
+
+  return chunks;
+}
+
+
+// ============================================================
+// ENTRY MESSAGE — V6.7 CLOUDBET ODDS
+// ============================================================
+
+function formatEntryMessage(
+  m,
+  score,
+  local,
+  cloudbet = null,
+  betReady = null
+) {
+
+  const home =
+    m?.score?.home ??
+    0;
+
+
+  const away =
+    m?.score?.away ??
+    0;
+
+
+  const minute =
+    Number(
+      m?.minute ?? 0
+    );
+
+
+  const minuteDisplay =
+    m?.minute_display ||
+    (
+      minute +
+      "'"
+    );
+
+
+  const league =
+    m?.league ||
+    m?.tournament ||
+    m?.competition ||
+    "LIVE";
+
+
+  // ==========================================================
+  // CLOUDBET MATCH STATUS
+  // ==========================================================
+
+  const eventId =
+    cloudbet?.event_id ??
+    null;
+
+
+  const matched =
+    cloudbet?.success ===
+      true &&
+    eventId !== null &&
+    eventId !==
+      undefined &&
+    String(
+      eventId
+    ).trim() !== "";
+
+
+  const directAiMatched =
+    matched &&
+    String(cloudbet?.match_source || "").toUpperCase() === "AI";
+
+  let cloudbetText =
+    matched
+      ? directAiMatched
+        ? "🔗 CLOUDBET: ✅ AI MATCHED"
+        : "🔗 CLOUDBET: ✅ MATCHED"
+      : "🔗 CLOUDBET: ❌ UNMATCHED";
+
+
+  if (matched) {
+
+    if (
+      cloudbet?.match
+    ) {
+
+      cloudbetText +=
+        `\n🎯 Cloudbet: ${cloudbet.match}`;
+    }
+
+
+    cloudbetText +=
+      `\n🆔 Event: ${eventId}`;
+
+
+    const matcherScore =
+      numberOrNull(
+        cloudbet?.matcher_score
+      );
+
+
+    if (matcherScore !== null) {
+      if (directAiMatched) {
+        cloudbetText += `
+🤖 AI Match: ${(matcherScore * 100).toFixed(0)}%`;
+      } else {
+        cloudbetText += `
+📊 Matcher: ${matcherScore.toFixed(3)}`;
+      }
+    }
+
+
+    const price =
+      numberOrNull(
+        cloudbet?.price
+      );
+
+
+    if (
+      cloudbet?.odds_available ===
+        true &&
+      price !== null
+    ) {
+
+      cloudbetText +=
+        `\n🎲 Entry odds: ${price.toFixed(2)}`;
+
+    } else {
+
+      cloudbetText +=
+        "\n🎲 Entry odds: WAITING";
+    }
+  }
+
+
+  if (!matched && cloudbet) {
+    const matcherReason = cloudbet?.matcher_reason ?? null;
+    if (matcherReason) {
+      cloudbetText += `\n🔎 Matcher: ${matcherReason}`;
+    }
+
+    const attempts = Number(cloudbet?.matcher_attempts ?? 0);
+    if (attempts > 0) {
+      cloudbetText += `\n🔁 Matcher attempts: ${attempts}`;
+    }
+
+    const minuteDiff = numberOrNull(cloudbet?.minute_difference);
+    if (minuteDiff !== null) {
+      cloudbetText += `\n⏱ Minute diff: ${minuteDiff}`;
+    }
+  }
+
+
+  // ==========================================================
+  // BET READY STATUS
+  // ==========================================================
+
+  // V6.7.9.3 HARD GUARD:
+  // Bet Worker is PRE-FLIGHT only. It must never promote a rejected/stale
+  // AI candidate into Telegram as a successful match.
+  // The final Cloudbet identity is accepted ONLY from `cloudbet`, which is
+  // already resolved by the Tracker's parallel Mechanical + AI matcher.
+  // Therefore confidence 0%, rejected AI candidates and stale event_ids
+  // can never become `✅ AI MATCHED` here.
+
+  const waitingAction =
+    betReady?.action === "WAITING_AI" ||
+    betReady?.action === "PENDING_ODDS";
+
+  const waitingReason =
+    [
+      "AI_MATCH_PENDING",
+      "TARGET_ODDS_NOT_AVAILABLE",
+      "EXACT_ODDS_EVENT_NOT_FOUND",
+      "MATCHER_LIVE_FAILED",
+      "CURRENT_ODDS_INVALID",
+      "SELECTION_NOT_ENABLED",
+      "MINUTE_UNKNOWN"
+    ].includes(
+      String(
+        betReady?.reason || ""
+      )
+    );
+
+  let betReadyText =
+    "💰 BET READY: ❌ NO";
+
+  if (
+    betReady?.ready ===
+      true
+  ) {
+
+    betReadyText =
+      "💰 BET READY: ✅ YES";
+
+    const currentOdds =
+      numberOrNull(
+        betReady?.current_odds
+      );
+
+    if (
+      currentOdds !== null
+    ) {
+      betReadyText +=
+        `\n🎲 Current odds: ${currentOdds.toFixed(2)}`;
+    }
+
+    const maxStake =
+      numberOrNull(
+        betReady?.max_stake
+      );
+
+    if (
+      maxStake !== null
+    ) {
+      betReadyText +=
+        `\n💵 Max stake: ${maxStake.toFixed(2)}`;
+    }
+
+    const balance =
+      numberOrNull(
+        betReady
+          ?.account_balance
+      );
+
+    if (
+      balance !== null
+    ) {
+      betReadyText +=
+        `\n💳 Balance: ${balance.toFixed(2)}`;
+    }
+
+  } else if (
+    waitingAction ||
+    waitingReason
+  ) {
+
+    betReadyText =
+      "💰 BET READY: ⏳ WAITING";
+
+    betReadyText +=
+      `\nПричина: ${
+        betReady?.reason ??
+        "WAITING_FOR_AI_OR_ODDS"
+      }`;
+
+  } else {
+
+    const reason =
+      betReady?.reason ??
+      (
+        !matched
+          ? (
+              cloudbet?.matcher_reason ??
+              "NO_CLOUDBET_EVENT_ID"
+            )
+          : "PREFLIGHT_NOT_READY"
+      );
+
+    betReadyText +=
+      `\nПричина: ${reason}`;
+  }
+
+
+  return `🎯 HUNTER ENTRY
+
+⚽ ${m?.match || "Unknown"}
+
+🏆 ${league}
+
+⏱ ${minuteDisplay}
+
+📊 Резултат: ${home}:${away}
+
+🔥 HUNTER SCORE: ${score}/100
+
+${cloudbetText}
+
+${betReadyText}
+
+🎯 Условие: 10–21′ | Score ≥65
+
+🕐 ${local.text}
+
+STATUS: TRACKING`;
+}
+
+
+// ============================================================
+// GOAL MESSAGE
+// ============================================================
+
+function formatGoalMessage(
+  existing,
+  m,
+  goalMinute,
+  afterMinutes,
+  source = "V27_SCORE"
+) {
+
+  return `🟢 GOAL HIT
+
+⚽ ${existing.match_name}
+
+🏆 ${existing.league}
+
+📥 ENTRY:
+${existing.entry_minute}'
+
+⚽ ГОЛ:
+${
+  goalMinute !== null
+    ? goalMinute + "'"
+    : "—"
+}
+
+⏱ След ENTRY:
+${
+  afterMinutes !== null
+    ? afterMinutes +
+      " мин."
+    : "—"
+}
+
+📊 HUNTER SCORE:
+${existing.hunter_score}/100
+
+📊 Резултат:
+${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
+
+🔎 Потвърждение:
+${String(source || "").startsWith("DF_SUI") ? "DF_SUI EVENT" : "V27 SCORE"}
+
+RESULT: GOAL HIT`;
+}
+
+
+// ============================================================
+// NO GOAL MESSAGE
+// ============================================================
+
+function formatNoGoalMessage(
+  existing,
+  m
+) {
+
+  return `🔴 NO GOAL
+
+⚽ ${existing.match_name}
+
+🏆 ${existing.league}
+
+📥 ENTRY:
+${existing.entry_minute}'
+
+📊 HUNTER SCORE:
+${existing.hunter_score}/100
+
+⏱ КРАЙ НА 1H
+
+Резултат:
+${m?.score?.home ?? 0}:${m?.score?.away ?? 0}
+
+RESULT: NO GOAL`;
+}
+
+
+// ============================================================
+// SOFIA TIME
+// ============================================================
+
+function getSofiaTime(
+  date
+) {
+
+  const parts =
+    SOFIA_FORMATTER
+      .formatToParts(
+        date
+      );
+
+
+  const get =
+    type =>
+      parts.find(
+        p =>
+          p.type === type
+      )?.value;
+
+
+  const year =
+    get("year");
+
+
+  const month =
+    get("month");
+
+
+  const day =
+    get("day");
+
+
+  const hour =
+    Number(
+      get("hour")
+    );
+
+
+  const minute =
+    Number(
+      get("minute")
+    );
+
+
+  const second =
+    Number(
+      get("second")
+    );
+
+
+  return {
+    date:
+      `${year}-${month}-${day}`,
+
+    hour,
+
+    minute,
+
+    second,
+
+    text:
+      `${day}.${month}.${year} ` +
+      `${String(hour).padStart(2, "0")}:` +
+      `${String(minute).padStart(2, "0")}:` +
+      `${String(second).padStart(2, "0")}`
+  };
+}
+
+
+// ============================================================
+// PREVIOUS DATE
+// ============================================================
+
+function getPreviousSofiaDate(
+  dateString
+) {
+
+  const parts =
+    dateString
+      .split("-")
+      .map(
+        Number
+      );
+
+
+  const d =
+    new Date(
+      Date.UTC(
+        parts[0],
+        parts[1] - 1,
+        parts[2]
+      )
+    );
+
+
+  d.setUTCDate(
+    d.getUTCDate() -
+    1
+  );
+
+
+  return (
+    d.getUTCFullYear() +
+    "-" +
+    String(
+      d.getUTCMonth() +
+      1
+    ).padStart(
+      2,
+      "0"
+    ) +
+    "-" +
+    String(
+      d.getUTCDate()
+    ).padStart(
+      2,
+      "0"
+    )
+  );
+}
+
+
+// ============================================================
+// NUMBER
+// ============================================================
+
+function numberOrNull(
+  value
+) {
+
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+
+    return null;
+  }
+
+
+  const n =
+    Number(
+      value
+    );
+
+
+  return Number.isFinite(
+    n
+  )
+    ? n
+    : null;
+}
+
+
+// ============================================================
+// CORS
+// ============================================================
+
+function corsHeaders() {
+
+  return {
+    "Access-Control-Allow-Origin":
+      "*",
+
+    "Access-Control-Allow-Methods":
+      "GET,HEAD,POST,OPTIONS",
+
+    "Access-Control-Allow-Headers":
+      "Content-Type"
+  };
+}
+
+
+// ============================================================
+// JSON
+// ============================================================
+
+function json(
+  data,
+  status = 200
+) {
+
+  return new Response(
+    JSON.stringify(
+      data,
+      null,
+      2
+    ),
+    {
+      status,
+
+      headers: {
+        "Content-Type":
+          "application/json; charset=utf-8",
+
+        ...corsHeaders(),
+
+        "Cache-Control":
+          "no-store"
+      }
+    }
+  );
+                                      }
