@@ -229,7 +229,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// V6.7.10.18: /today + /betstats minute analysis split: 10–22′ / 23–25′. No live filter change.
+// V6.7.10.19: /today + /betstats minute analysis split: 10–21′ / 22–25′. No live filter change.
 // BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -285,8 +285,8 @@ const ENTRY_MINUTE_GROUPS = [
 
 // V6.7.10.18 — analysis display only for /today and /betstats. Live filter unchanged.
 const BET_READY_MINUTE_GROUPS = [
-  { label: "10–22′", min: 10, max: 22 },
-  { label: "23–25′", min: 23, max: 25 }
+  { label: "10–21′", min: 10, max: 21 },
+  { label: "22–25′", min: 22, max: 25 }
 ];
 
 const ENTRY_HOUR_GROUPS = [
@@ -6870,8 +6870,8 @@ async function getBetReadyMinuteStatsForBounds(env, bounds) {
     .prepare(`
       SELECT
         CASE
-          WHEN entry_minute BETWEEN 10 AND 22 THEN '10–22′'
-          WHEN entry_minute BETWEEN 23 AND 25 THEN '23–25′'
+          WHEN entry_minute BETWEEN 10 AND 21 THEN '10–21′'
+          WHEN entry_minute BETWEEN 22 AND 25 THEN '22–25′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -6898,8 +6898,8 @@ async function getBetReadyMinuteStatsForBounds(env, bounds) {
       GROUP BY minute_group
       ORDER BY
         CASE minute_group
-          WHEN '10–22′' THEN 1
-          WHEN '23–25′' THEN 2
+          WHEN '10–21′' THEN 1
+          WHEN '22–25′' THEN 2
         END
     `)
     .bind(REPORT_STAKE, REPORT_STAKE, bounds.start, bounds.end)
@@ -7428,8 +7428,8 @@ async function buildBetReadyStats(env) {
     .prepare(`
       SELECT
         CASE
-          WHEN entry_minute BETWEEN 10 AND 22 THEN '10–22′'
-          WHEN entry_minute BETWEEN 23 AND 25 THEN '23–25′'
+          WHEN entry_minute BETWEEN 10 AND 21 THEN '10–21′'
+          WHEN entry_minute BETWEEN 22 AND 25 THEN '22–25′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -7448,8 +7448,8 @@ async function buildBetReadyStats(env) {
         AND ${BET_READY_HISTORY_SQL}
       GROUP BY minute_group
       ORDER BY CASE minute_group
-        WHEN '10–22′' THEN 1
-        WHEN '23–25′' THEN 2
+        WHEN '10–21′' THEN 1
+        WHEN '22–25′' THEN 2
       END
     `)
     .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
