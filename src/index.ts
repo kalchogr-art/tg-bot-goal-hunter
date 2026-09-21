@@ -1,7 +1,7 @@
 
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.22 10–25 ONLY + BETSTATS ODDS ANALYTICS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.23 10–25 ONLY + BETSTATS ODDS ANALYTICS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -229,7 +229,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// V6.7.10.22: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
+// V6.7.10.23: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
 // BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -6996,7 +6996,8 @@ async function getBetReadyEarlyScoreSplit(env, start, end) {
   return env.DB.prepare(`
     SELECT
       CASE
-        WHEN hunter_score BETWEEN 60 AND 69 THEN '60–69'
+        WHEN hunter_score BETWEEN 60 AND 64 THEN '60–64'
+        WHEN hunter_score BETWEEN 65 AND 69 THEN '65–69'
         WHEN hunter_score >= 70 THEN '70+'
       END AS score_group,
       COUNT(*) AS total,
@@ -7009,14 +7010,19 @@ async function getBetReadyEarlyScoreSplit(env, start, end) {
       AND entry_minute BETWEEN 10 AND 21
       AND hunter_score >= 60
     GROUP BY score_group
-    ORDER BY CASE score_group WHEN '60–69' THEN 1 WHEN '70+' THEN 2 ELSE 3 END
+    ORDER BY CASE score_group
+      WHEN '60–64' THEN 1
+      WHEN '65–69' THEN 2
+      WHEN '70+' THEN 3
+      ELSE 4
+    END
   `).bind(start, end).all();
 }
 
 function formatEarlyScoreSplit(result) {
   const rows = result?.results || [];
   const map = new Map(rows.map(row => [row.score_group, row]));
-  return ['60–69', '70+'].map(group => {
+  return ['60–64', '65–69', '70+'].map(group => {
     const row = map.get(group);
     const total = Number(row?.total || 0);
     const goals = Number(row?.goals || 0);
