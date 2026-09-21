@@ -1,13 +1,13 @@
 
 
-// V6.7.10.27 behavior:
+// V6.7.10.28 behavior:
 // - Telegram: ALL Hunter signals passing 10–21′ + Score >=65
 // - Telegram does not wait for MATCHED / ODDS / BET READY
 // - BET READY counting/filtering remains unchanged
 // - /stats minute groups restored to full normal Hunter history 10–42′
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.27 TELEGRAM ALL FILTERED + FULL STATS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.28 TELEGRAM ALL FILTERED + FULL STATS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -285,7 +285,7 @@ const MIN_LEAGUE_RESOLVED = 5;
 const LEAGUE_TOP_COUNT = 10;
 const LEAGUE_BOTTOM_COUNT = 10;
 
-// V6.7.10.27 — /stats keeps the COMPLETE normal Hunter history.
+// V6.7.10.28 — /stats keeps the COMPLETE normal Hunter history.
 // These groups are reporting-only and DO NOT change the live 10–21′ Score >=65 filter.
 const ENTRY_MINUTE_GROUPS = [
   { label: "10–19′", min: 10, max: 19 },
@@ -1239,6 +1239,29 @@ export default {
 
 
     // ========================================================
+    // V6.7.10.28 — LIVE HUNTER FILTER DIAGNOSTICS
+    //
+    // READ ONLY:
+    // V27 received -> 1H -> 0:0 -> 10–21' -> Score >=65
+    // -> already tracking -> new eligible
+    //
+    // Does NOT create signals, send Telegram entries or touch Bet Worker.
+    // ========================================================
+    if (request.method === "GET" && url.pathname === "/diagnostics/live") {
+      try {
+        return json(await buildLiveHunterDiagnostics(env));
+      } catch (error) {
+        return json({
+          success: false,
+          version: "V6.7.10.28",
+          diagnostic: "LIVE_HUNTER_FILTER",
+          error: error?.message || String(error)
+        }, 500);
+      }
+    }
+
+
+    // ========================================================
     // V6.7.10.15 — PIPELINE DIAGNOSTICS
     // ========================================================
     if (request.method === "GET" && url.pathname === "/diagnostics") {
@@ -1286,7 +1309,7 @@ export default {
 
         return json({
           success: true,
-          version: "V6.7.10.27 TELEGRAM ALL FILTERED + FULL STATS",
+          version: "V6.7.10.28 TELEGRAM ALL FILTERED + FULL STATS",
           date: local.date,
           entry: Number(row?.total || 0),
           filter: "10-21_SCORE_GTE_65_BET_READY"
@@ -1353,6 +1376,24 @@ export default {
             success: true,
             action: "SHADOWSTATS",
             population: "SHADOW_5_9"
+          });
+        }
+
+
+        if (
+          text === "/livecheck" ||
+          text.startsWith("/livecheck@")
+        ) {
+          await sendTelegram(
+            env,
+            await buildLiveHunterDiagnosticsMessage(env)
+          );
+
+          return json({
+            success: true,
+            action: "LIVE_CHECK",
+            mode: "READ_ONLY",
+            filter: "10-21_SCORE_65"
           });
         }
 
@@ -4898,7 +4939,7 @@ async function createHunterEntry(
 
   const shadowEntry = isShadowEntryMinute(minute);
 
-  // V6.7.10.27:
+  // V6.7.10.28:
   // Telegram visibility is independent from Cloudbet readiness.
   // Every NORMAL Hunter signal passing the live strategy filter
   // (10–21′ + Score >=65) is sent immediately, including
@@ -7780,6 +7821,199 @@ async function buildBetReadyStats(env) {
 ♻️ Старите записи се преизчисляват по същия филтър
 💾 Не са изтрити от D1
 🕐 Europe/Sofia`;
+
+  return message;
+}
+
+
+// ============================================================
+// V6.7.10.28 — LIVE HUNTER FILTER DIAGNOSTICS
+// READ ONLY — DOES NOT CREATE/UPDATE SIGNALS
+// ============================================================
+
+async function buildLiveHunterDiagnostics(env) {
+  if (!env.V27) throw new Error("V27 binding missing");
+  if (!env.DB) throw new Error("DB binding missing");
+
+  const response = await env.V27.fetch(
+    new Request("https://v27.internal/", {
+      method: "GET",
+      headers: { "Accept": "application/json" }
+    })
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      "V27 HTTP " +
+      response.status +
+      " | " +
+      body.substring(0, 300)
+    );
+  }
+
+  const data = await response.json();
+
+  if (data?.success !== true) {
+    throw new Error("V27 returned success=false");
+  }
+
+  const matches =
+    Array.isArray(data?.matches)
+      ? data.matches
+      : [];
+
+  // Match the real Tracker duplicate/tracking check:
+  // only currently TRACKING signals are in trackingMap during runTracker().
+  const trackingResult = await env.DB
+    .prepare(`
+      SELECT match_id
+      FROM hunter_signals
+      WHERE status = 'TRACKING'
+    `)
+    .all();
+
+  const trackingIds = new Set(
+    (trackingResult?.results || [])
+      .map(row => String(row?.match_id || ""))
+      .filter(Boolean)
+  );
+
+  let firstHalf = 0;
+  let zeroZero = 0;
+  let minuteWindow = 0;
+  let score65 = 0;
+  let alreadyTracking = 0;
+  let newEligible = 0;
+
+  const eligible = [];
+  const nearMisses = [];
+
+  for (const match of matches) {
+    const id = String(match?.id || "");
+    const period = String(match?.period || "").toUpperCase();
+    const minute = Number(match?.minute ?? 0);
+    const home = Number(match?.score?.home ?? 0);
+    const away = Number(match?.score?.away ?? 0);
+    const hunterScore = Number(getHunterScore(match) || 0);
+
+    const isFirstHalf =
+      period === "1H" ||
+      period === "FIRST" ||
+      period === "FIRST HALF" ||
+      period === "1ST HALF" ||
+      period.includes("1H");
+
+    if (!isFirstHalf) continue;
+    firstHalf++;
+
+    if (home !== 0 || away !== 0) continue;
+    zeroZero++;
+
+    if (minute < 10 || minute > 21) continue;
+    minuteWindow++;
+
+    if (hunterScore < 65) {
+      nearMisses.push({
+        id: id || null,
+        match: match?.name || null,
+        minute,
+        hunter_score: hunterScore,
+        reason: "SCORE_BELOW_65"
+      });
+      continue;
+    }
+
+    score65++;
+
+    const tracked = id ? trackingIds.has(id) : false;
+
+    if (tracked) {
+      alreadyTracking++;
+    } else {
+      newEligible++;
+    }
+
+    eligible.push({
+      id: id || null,
+      match: match?.name || null,
+      league: match?.league || null,
+      period: match?.period || null,
+      minute,
+      minute_display: match?.minute_display || null,
+      score: {
+        home,
+        away
+      },
+      hunter_score: hunterScore,
+      required_score: 65,
+      already_tracking: tracked,
+      would_create_new_entry: !tracked
+    });
+  }
+
+  return {
+    success: true,
+    version: "V6.7.10.28",
+    diagnostic: "LIVE_HUNTER_FILTER",
+    mode: "READ_ONLY",
+    source: "V27_BINDING",
+    filter: {
+      period: "1H",
+      score: "0:0",
+      minute_from: 10,
+      minute_to: 21,
+      hunter_score_min: 65
+    },
+    funnel: {
+      v27_received: matches.length,
+      first_half: firstHalf,
+      zero_zero: zeroZero,
+      minute_10_21: minuteWindow,
+      score_65_plus: score65,
+      already_tracking: alreadyTracking,
+      new_eligible: newEligible
+    },
+    eligible,
+    near_misses_score_below_65: nearMisses.slice(0, 20),
+    timestamp: new Date().toISOString()
+  };
+}
+
+
+async function buildLiveHunterDiagnosticsMessage(env) {
+  const data = await buildLiveHunterDiagnostics(env);
+  const f = data?.funnel || {};
+
+  let message =
+`🧪 LIVE HUNTER CHECK
+
+📡 V27 received: ${f.v27_received || 0}
+1️⃣ 1H: ${f.first_half || 0}
+🥅 0:0: ${f.zero_zero || 0}
+⏱ 10–21′: ${f.minute_10_21 || 0}
+🔥 Score >=65: ${f.score_65_plus || 0}
+♻️ Already tracking: ${f.already_tracking || 0}
+🆕 New eligible: ${f.new_eligible || 0}
+
+🎯 LIVE FILTER: 10–21′ + Score >=65
+🔒 READ ONLY`;
+
+  const eligible = Array.isArray(data?.eligible) ? data.eligible : [];
+
+  if (eligible.length) {
+    message += `
+
+━━━━━━━━━━━━━━━━
+ELIGIBLE NOW
+━━━━━━━━━━━━━━━━`;
+
+    for (const row of eligible.slice(0, 10)) {
+      message += `
+${row.minute}' | ${row.hunter_score}/100 | ${row.match || "—"}
+${row.already_tracking ? "♻️ ALREADY TRACKING" : "🆕 WOULD CREATE ENTRY"}`;
+    }
+  }
 
   return message;
 }
