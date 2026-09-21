@@ -229,7 +229,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// V6.7.10.19: /today + /betstats minute analysis split: 10–21′ / 22–25′. No live filter change.
+// V6.7.10.20: adds analytical 10–21′ + odds >1.50 row to /today + /betstats. No live filter change.
 // BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -6964,6 +6964,33 @@ function formatBetReadyMinuteStats(rows) {
 
 
 // ============================================================
+// ANALYTICS ONLY — 10–21′ + ENTRY ODDS > 1.50
+// Does NOT change the live BET READY filter.
+async function getBetReadyEarlyOddsOver150Stats(env, start, end) {
+  return await env.DB.prepare(`
+    SELECT COUNT(*) AS total,
+      SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+      SUM(CASE WHEN result IS NULL OR result NOT IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS open_count
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND ${BET_READY_HISTORY_SQL}
+      AND entry_minute BETWEEN 10 AND 21
+      AND entry_odds > 1.50
+  `).bind(start, end).first();
+}
+
+function formatEarlyOddsOver150Row(row) {
+  const total = Number(row?.total || 0);
+  const goals = Number(row?.goals || 0);
+  const noGoals = Number(row?.no_goals || 0);
+  const open = Number(row?.open_count || 0);
+  const resolved = goals + noGoals;
+  const rate = resolved > 0 ? goals / resolved * 100 : 0;
+  return `10–21′ + odds >1.50: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%` +
+    (open > 0 ? ` | ${open} OPEN` : '') + `\n   🧪 Аналитичен филтър — без P/L/ROI`;
+}
+
 // TODAY COMMAND
 // ============================================================
 
@@ -6977,6 +7004,8 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 BE
   if (!bounds) {
     return `${reportTitle}\n\n📅 ${today}\n\n❌ Не успях да изчисля дневните граници.`;
   }
+
+  const earlyOddsOver150 = await getBetReadyEarlyOddsOver150Stats(env, bounds.start, bounds.end);
 
   const overall = await env.DB
     .prepare(`
@@ -7194,7 +7223,9 @@ ${formatBetReadyMinuteStats(minuteRows)}
     const rowResolved = rowGoals + rowNoGoals;
     const rowRate = rowResolved > 0 ? rowGoals / rowResolved * 100 : 0;
 
-    message += `${group}: ${rowTotal} ENTRY | ${rowGoals} GOAL | ${rowNoGoals} NO GOAL | ${rowRate.toFixed(1)}%\n`;
+    message += `\n${formatEarlyOddsOver150Row(earlyOddsOver150)}\n`;
+
+  message += `${group}: ${rowTotal} ENTRY | ${rowGoals} GOAL | ${rowNoGoals} NO GOAL | ${rowRate.toFixed(1)}%\n`;
   }
 
   message +=
@@ -7455,6 +7486,8 @@ async function buildBetReadyStats(env) {
     .bind(REPORT_STAKE, REPORT_STAKE, cleanStart, bounds.end)
     .all();
 
+  const earlyOddsOver150 = await getBetReadyEarlyOddsOver150Stats(env, cleanStart, bounds.end);
+
   const scoreResult = await env.DB
     .prepare(`
       SELECT
@@ -7627,6 +7660,8 @@ async function buildBetReadyStats(env) {
       ? `${group.label}: ${n} ENTRY | ${g} GOAL | ${ng} NO GOAL | ${hit.toFixed(1)}%\n   🎲 ${av !== null ? av.toFixed(2) : "—"} | 💶 ${r ? formatMoney(pl) + " EUR" : "—"} | ROI ${rr !== null ? (rr > 0 ? "+" : "") + rr.toFixed(1) + "%" : "—"}\n`
       : `${group.label}: 0 ENTRY\n`;
   }
+
+  message += `\n${formatEarlyOddsOver150Row(earlyOddsOver150)}\n`;
 
   message += `\n━━━━━━━━━━━━━━━━
 🔥 ПО HUNTER SCORE
