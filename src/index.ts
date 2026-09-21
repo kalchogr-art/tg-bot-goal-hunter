@@ -1,7 +1,12 @@
 
 
+// V6.7.10.26 behavior:
+// - Telegram: ALL Hunter signals passing 10–21′ + Score >=65
+// - Telegram does not wait for MATCHED / ODDS / BET READY
+// - BET READY counting/filtering remains unchanged
+
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.25 10–25 ONLY + BETSTATS ODDS ANALYTICS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.26 10–25 ONLY + BETSTATS ODDS ANALYTICS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -229,7 +234,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// V6.7.10.25: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
+// V6.7.10.26: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
 // BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -5223,12 +5228,24 @@ function isHunterCandidate(
 function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
 
-  // V6.7.10.25 — LIVE BET READY TEST FILTER:
+  // V6.7.10.26 — LIVE BET READY TEST FILTER:
   // only 10–21′ with Hunter Score >=65.
   if (m >= 10 && m <= 21) return 65;
 
   return null;
 }
+
+// V6.7.10.26 — TELEGRAM VISIBILITY
+// Telegram ENTRY uses the SAME strategy filter as the live Hunter:
+// 10–21′ and Hunter Score >=65.
+// It does NOT require Cloudbet MATCHED, odds availability or BET READY.
+// Those pipeline states remain informational and BET READY accounting is unchanged.
+function shouldSendHunterEntryToTelegram(minute, hunterScore) {
+  const required = getRequiredHunterScore(minute);
+  if (required === null) return false;
+  return Number(hunterScore || 0) >= required;
+}
+
 
 function isShadowEntryMinute(minute) {
   const m = Number(minute || 0);
