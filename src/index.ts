@@ -1,7 +1,7 @@
 
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.21 10–25 ONLY + BETSTATS ODDS ANALYTICS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.22 10–25 ONLY + BETSTATS ODDS ANALYTICS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -229,7 +229,7 @@ const FLASHSCORE_HEADERS = {
   "Cache-Control": "no-cache"
 };
 
-// V6.7.10.21: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
+// V6.7.10.22: FIX visible analytical 10–21′ + odds >1.50 section to /today + /betstats. No live filter change.
 // BET FILTER UPDATE — V6.7.10.17: ONLY 10–25′ with Score >=60. Same filter in /today and /betstats.
 // V6.7.10.0 REPORT FILTER
 // 5–9 shadow rows NEVER enter the normal Telegram statistics.
@@ -6991,6 +6991,44 @@ function formatEarlyOddsOver150Row(row) {
     (open > 0 ? ` | ${open} OPEN` : '') + `\n   🧪 Аналитичен филтър — без P/L/ROI`;
 }
 
+
+async function getBetReadyEarlyScoreSplit(env, start, end) {
+  return env.DB.prepare(`
+    SELECT
+      CASE
+        WHEN hunter_score BETWEEN 60 AND 69 THEN '60–69'
+        WHEN hunter_score >= 70 THEN '70+'
+      END AS score_group,
+      COUNT(*) AS total,
+      SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
+      SUM(CASE WHEN result = 'NO GOAL' THEN 1 ELSE 0 END) AS no_goals,
+      SUM(CASE WHEN result IS NULL OR result NOT IN ('GOAL HIT','NO GOAL') THEN 1 ELSE 0 END) AS open_count
+    FROM hunter_signals
+    WHERE created_at >= ? AND created_at < ?
+      AND ${BET_READY_HISTORY_SQL}
+      AND entry_minute BETWEEN 10 AND 21
+      AND hunter_score >= 60
+    GROUP BY score_group
+    ORDER BY CASE score_group WHEN '60–69' THEN 1 WHEN '70+' THEN 2 ELSE 3 END
+  `).bind(start, end).all();
+}
+
+function formatEarlyScoreSplit(result) {
+  const rows = result?.results || [];
+  const map = new Map(rows.map(row => [row.score_group, row]));
+  return ['60–69', '70+'].map(group => {
+    const row = map.get(group);
+    const total = Number(row?.total || 0);
+    const goals = Number(row?.goals || 0);
+    const noGoals = Number(row?.no_goals || 0);
+    const open = Number(row?.open_count || 0);
+    const resolved = goals + noGoals;
+    const rate = resolved > 0 ? goals / resolved * 100 : 0;
+    return `10–21′ | Score ${group}: ${total} ENTRY | ${goals} GOAL | ${noGoals} NO GOAL | ${rate.toFixed(1)}%` +
+      (open > 0 ? ` | ${open} OPEN` : '');
+  }).join('\n');
+}
+
 // TODAY COMMAND
 // ============================================================
 
@@ -7006,6 +7044,7 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 BE
   }
 
   const earlyOddsOver150 = await getBetReadyEarlyOddsOver150Stats(env, bounds.start, bounds.end);
+  const earlyScoreSplit = await getBetReadyEarlyScoreSplit(env, bounds.start, bounds.end);
 
   const overall = await env.DB
     .prepare(`
@@ -7201,6 +7240,11 @@ async function buildTodayStats(env, requestedDate = null, reportTitle = "📊 BE
 ━━━━━━━━━━━━━━━━
 ${formatBetReadyMinuteStats(minuteRows)}
 ${formatEarlyOddsOver150Row(earlyOddsOver150)}
+
+━━━━━━━━━━━━━━━━
+🔥 10–21′ — ПО HUNTER SCORE
+━━━━━━━━━━━━━━━━
+${formatEarlyScoreSplit(earlyScoreSplit)}
 
 ━━━━━━━━━━━━━━━━
 🔥 BET READY — ПО HUNTER SCORE
@@ -7487,6 +7531,7 @@ async function buildBetReadyStats(env) {
     .all();
 
   const earlyOddsOver150 = await getBetReadyEarlyOddsOver150Stats(env, cleanStart, bounds.end);
+  const earlyScoreSplit = await getBetReadyEarlyScoreSplit(env, cleanStart, bounds.end);
 
   const scoreResult = await env.DB
     .prepare(`
@@ -7662,6 +7707,8 @@ async function buildBetReadyStats(env) {
   }
 
   message += `\n━━━━━━━━━━━━━━━━\n🎯 10–21′ + ODDS > 1.50\n━━━━━━━━━━━━━━━━\n${formatEarlyOddsOver150Row(earlyOddsOver150)}\n`;
+
+  message += `\n━━━━━━━━━━━━━━━━\n🔥 10–21′ — ПО HUNTER SCORE\n━━━━━━━━━━━━━━━━\n${formatEarlyScoreSplit(earlyScoreSplit)}\n`;
 
   message += `\n━━━━━━━━━━━━━━━━
 🔥 ПО HUNTER SCORE
