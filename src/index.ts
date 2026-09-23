@@ -1,4 +1,12 @@
-// V6.7.10.29 — SCORE 60–64 OBSERVATION
+// V6.7.10.30 — /STATS SCORE >=60 + ENTRY MINUTE FIX
+// - /stats is explicitly Hunter history Score >=60.
+// - LIVE / Telegram / BET READY remain 10–21′ + Score >=65.
+// - Score 60–64 continues to be D1/result-tracking observation only.
+// - Fixes monthly and daily /stats entry-minute groups:
+//   10–19, 20–24, 25–29, 30–34, 35–42.
+// - /today and /betstats remain unchanged.
+//
+// // V6.7.10.30 — SCORE 60–64 OBSERVATION
 // LIVE remains 10–21′ + Score >=65.
 // Score 60–64 is D1/result-tracking research only (GOAL HIT / NO GOAL).
 // No Telegram, Cloudbet Matcher, Bet Worker, odds lookup or BET READY for 60–64.
@@ -7,14 +15,14 @@
 //
 // 
 
-// V6.7.10.29 behavior:
+// V6.7.10.30 behavior:
 // - Telegram: ALL Hunter signals passing 10–21′ + Score >=65
 // - Telegram does not wait for MATCHED / ODDS / BET READY
 // - BET READY counting/filtering remains unchanged
 // - /stats minute groups restored to full normal Hunter history 10–42′
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.29 TELEGRAM ALL FILTERED + FULL STATS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.30 TELEGRAM ALL FILTERED + FULL STATS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -259,6 +267,7 @@ const REPORT_ELIGIBLE_SQL = `
 // Odds are NOT required here. Shadow 5–9 remains excluded from normal history.
 const HUNTER_HISTORY_SQL = `
   entry_minute BETWEEN 10 AND 42
+  AND hunter_score >= 60
 `;
 
 // V6.7.10.7 — persistent historical BET READY population.
@@ -292,7 +301,7 @@ const MIN_LEAGUE_RESOLVED = 5;
 const LEAGUE_TOP_COUNT = 10;
 const LEAGUE_BOTTOM_COUNT = 10;
 
-// V6.7.10.29 — /stats keeps the COMPLETE normal Hunter history.
+// V6.7.10.30 — /stats keeps the COMPLETE normal Hunter history.
 // These groups are reporting-only and DO NOT change the live 10–21′ Score >=65 filter.
 const ENTRY_MINUTE_GROUPS = [
   { label: "10–19′", min: 10, max: 19 },
@@ -1246,7 +1255,7 @@ export default {
 
 
     // ========================================================
-    // V6.7.10.29 — LIVE HUNTER FILTER DIAGNOSTICS
+    // V6.7.10.30 — LIVE HUNTER FILTER DIAGNOSTICS
     //
     // READ ONLY:
     // V27 received -> 1H -> 0:0 -> 10–21' -> Score >=65
@@ -1260,7 +1269,7 @@ export default {
       } catch (error) {
         return json({
           success: false,
-          version: "V6.7.10.29",
+          version: "V6.7.10.30",
           diagnostic: "LIVE_HUNTER_FILTER",
           error: error?.message || String(error)
         }, 500);
@@ -1316,7 +1325,7 @@ export default {
 
         return json({
           success: true,
-          version: "V6.7.10.29 TELEGRAM ALL FILTERED + FULL STATS",
+          version: "V6.7.10.30 TELEGRAM ALL FILTERED + FULL STATS",
           date: local.date,
           entry: Number(row?.total || 0),
           filter: "10-21_SCORE_GTE_65_BET_READY"
@@ -4615,7 +4624,7 @@ async function createHunterEntry(
 
 
   // ==========================================================
-  // V6.7.10.29 — SCORE 60–64 OBSERVATION ONLY
+  // V6.7.10.30 — SCORE 60–64 OBSERVATION ONLY
   // Stored in D1 and left TRACKING for existing GOAL/NO GOAL resolution.
   // No Matcher, Bet Worker, odds lookup or Telegram for this band.
   // ==========================================================
@@ -4968,7 +4977,7 @@ async function createHunterEntry(
 
   const shadowEntry = isShadowEntryMinute(minute);
 
-  // V6.7.10.29:
+  // V6.7.10.30:
   // Telegram visibility is independent from Cloudbet readiness.
   // Every NORMAL Hunter signal passing the live strategy filter
   // (10–21′ + Score >=65) is sent immediately, including
@@ -5296,7 +5305,7 @@ function isHunterCandidate(
 }
 
 
-// V6.7.10.29 — research-only observation threshold.
+// V6.7.10.30 — research-only observation threshold.
 // 10–21′ Score 60–64 is stored and result-tracked, but never promoted
 // to the live >=65 pipeline.
 function getTrackingHunterScore(minute) {
@@ -6128,10 +6137,11 @@ async function getCurrentMonthDetails(
         SELECT
 
           CASE
-
-            WHEN entry_minute BETWEEN 10 AND 25
-              THEN '10–25′'
-
+            WHEN entry_minute BETWEEN 10 AND 19 THEN '10–19′'
+            WHEN entry_minute BETWEEN 20 AND 24 THEN '20–24′'
+            WHEN entry_minute BETWEEN 25 AND 29 THEN '25–29′'
+            WHEN entry_minute BETWEEN 30 AND 34 THEN '30–34′'
+            WHEN entry_minute BETWEEN 35 AND 42 THEN '35–42′'
           END AS minute_group,
 
           COUNT(*) AS total,
@@ -6157,13 +6167,17 @@ async function getCurrentMonthDetails(
         WHERE created_at >= ?
           AND created_at < ?
           AND ${HUNTER_HISTORY_SQL}
-          AND entry_minute BETWEEN 10 AND 25
+          AND hunter_score >= 60
 
         GROUP BY minute_group
 
         ORDER BY
           CASE minute_group
-            WHEN '10–25′' THEN 1
+            WHEN '10–19′' THEN 1
+            WHEN '20–24′' THEN 2
+            WHEN '25–29′' THEN 3
+            WHEN '30–34′' THEN 4
+            WHEN '35–42′' THEN 5
           END
       `)
       .bind(
@@ -6623,7 +6637,11 @@ async function getHunterMinuteStatsForBounds(env, bounds) {
     .prepare(`
       SELECT
         CASE
-          WHEN entry_minute BETWEEN 10 AND 25 THEN '10–25′'
+          WHEN entry_minute BETWEEN 10 AND 19 THEN '10–19′'
+          WHEN entry_minute BETWEEN 20 AND 24 THEN '20–24′'
+          WHEN entry_minute BETWEEN 25 AND 29 THEN '25–29′'
+          WHEN entry_minute BETWEEN 30 AND 34 THEN '30–34′'
+          WHEN entry_minute BETWEEN 35 AND 42 THEN '35–42′'
         END AS minute_group,
         COUNT(*) AS total,
         SUM(CASE WHEN result = 'GOAL HIT' THEN 1 ELSE 0 END) AS goals,
@@ -6632,9 +6650,14 @@ async function getHunterMinuteStatsForBounds(env, bounds) {
       WHERE created_at >= ?
         AND created_at < ?
         AND ${HUNTER_HISTORY_SQL}
+        AND hunter_score >= 60
       GROUP BY minute_group
       ORDER BY CASE minute_group
-        WHEN '10–25′' THEN 1
+        WHEN '10–19′' THEN 1
+        WHEN '20–24′' THEN 2
+        WHEN '25–29′' THEN 3
+        WHEN '30–34′' THEN 4
+        WHEN '35–42′' THEN 5
       END
     `)
     .bind(bounds.start, bounds.end)
@@ -7870,7 +7893,7 @@ async function buildBetReadyStats(env) {
 
 
 // ============================================================
-// V6.7.10.29 — LIVE HUNTER FILTER DIAGNOSTICS
+// V6.7.10.30 — LIVE HUNTER FILTER DIAGNOSTICS
 // READ ONLY — DOES NOT CREATE/UPDATE SIGNALS
 // ============================================================
 
@@ -7997,7 +8020,7 @@ async function buildLiveHunterDiagnostics(env) {
 
   return {
     success: true,
-    version: "V6.7.10.29",
+    version: "V6.7.10.30",
     diagnostic: "LIVE_HUNTER_FILTER",
     mode: "READ_ONLY",
     source: "V27_BINDING",
