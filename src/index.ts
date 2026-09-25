@@ -1,10 +1,19 @@
-// V6.7.10.31 — YESTERDAY PIPELINE DIAGNOSTIC
+// V6.7.10.32 — RESTORE FULL /STATS CAPTURE 10–42′ SCORE >=60
+// - hunter_signals observation/history capture: 1H 0:0, minute 10–42, Score >=60.
+// - Every captured row continues through GOAL / NO GOAL result tracking.
+// - /stats keeps minute, score, league, hour, goal timing and other Hunter history.
+// - LIVE Telegram / Matcher promotion remains ONLY 10–21′ + Score >=65.
+// - BET READY and /betstats logic are unchanged.
+// - Score 60–64 and minute 22–42 observation rows do NOT enter the live betting pipeline.
+// - Root status now reports stats_capture and live_strategy separately.
+//
+// // V6.7.10.32 — YESTERDAY PIPELINE DIAGNOSTIC
 // Adds /yesterdaycheck (Telegram) and GET /diagnostics/yesterday.
 // Read-only D1 retrospective for yesterday's 10–21′ Score >=65 signals.
 // Shows UNMATCHED, MATCHED/no odds, BET READY, >1.50 vs <=1.50 and results.
 // No live filter, Telegram ENTRY, Matcher, Bet Worker or betting behavior change.
 //
-// // V6.7.10.31 — /STATS SCORE >=60 + ENTRY MINUTE FIX
+// // V6.7.10.32 — /STATS SCORE >=60 + ENTRY MINUTE FIX
 // - /stats is explicitly Hunter history Score >=60.
 // - LIVE / Telegram / BET READY remain 10–21′ + Score >=65.
 // - Score 60–64 continues to be D1/result-tracking observation only.
@@ -12,7 +21,7 @@
 //   10–19, 20–24, 25–29, 30–34, 35–42.
 // - /today and /betstats remain unchanged.
 //
-// // V6.7.10.31 — SCORE 60–64 OBSERVATION
+// // V6.7.10.32 — SCORE 60–64 OBSERVATION
 // LIVE remains 10–21′ + Score >=65.
 // Score 60–64 is D1/result-tracking research only (GOAL HIT / NO GOAL).
 // No Telegram, Cloudbet Matcher, Bet Worker, odds lookup or BET READY for 60–64.
@@ -21,14 +30,14 @@
 //
 // 
 
-// V6.7.10.31 behavior:
+// V6.7.10.32 behavior:
 // - Telegram: ALL Hunter signals passing 10–21′ + Score >=65
 // - Telegram does not wait for MATCHED / ODDS / BET READY
 // - BET READY counting/filtering remains unchanged
 // - /stats minute groups restored to full normal Hunter history 10–42′
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.31 TELEGRAM ALL FILTERED + FULL STATS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.32 TELEGRAM ALL FILTERED + FULL STATS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -307,7 +316,7 @@ const MIN_LEAGUE_RESOLVED = 5;
 const LEAGUE_TOP_COUNT = 10;
 const LEAGUE_BOTTOM_COUNT = 10;
 
-// V6.7.10.31 — /stats keeps the COMPLETE normal Hunter history.
+// V6.7.10.32 — /stats keeps the COMPLETE normal Hunter history.
 // These groups are reporting-only and DO NOT change the live 10–21′ Score >=65 filter.
 const ENTRY_MINUTE_GROUPS = [
   { label: "10–19′", min: 10, max: 19 },
@@ -1261,7 +1270,7 @@ export default {
 
 
     // ========================================================
-    // V6.7.10.31 — LIVE HUNTER FILTER DIAGNOSTICS
+    // V6.7.10.32 — LIVE HUNTER FILTER DIAGNOSTICS
     //
     // READ ONLY:
     // V27 received -> 1H -> 0:0 -> 10–21' -> Score >=65
@@ -1269,7 +1278,7 @@ export default {
     //
     // Does NOT create signals, send Telegram entries or touch Bet Worker.
     // ========================================================
-    // V6.7.10.31 — YESTERDAY PIPELINE DIAGNOSTIC (D1, READ ONLY)
+    // V6.7.10.32 — YESTERDAY PIPELINE DIAGNOSTIC (D1, READ ONLY)
     // Shows what happened to yesterday's stored 10–21′ Score >=65 Hunter signals.
     if (request.method === "GET" && url.pathname === "/diagnostics/yesterday") {
       try {
@@ -1277,7 +1286,7 @@ export default {
       } catch (error) {
         return json({
           success: false,
-          version: "V6.7.10.31",
+          version: "V6.7.10.32",
           diagnostic: "YESTERDAY_PIPELINE",
           error: error?.message || String(error)
         }, 500);
@@ -1291,7 +1300,7 @@ export default {
       } catch (error) {
         return json({
           success: false,
-          version: "V6.7.10.31",
+          version: "V6.7.10.32",
           diagnostic: "LIVE_HUNTER_FILTER",
           error: error?.message || String(error)
         }, 500);
@@ -1347,7 +1356,7 @@ export default {
 
         return json({
           success: true,
-          version: "V6.7.10.31 TELEGRAM ALL FILTERED + FULL STATS",
+          version: "V6.7.10.32 TELEGRAM ALL FILTERED + FULL STATS",
           date: local.date,
           entry: Number(row?.total || 0),
           filter: "10-21_SCORE_GTE_65_BET_READY"
@@ -1551,12 +1560,22 @@ export default {
           Boolean(env.DB)
       },
       hunter: {
-        from:
-          HUNTER_FROM,
-        to:
-          HUNTER_TO,
-        min_score:
-          HUNTER_MIN_SCORE
+        stats_capture: {
+          from: 10,
+          to: 42,
+          min_score: 60
+        },
+        live_strategy: {
+          from: 10,
+          to: 21,
+          min_score: 65
+        },
+        bet_ready: {
+          from: 10,
+          to: 21,
+          min_score: 65,
+          odds_required: true
+        }
       },
       odds: {
         source:
@@ -4664,7 +4683,7 @@ async function createHunterEntry(
 
 
   // ==========================================================
-  // V6.7.10.31 — SCORE 60–64 OBSERVATION ONLY
+  // V6.7.10.32 — SCORE 60–64 OBSERVATION ONLY
   // Stored in D1 and left TRACKING for existing GOAL/NO GOAL resolution.
   // No Matcher, Bet Worker, odds lookup or Telegram for this band.
   // ==========================================================
@@ -5017,7 +5036,7 @@ async function createHunterEntry(
 
   const shadowEntry = isShadowEntryMinute(minute);
 
-  // V6.7.10.31:
+  // V6.7.10.32:
   // Telegram visibility is independent from Cloudbet readiness.
   // Every NORMAL Hunter signal passing the live strategy filter
   // (10–21′ + Score >=65) is sent immediately, including
@@ -5345,12 +5364,19 @@ function isHunterCandidate(
 }
 
 
-// V6.7.10.31 — research-only observation threshold.
+// V6.7.10.32 — research-only observation threshold.
 // 10–21′ Score 60–64 is stored and result-tracked, but never promoted
 // to the live >=65 pipeline.
 function getTrackingHunterScore(minute) {
   const m = Number(minute || 0);
-  if (m >= 10 && m <= 21) return 60;
+
+  // V6.7.10.32 — FULL HUNTER STATS CAPTURE:
+  // Store/result-track every normal Hunter candidate from 10–42′ at Score >=60.
+  // This is ONLY the observation/history population used by /stats.
+  // Live Telegram / Matcher / BET READY eligibility stays controlled by
+  // getRequiredHunterScore() and remains 10–21′ + Score >=65.
+  if (m >= 10 && m <= 42) return 60;
+
   return null;
 }
 
@@ -7933,7 +7959,7 @@ async function buildBetReadyStats(env) {
 
 
 // ============================================================
-// V6.7.10.31 — LIVE HUNTER FILTER DIAGNOSTICS
+// V6.7.10.32 — LIVE HUNTER FILTER DIAGNOSTICS
 // READ ONLY — DOES NOT CREATE/UPDATE SIGNALS
 // ============================================================
 
@@ -8060,7 +8086,7 @@ async function buildLiveHunterDiagnostics(env) {
 
   return {
     success: true,
-    version: "V6.7.10.31",
+    version: "V6.7.10.32",
     diagnostic: "LIVE_HUNTER_FILTER",
     mode: "READ_ONLY",
     source: "V27_BINDING",
@@ -8126,7 +8152,7 @@ ${row.already_tracking ? "♻️ ALREADY TRACKING" : "🆕 WOULD CREATE ENTRY"}`
 
 
 // ============================================================
-// V6.7.10.31 — YESTERDAY PIPELINE DIAGNOSTIC
+// V6.7.10.32 — YESTERDAY PIPELINE DIAGNOSTIC
 // D1-only retrospective. It cannot reconstruct V27 matches that never became
 // hunter_signals, but it shows every stored live-strategy candidate and where
 // the downstream Cloudbet/odds pipeline ended.
@@ -8203,7 +8229,7 @@ async function buildYesterdayPipelineDiagnostics(env) {
 
   return {
     success: true,
-    version: "V6.7.10.31",
+    version: "V6.7.10.32",
     diagnostic: "YESTERDAY_PIPELINE",
     mode: "READ_ONLY_D1",
     date,
