@@ -1,14 +1,14 @@
-// V6.7.10.33 — /2025stats ANALYSIS
+// V6.7.10.34 — /2025stats EXACT SCORE × MINUTE ANALYSIS
 // - Adds Telegram /2025stats.
 // - Reads stored Hunter signals only: entry minute 20–25, Score >=60.
 // - Shows TEST since 25.09.2026 and TODAY.
 // - Shows exact entry minute 20/21/22/23/24/25.
-// - Shows Hunter Score groups 60–64, 65–69, 70–79, 80–89, 90–100.
+// - Shows exact Hunter Score values (60,61,62,63,64,65...) and Score × minute matrix.
 // - Shows ENTRY / GOAL / NO GOAL / OPEN / success / avg time to goal.
 // - NO odds requirement.
 // - NO live strategy, Matcher, Telegram ENTRY, BET READY or /betstats change.
 //
-// // V6.7.10.33 — RESTORE FULL /STATS CAPTURE 10–42′ SCORE >=60
+// // V6.7.10.34 — RESTORE FULL /STATS CAPTURE 10–42′ SCORE >=60
 // - hunter_signals observation/history capture: 1H 0:0, minute 10–42, Score >=60.
 // - Every captured row continues through GOAL / NO GOAL result tracking.
 // - /stats keeps minute, score, league, hour, goal timing and other Hunter history.
@@ -17,13 +17,13 @@
 // - Score 60–64 and minute 22–42 observation rows do NOT enter the live betting pipeline.
 // - Root status now reports stats_capture and live_strategy separately.
 //
-// // V6.7.10.33 — YESTERDAY PIPELINE DIAGNOSTIC
+// // V6.7.10.34 — YESTERDAY PIPELINE DIAGNOSTIC
 // Adds /yesterdaycheck (Telegram) and GET /diagnostics/yesterday.
 // Read-only D1 retrospective for yesterday's 10–21′ Score >=65 signals.
 // Shows UNMATCHED, MATCHED/no odds, BET READY, >1.50 vs <=1.50 and results.
 // No live filter, Telegram ENTRY, Matcher, Bet Worker or betting behavior change.
 //
-// // V6.7.10.33 — /STATS SCORE >=60 + ENTRY MINUTE FIX
+// // V6.7.10.34 — /STATS SCORE >=60 + ENTRY MINUTE FIX
 // - /stats is explicitly Hunter history Score >=60.
 // - LIVE / Telegram / BET READY remain 10–21′ + Score >=65.
 // - Score 60–64 continues to be D1/result-tracking observation only.
@@ -31,7 +31,7 @@
 //   10–19, 20–24, 25–29, 30–34, 35–42.
 // - /today and /betstats remain unchanged.
 //
-// // V6.7.10.33 — SCORE 60–64 OBSERVATION
+// // V6.7.10.34 — SCORE 60–64 OBSERVATION
 // LIVE remains 10–21′ + Score >=65.
 // Score 60–64 is D1/result-tracking research only (GOAL HIT / NO GOAL).
 // No Telegram, Cloudbet Matcher, Bet Worker, odds lookup or BET READY for 60–64.
@@ -40,14 +40,14 @@
 //
 // 
 
-// V6.7.10.33 behavior:
+// V6.7.10.34 behavior:
 // - Telegram: ALL Hunter signals passing 10–21′ + Score >=65
 // - Telegram does not wait for MATCHED / ODDS / BET READY
 // - BET READY counting/filtering remains unchanged
 // - /stats minute groups restored to full normal Hunter history 10–42′
 
 // ============================================================
-// GOAL WATCH — HUNTER TRACKER V6.7.10.33 TELEGRAM ALL FILTERED + FULL STATS
+// GOAL WATCH — HUNTER TRACKER V6.7.10.34 TELEGRAM ALL FILTERED + FULL STATS
 // 24/7 / LOW CPU / TELEGRAM / DAILY + MONTHLY STATS
 // V27 + MATCHER + AI_MATCHER + BET_WORKER SERVICE BINDINGS
 //
@@ -326,7 +326,7 @@ const MIN_LEAGUE_RESOLVED = 5;
 const LEAGUE_TOP_COUNT = 10;
 const LEAGUE_BOTTOM_COUNT = 10;
 
-// V6.7.10.33 — /stats keeps the COMPLETE normal Hunter history.
+// V6.7.10.34 — /stats keeps the COMPLETE normal Hunter history.
 // These groups are reporting-only and DO NOT change the live 10–21′ Score >=65 filter.
 const ENTRY_MINUTE_GROUPS = [
   { label: "10–19′", min: 10, max: 19 },
@@ -1280,7 +1280,7 @@ export default {
 
 
     // ========================================================
-    // V6.7.10.33 — LIVE HUNTER FILTER DIAGNOSTICS
+    // V6.7.10.34 — LIVE HUNTER FILTER DIAGNOSTICS
     //
     // READ ONLY:
     // V27 received -> 1H -> 0:0 -> 10–21' -> Score >=65
@@ -1288,7 +1288,7 @@ export default {
     //
     // Does NOT create signals, send Telegram entries or touch Bet Worker.
     // ========================================================
-    // V6.7.10.33 — YESTERDAY PIPELINE DIAGNOSTIC (D1, READ ONLY)
+    // V6.7.10.34 — YESTERDAY PIPELINE DIAGNOSTIC (D1, READ ONLY)
     // Shows what happened to yesterday's stored 10–21′ Score >=65 Hunter signals.
     if (request.method === "GET" && url.pathname === "/diagnostics/yesterday") {
       try {
@@ -1296,7 +1296,7 @@ export default {
       } catch (error) {
         return json({
           success: false,
-          version: "V6.7.10.33",
+          version: "V6.7.10.34",
           diagnostic: "YESTERDAY_PIPELINE",
           error: error?.message || String(error)
         }, 500);
@@ -1310,7 +1310,7 @@ export default {
       } catch (error) {
         return json({
           success: false,
-          version: "V6.7.10.33",
+          version: "V6.7.10.34",
           diagnostic: "LIVE_HUNTER_FILTER",
           error: error?.message || String(error)
         }, 500);
@@ -1366,7 +1366,7 @@ export default {
 
         return json({
           success: true,
-          version: "V6.7.10.33 TELEGRAM ALL FILTERED + FULL STATS",
+          version: "V6.7.10.34 TELEGRAM ALL FILTERED + FULL STATS",
           date: local.date,
           entry: Number(row?.total || 0),
           filter: "10-21_SCORE_GTE_65_BET_READY"
@@ -4713,7 +4713,7 @@ async function createHunterEntry(
 
 
   // ==========================================================
-  // V6.7.10.33 — SCORE 60–64 OBSERVATION ONLY
+  // V6.7.10.34 — SCORE 60–64 OBSERVATION ONLY
   // Stored in D1 and left TRACKING for existing GOAL/NO GOAL resolution.
   // No Matcher, Bet Worker, odds lookup or Telegram for this band.
   // ==========================================================
@@ -5066,7 +5066,7 @@ async function createHunterEntry(
 
   const shadowEntry = isShadowEntryMinute(minute);
 
-  // V6.7.10.33:
+  // V6.7.10.34:
   // Telegram visibility is independent from Cloudbet readiness.
   // Every NORMAL Hunter signal passing the live strategy filter
   // (10–21′ + Score >=65) is sent immediately, including
@@ -5394,13 +5394,13 @@ function isHunterCandidate(
 }
 
 
-// V6.7.10.33 — research-only observation threshold.
+// V6.7.10.34 — research-only observation threshold.
 // 10–21′ Score 60–64 is stored and result-tracked, but never promoted
 // to the live >=65 pipeline.
 function getTrackingHunterScore(minute) {
   const m = Number(minute || 0);
 
-  // V6.7.10.33 — FULL HUNTER STATS CAPTURE:
+  // V6.7.10.34 — FULL HUNTER STATS CAPTURE:
   // Store/result-track every normal Hunter candidate from 10–42′ at Score >=60.
   // This is ONLY the observation/history population used by /stats.
   // Live Telegram / Matcher / BET READY eligibility stays controlled by
@@ -7989,7 +7989,7 @@ async function buildBetReadyStats(env) {
 
 
 // ============================================================
-// V6.7.10.33 — LIVE HUNTER FILTER DIAGNOSTICS
+// V6.7.10.34 — LIVE HUNTER FILTER DIAGNOSTICS
 // READ ONLY — DOES NOT CREATE/UPDATE SIGNALS
 // ============================================================
 
@@ -8116,7 +8116,7 @@ async function buildLiveHunterDiagnostics(env) {
 
   return {
     success: true,
-    version: "V6.7.10.33",
+    version: "V6.7.10.34",
     diagnostic: "LIVE_HUNTER_FILTER",
     mode: "READ_ONLY",
     source: "V27_BINDING",
@@ -8182,7 +8182,7 @@ ${row.already_tracking ? "♻️ ALREADY TRACKING" : "🆕 WOULD CREATE ENTRY"}`
 
 
 // ============================================================
-// V6.7.10.33 — YESTERDAY PIPELINE DIAGNOSTIC
+// V6.7.10.34 — YESTERDAY PIPELINE DIAGNOSTIC
 // D1-only retrospective. It cannot reconstruct V27 matches that never became
 // hunter_signals, but it shows every stored live-strategy candidate and where
 // the downstream Cloudbet/odds pipeline ended.
@@ -8259,7 +8259,7 @@ async function buildYesterdayPipelineDiagnostics(env) {
 
   return {
     success: true,
-    version: "V6.7.10.33",
+    version: "V6.7.10.34",
     diagnostic: "YESTERDAY_PIPELINE",
     mode: "READ_ONLY_D1",
     date,
@@ -8440,7 +8440,7 @@ async function buildPipelineDiagnosticsMessage(env) {
 
 
 // ============================================================
-// V6.7.10.33 — /2025stats
+// V6.7.10.34 — /2025stats
 // Research/reporting only.
 // Population: stored Hunter signals at entry minute 20–25 and Score >=60.
 // No odds requirement. No change to live Telegram, Matcher or BET READY.
@@ -8501,29 +8501,52 @@ function summarize2025Rows(rows) {
   for (let minute = 20; minute <= 25; minute++) {
     minutes.push({
       label: `${minute}′`,
+      minute,
       ...summarize(source.filter(x => Number(x?.entry_minute) === minute))
     });
   }
 
-  const scoreDefs = [
-    { label: "60–64", min: 60, max: 64 },
-    { label: "65–69", min: 65, max: 69 },
-    { label: "70–79", min: 70, max: 79 },
-    { label: "80–89", min: 80, max: 89 },
-    { label: "90–100", min: 90, max: 100 }
-  ];
+  // V6.7.10.34: exact Hunter Score values, not broad score buckets.
+  // Include every integer score present in the 20–25′ sample, with a floor of 60–69
+  // so the critical 64/65 boundary is always visible even when a value has 0 entries.
+  const presentScores = source
+    .map(x => Math.round(Number(x?.hunter_score)))
+    .filter(score => Number.isFinite(score) && score >= 60 && score <= 100);
 
-  const scores = scoreDefs.map(group => ({
-    label: group.label,
-    ...summarize(
-      source.filter(x => {
-        const score = Number(x?.hunter_score);
-        return score >= group.min && score <= group.max;
-      })
-    )
+  const maxPresentScore = presentScores.length
+    ? Math.max(...presentScores)
+    : 69;
+
+  const maxScore = Math.max(69, maxPresentScore);
+  const scores = [];
+
+  for (let score = 60; score <= maxScore; score++) {
+    scores.push({
+      label: String(score),
+      score,
+      ...summarize(
+        source.filter(x => Math.round(Number(x?.hunter_score)) === score)
+      )
+    });
+  }
+
+  // Exact Score x Entry-minute matrix for 20/21/22/23/24/25.
+  // Only scores with at least one entry are printed in the matrix to keep Telegram compact.
+  const matrixScores = scores.filter(row => row.total > 0);
+  const matrix = matrixScores.map(scoreRow => ({
+    score: scoreRow.score,
+    cells: minutes.map(minuteRow => ({
+      minute: minuteRow.minute,
+      ...summarize(
+        source.filter(x =>
+          Math.round(Number(x?.hunter_score)) === scoreRow.score &&
+          Number(x?.entry_minute) === minuteRow.minute
+        )
+      )
+    }))
   }));
 
-  return { total, minutes, scores };
+  return { total, minutes, scores, matrix };
 }
 
 
@@ -8540,28 +8563,44 @@ OPEN: ${s.open}
 Success: ${s.rate.toFixed(1)}%
 Avg time to GOAL: ${s.avgGoalAfter === null ? "—" : s.avgGoalAfter.toFixed(1) + " мин."}
 
-⏱ ПО ENTRY МИНУТА
+⏱ ПО ТОЧНА ENTRY МИНУТА
 `;
 
   for (const row of stats.minutes) {
     text += row.total
-      ? `${row.label}: ${row.total} | ${row.goals} GOAL | ${row.noGoals} NO GOAL | ${row.open} OPEN | ${row.rate.toFixed(1)}%\n`
+      ? `${row.label}: ${row.total} | ${row.goals}G ${row.noGoals}NG ${row.open}O | ${row.rate.toFixed(1)}%\n`
       : `${row.label}: 0 ENTRY\n`;
   }
 
-  text += `
-🔥 ПО HUNTER SCORE
-`;
+  text += `\n🔥 ПО ТОЧЕН HUNTER SCORE\n`;
 
   for (const row of stats.scores) {
     text += row.total
-      ? `${row.label}: ${row.total} | ${row.goals} GOAL | ${row.noGoals} NO GOAL | ${row.open} OPEN | ${row.rate.toFixed(1)}%\n`
+      ? `${row.label}: ${row.total} | ${row.goals}G ${row.noGoals}NG ${row.open}O | ${row.rate.toFixed(1)}%\n`
       : `${row.label}: 0 ENTRY\n`;
   }
 
+  text += `\n🧩 SCORE × ENTRY МИНУТА\n`;
+  text += `Score | 20′ | 21′ | 22′ | 23′ | 24′ | 25′\n`;
+
+  if (!stats.matrix.length) {
+    text += `— няма сигнали —\n`;
+  } else {
+    for (const row of stats.matrix) {
+      const cells = row.cells.map(cell => {
+        if (!cell.total) return "—";
+        if (cell.open > 0 && cell.resolved === 0) return `${cell.total}O`;
+        if (cell.noGoals === 0 && cell.open === 0) return `${cell.total}G`;
+        if (cell.goals === 0 && cell.open === 0) return `${cell.total}NG`;
+        return `${cell.goals}G/${cell.noGoals}NG${cell.open ? `/${cell.open}O` : ""}`;
+      });
+      text += `${row.score} | ${cells.join(" | ")}\n`;
+    }
+  }
+
+  text += `\nG=GOAL | NG=NO GOAL | O=OPEN`;
   return text.trim();
 }
-
 
 async function build2025Stats(env) {
   const now = new Date();
