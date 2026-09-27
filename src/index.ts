@@ -3,9 +3,11 @@
 // - /betstats and BET READY reporting use the same >=64 threshold.
 // - /stats remains 10–42′ Score >=60.
 // - /2025stats exact-score/minute analysis unchanged.
+// V6.7.10.36: /betstats + /2025stats counters reset at 27.09.2026 19:54 Sofia; D1 history preserved.
+// V6.7.10.36: /2025stats adds LATE CANDIDATE 22–25′ thresholds >=64/>=65/>=66/>=67.
 // - Matcher, odds, GOAL/NO GOAL and minute window unchanged.
 
-// V6.7.10.35 — LIVE SCORE >=64 + /2025stats EXACT SCORE × MINUTE ANALYSIS
+// V6.7.10.36 — RESET /betstats + /2025stats + LATE CANDIDATES
 // - Adds Telegram /2025stats.
 // - Reads stored Hunter signals only: entry minute 20–25, Score >=60.
 // - Shows TEST since 25.09.2026 and TODAY.
@@ -315,10 +317,15 @@ const BET_READY_HISTORY_SQL = `
   AND hunter_score >= 64
 `;
 
-// /betstats clean analysis window requested by user.
-// 2026-09-21 00:00 Europe/Sofia = 2026-09-20T21:00:00.000Z.
-const BETSTATS_CLEAN_START_UTC = "2026-09-20T21:00:00.000Z";
-const BETSTATS_CLEAN_START_LABEL = "2026-09-21";
+// V6.7.10.36 — manual stats reset requested by user.
+// Keep all historical D1 rows; /betstats ignores rows before this cutoff.
+// 2026-09-27 19:54 Europe/Sofia = 2026-09-27T16:54:00.000Z.
+const BETSTATS_CLEAN_START_UTC = "2026-09-27T16:54:00.000Z";
+const BETSTATS_CLEAN_START_LABEL = "2026-09-27 19:54 Sofia";
+
+// /2025stats uses the same reset point so both counters restart together.
+const STATS_2025_RESET_UTC = "2026-09-27T16:54:00.000Z";
+const STATS_2025_RESET_LABEL = "27.09.2026 19:54 Sofia";
 
 // Virtual bankroll for clean BET READY research.
 const BETSTATS_START_BANK = 100;
@@ -8609,42 +8616,98 @@ Avg time to GOAL: ${s.avgGoalAfter === null ? "—" : s.avgGoalAfter.toFixed(1) 
   return text.trim();
 }
 
+function formatLateCandidateBlock(rows) {
+  const source = Array.isArray(rows) ? rows : [];
+  const late = source.filter(x => {
+    const minute = Number(x?.entry_minute);
+    return minute >= 22 && minute <= 25;
+  });
+
+  const summarize = (subset) => {
+    const total = subset.length;
+    const goals = subset.filter(x => x?.result === "GOAL HIT").length;
+    const noGoals = subset.filter(x => x?.result === "NO GOAL").length;
+    const open = Math.max(0, total - goals - noGoals);
+    const resolved = goals + noGoals;
+    const rate = resolved > 0 ? goals / resolved * 100 : 0;
+    return { total, goals, noGoals, open, resolved, rate };
+  };
+
+  let out = `🔬 LATE CANDIDATE 22–25′
+`;
+  out += `Observation only — НЕ влиза в BET READY
+`;
+
+  for (const threshold of [64, 65, 66, 67]) {
+    const s = summarize(
+      late.filter(x => Number(x?.hunter_score) >= threshold)
+    );
+    out += s.total
+      ? `≥${threshold}: ${s.total} | ${s.goals}G ${s.noGoals}NG ${s.open}O | ${s.rate.toFixed(1)}%
+`
+      : `≥${threshold}: 0 ENTRY
+`;
+  }
+
+  return out.trim();
+}
+
 async function build2025Stats(env) {
   const now = new Date();
   const local = getSofiaTime(now);
   const todayBounds = getSofiaDayUtcBounds(local.date);
-  const testStartBounds = getSofiaDayUtcBounds("2026-09-25");
 
-  if (!todayBounds || !testStartBounds) {
+  if (!todayBounds) {
     return "❌ /2025stats: неуспешно изчисляване на Sofia date bounds.";
   }
 
+  // V6.7.10.36: both TEST and TODAY counters are reset from the exact
+  // requested moment. Historical D1 rows remain untouched.
+  const resetStart = STATS_2025_RESET_UTC;
+  const todayStart =
+    todayBounds.start > resetStart
+      ? todayBounds.start
+      : resetStart;
+
   const testBounds = {
-    start: testStartBounds.start,
+    start: resetStart,
+    end: todayBounds.end
+  };
+
+  const todayResetBounds = {
+    start: todayStart,
     end: todayBounds.end
   };
 
   const [testRows, todayRows] = await Promise.all([
     get2025StatsRows(env, testBounds),
-    get2025StatsRows(env, todayBounds)
+    get2025StatsRows(env, todayResetBounds)
   ]);
 
   return `📊 HUNTER 20–25′ ANALYSIS
 Score ≥60 | STATS ONLY
-Live/BET READY: без промяна
+Live/BET READY: 10–21′ Score ≥64
+
+🔄 RESET: ${STATS_2025_RESET_LABEL}
+Старите D1 записи са запазени.
 
 ━━━━━━━━━━━━━━━━
-🧪 TEST ОТ 25.09.2026
+🧪 TEST ОТ RESET
 ━━━━━━━━━━━━━━━━
 ${format2025SummaryBlock("20–25′", testRows)}
 
+${formatLateCandidateBlock(testRows)}
+
 ━━━━━━━━━━━━━━━━
-📅 TODAY ${local.date}
+📅 TODAY ${local.date} — ОТ RESET
 ━━━━━━━━━━━━━━━━
 ${format2025SummaryBlock("20–25′", todayRows)}
 
-ℹ️ 20–21′ може да попадне и в live ≥64.
-22–25′ е observation/stats only при текущата live стратегия.`;
+${formatLateCandidateBlock(todayRows)}
+
+ℹ️ 20–21′ може да попадне в live ≥64.
+22–25′ остава observation/stats only.
+LATE CANDIDATE сравнява ≥64 / ≥65 / ≥66 / ≥67 без промяна на live стратегията.`;
 }
 
 
