@@ -1,3 +1,9 @@
+// V6.7.10.37 — ADDITIVE READ-ONLY PUBLIC SITE HISTORY API
+// - Adds GET /public-site-history only.
+// - Reads existing hunter_signals D1 rows with NO Cloudbet/odds/BET READY requirement.
+// - Website cohort: entry 10–21′, Hunter Score >=64, 15:00–23:59 Europe/Sofia.
+// - Existing /history, /stats, /betstats, Telegram, Matcher, resolver, CRON and writes are unchanged.
+//
 // V6.7.10.35 — LIVE + BET READY + BETSTATS SCORE >=64
 // - ONLY threshold change: live/BET READY 10–21′ now Hunter Score >=64.
 // - /betstats and BET READY reporting use the same >=64 threshold.
@@ -776,6 +782,275 @@ export default {
       }
     }
 
+
+
+
+    // ========================================================
+    // V6.7.10.37 — PUBLIC SITE HISTORY — READ ONLY / ADDITIVE
+    //
+    // IMPORTANT:
+    // - SELECT only. Never INSERT / UPDATE / DELETE.
+    // - No Cloudbet, odds, matcher or BET READY requirement.
+    // - Does not modify the existing /history endpoint.
+    // - Returns the exact website/Premium population:
+    //   10–21′, Hunter Score >=64, 15:00–23:59 Europe/Sofia.
+    // ========================================================
+    if (
+      request.method === "GET" &&
+      url.pathname === "/public-site-history"
+    ) {
+      try {
+        if (!env.DB) {
+          return json(
+            {
+              success: false,
+              error: "DB binding missing"
+            },
+            500
+          );
+        }
+
+        const rawDays =
+          Number(
+            url.searchParams.get("days") ??
+            3650
+          );
+
+        const days =
+          Math.max(
+            1,
+            Math.min(
+              3650,
+              Number.isFinite(rawDays)
+                ? Math.floor(rawDays)
+                : 3650
+            )
+          );
+
+        // Broad UTC cutoff only reduces D1 work.
+        // Exact calendar-day/hour filtering is done below in Europe/Sofia.
+        const cutoff =
+          new Date(
+            Date.now() -
+            (
+              days + 2
+            ) * 86400000
+          ).toISOString();
+
+        const result =
+          await env.DB
+            .prepare(`
+              SELECT
+                id,
+                match_id,
+                match_name,
+                league,
+                entry_time,
+                entry_minute,
+                hunter_score,
+                status,
+                result,
+                goal_minute,
+                goal_after_minutes,
+                created_at,
+                updated_at
+              FROM hunter_signals
+              WHERE created_at >= ?
+                AND entry_minute BETWEEN 10 AND 21
+                AND hunter_score >= 64
+              ORDER BY created_at DESC
+              LIMIT 20000
+            `)
+            .bind(cutoff)
+            .all();
+
+        const rows =
+          result?.results || [];
+
+        const now =
+          new Date();
+
+        const todayLocal =
+          getSofiaDateParts(
+            now.toISOString()
+          );
+
+        const startLocal =
+          getSofiaDateParts(
+            new Date(
+              now.getTime() -
+              (
+                days - 1
+              ) * 86400000
+            ).toISOString()
+          );
+
+        const todayKey =
+          todayLocal?.date || "";
+
+        const startKey =
+          startLocal?.date || "";
+
+        const entries =
+          rows
+            .map(row => {
+
+              const createdAt =
+                row?.created_at ?? null;
+
+              const local =
+                createdAt
+                  ? getSofiaDateParts(
+                      createdAt
+                    )
+                  : null;
+
+              if (!local) {
+                return null;
+              }
+
+              const hour =
+                Number(
+                  local.hour
+                );
+
+              // Exact public operating window.
+              if (
+                !Number.isFinite(hour) ||
+                hour < 15 ||
+                hour > 23
+              ) {
+                return null;
+              }
+
+              if (
+                local.date < startKey ||
+                local.date > todayKey
+              ) {
+                return null;
+              }
+
+              return {
+                id:
+                  row?.id ?? null,
+
+                match_id:
+                  row?.match_id ?? null,
+
+                match_name:
+                  row?.match_name ?? "",
+
+                match:
+                  row?.match_name ?? "",
+
+                league:
+                  row?.league ?? "LIVE",
+
+                entry_time:
+                  row?.entry_time ?? null,
+
+                entry_minute:
+                  numberOrNull(
+                    row?.entry_minute
+                  ),
+
+                hunter_score:
+                  numberOrNull(
+                    row?.hunter_score
+                  ),
+
+                status:
+                  row?.status ?? null,
+
+                result:
+                  row?.result ?? null,
+
+                goal_minute:
+                  numberOrNull(
+                    row?.goal_minute
+                  ),
+
+                goal_after_minutes:
+                  numberOrNull(
+                    row?.goal_after_minutes
+                  ),
+
+                created_at:
+                  createdAt,
+
+                updated_at:
+                  row?.updated_at ?? null,
+
+                sofia_time: {
+                  date:
+                    local.date,
+                  time:
+                    local.time,
+                  hour
+                }
+              };
+            })
+            .filter(Boolean);
+
+        return json({
+          success: true,
+          worker:
+            "GOAL WATCH — HUNTER TRACKER",
+          version:
+            "V6.7.10.37 PUBLIC SITE HISTORY READ ONLY",
+          source:
+            "hunter_signals",
+          mode:
+            "READ_ONLY",
+          writes:
+            false,
+          cloudbet_required:
+            false,
+          odds_required:
+            false,
+          bet_ready_required:
+            false,
+          filter: {
+            entry_minute:
+              "10-21",
+            hunter_score_min:
+              64,
+            sofia_hours:
+              "15:00-23:59",
+            timezone:
+              "Europe/Sofia"
+          },
+          days,
+          count:
+            entries.length,
+          entries,
+          timestamp:
+            new Date().toISOString()
+        });
+
+      } catch (error) {
+
+        console.error(
+          "PUBLIC SITE HISTORY ERROR",
+          error?.message ||
+          String(error)
+        );
+
+        return json(
+          {
+            success: false,
+            endpoint:
+              "/public-site-history",
+            mode:
+              "READ_ONLY",
+            error:
+              error?.message ||
+              String(error)
+          },
+          500
+        );
+      }
+    }
 
 
     // ========================================================
@@ -10499,3 +10774,73 @@ function json(
     }
   );
 }
+
+
+
+// V6.7.10.37 — isolated helper for /public-site-history only.
+function getSofiaDateParts(value) {
+  try {
+    const date =
+      new Date(value);
+
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      return null;
+    }
+
+    const parts =
+      new Intl.DateTimeFormat(
+        "en-CA",
+        {
+          timeZone:
+            "Europe/Sofia",
+          year:
+            "numeric",
+          month:
+            "2-digit",
+          day:
+            "2-digit",
+          hour:
+            "2-digit",
+          minute:
+            "2-digit",
+          second:
+            "2-digit",
+          hourCycle:
+            "h23"
+        }
+      )
+        .formatToParts(date)
+        .reduce(
+          (acc, part) => {
+            if (
+              part.type !==
+              "literal"
+            ) {
+              acc[part.type] =
+                part.value;
+            }
+            return acc;
+          },
+          {}
+        );
+
+    return {
+      date:
+        `${parts.year}-${parts.month}-${parts.day}`,
+      time:
+        `${parts.hour}:${parts.minute}:${parts.second}`,
+      hour:
+        Number(
+          parts.hour
+        )
+    };
+
+  } catch {
+    return null;
+  }
+}
+
