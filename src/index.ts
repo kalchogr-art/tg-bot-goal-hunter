@@ -398,6 +398,12 @@ export default {
     const url = new URL(request.url);
 
 
+    // V6.7.10.39 — read-only persisted recovery audit endpoint.
+    if (request.method === 'GET' && url.pathname === '/identity-recovery-status') {
+      const result = await identityRecoveryStatus(env);
+      return json(result, result.success ? 200 : 500);
+    }
+
     // ========================================================
     // DEBUG V27
     // ========================================================
@@ -1933,6 +1939,66 @@ export default {
 };
 
 
+// V6.7.10.39 — persisted read-only identity recovery diagnostics.
+// This table is created lazily during scheduled recovery; the GET route never writes.
+async function ensureIdentityRecoveryAudit(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS identity_recovery_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      attempted_at TEXT NOT NULL,
+      signal_id TEXT NOT NULL,
+      match_id TEXT NOT NULL,
+      match_name TEXT,
+      outcome TEXT NOT NULL,
+      reason TEXT,
+      event_id TEXT,
+      db_changes INTEGER NOT NULL DEFAULT 0
+    )
+  `).run();
+}
+async function logIdentityRecovery(env, row, now, outcome, reason = null, eventId = null, changes = 0) {
+  try {
+    await env.DB.prepare(`
+      INSERT INTO identity_recovery_audit
+      (attempted_at, signal_id, match_id, match_name, outcome, reason, event_id, db_changes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(now.toISOString(), String(row.id), String(row.match_id),
+      row.match_name ?? null, outcome, reason == null ? null : String(reason).slice(0, 300),
+      eventId, changes).run();
+  } catch (error) {
+    console.error('IDENTITY_RECOVERY_AUDIT_WRITE_ERROR', error instanceof Error ? error.message : String(error));
+  }
+}
+async function identityRecoveryStatus(env) {
+  try {
+    const exists = await env.DB.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='identity_recovery_audit'
+    `).first();
+    if (!exists) return {
+      success: true, module: 'IDENTITY_RECOVERY_STATUS', read_only: true,
+      audit_initialized: false, total_attempts: 0, results: [],
+      note: 'No recovery audit table yet. It is initialized by the next scheduled tracker run.'
+    };
+    const totals = await env.DB.prepare(`
+      SELECT outcome, COUNT(*) AS count FROM identity_recovery_audit GROUP BY outcome
+    `).all();
+    const latest = await env.DB.prepare(`
+      SELECT attempted_at, signal_id, match_id, match_name, outcome, reason, event_id, db_changes
+      FROM identity_recovery_audit ORDER BY id DESC LIMIT 50
+    `).all();
+    const counts = Object.fromEntries((totals.results ?? []).map(r => [r.outcome, Number(r.count)]));
+    return {
+      success: true, module: 'IDENTITY_RECOVERY_STATUS', read_only: true,
+      audit_initialized: true, total_attempts: Object.values(counts).reduce((a, b) => a + Number(b), 0),
+      counts, results: latest.results ?? [],
+      note: 'Only attempts since deployment of this audit version are recorded. No historical backfill.'
+    };
+  } catch (error) {
+    return { success: false, module: 'IDENTITY_RECOVERY_STATUS', read_only: true,
+      error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 // V6.7.10.38 — Cloudbet identity recovery for transient entry failures.
 // Retry at most once per signal per Worker isolate, and only within
 // the first 2–4 minutes after ENTRY while still 1H 0:0.
@@ -1940,6 +2006,8 @@ export default {
 const identityRecoverySeen = new Set();
 async function recoverCloudbetIdentity(env, matches, signals, now) {
   if (!env.MATCHER && !env.AI_MATCHER) return;
+  try { await ensureIdentityRecoveryAudit(env); }
+  catch (error) { console.error('IDENTITY_RECOVERY_AUDIT_INIT_ERROR', error instanceof Error ? error.message : String(error)); }
   const live = new Map<string, any>(matches.map(m => [String(m?.id ?? ''), m]));
   let checked = 0;
   for (const row of signals) {
@@ -1961,10 +2029,14 @@ async function recoverCloudbetIdentity(env, matches, signals, now) {
       const matched = await resolveParallelMatchForHunter(env, m, Number(row.hunter_score));
       if (matched?.success !== true || matched?.secure_match !== true || !matched?.event_id) {
         console.log('IDENTITY_RECOVERY_UNMATCHED', id, matched?.matcher_reason ?? null);
+        await logIdentityRecovery(env, row, now, 'UNMATCHED', matched?.matcher_reason ?? 'NO_SECURE_MATCH');
         continue;
       }
       const eventId = String(matched.event_id).trim().replace(/\.0+$/, '');
-      if (!/^\d+$/.test(eventId)) continue;
+      if (!/^\d+$/.test(eventId)) {
+        await logIdentityRecovery(env, row, now, 'INVALID_EVENT_ID', 'NON_NUMERIC_EVENT_ID');
+        continue;
+      }
       const result = await env.DB.prepare(`
         UPDATE hunter_signals SET
           cloudbet_event_id = ?,
@@ -1975,10 +2047,13 @@ async function recoverCloudbetIdentity(env, matches, signals, now) {
           AND cloudbet_event_id IS NULL AND entry_odds IS NULL
       `).bind(eventId, matched.match ?? null, numberOrNull(matched.matcher_score), now.toISOString(), row.id).run();
       console.log('IDENTITY_RECOVERY', id, eventId, Number(result?.meta?.changes ?? 0));
+      await logIdentityRecovery(env, row, now, Number(result?.meta?.changes ?? 0) > 0 ? 'RECOVERED' : 'NOT_UPDATED',
+        Number(result?.meta?.changes ?? 0) > 0 ? null : 'CONDITIONAL_UPDATE_NO_CHANGE', eventId, Number(result?.meta?.changes ?? 0));
       // Deliberately do not store a later quote as entry_odds.
       // The existing Bet Worker may retry current odds using the locked ID.
     } catch (error) {
       console.error('IDENTITY_RECOVERY_ERROR', id, error?.message ?? String(error));
+      await logIdentityRecovery(env, row, now, 'ERROR', error?.message ?? String(error));
     }
   }
   if (identityRecoverySeen.size > 10000) identityRecoverySeen.clear();
