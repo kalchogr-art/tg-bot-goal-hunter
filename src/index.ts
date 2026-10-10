@@ -1,3 +1,4 @@
+// V6.7.10.38 — bounded identity recovery (no retrospective odds backfill)
 // V6.7.10.37 — ADDITIVE READ-ONLY PUBLIC SITE HISTORY API
 // - Adds GET /public-site-history only.
 // - Reads existing hunter_signals D1 rows with NO Cloudbet/odds/BET READY requirement.
@@ -1932,6 +1933,57 @@ export default {
 };
 
 
+// V6.7.10.38 — Cloudbet identity recovery for transient entry failures.
+// Retry at most once per signal per Worker isolate, and only within
+// the first 2–4 minutes after ENTRY while still 1H 0:0.
+// D1 conditional update protects settled rows and competing CRON runs.
+const identityRecoverySeen = new Set();
+async function recoverCloudbetIdentity(env, matches, signals, now) {
+  if (!env.MATCHER && !env.AI_MATCHER) return;
+  const live = new Map<string, any>(matches.map(m => [String(m?.id ?? ''), m]));
+  let checked = 0;
+  for (const row of signals) {
+    if (checked >= 2) break; // API load cap per CRON run
+    const id = String(row?.match_id ?? '');
+    if (!id || row?.cloudbet_event_id != null || identityRecoverySeen.has(id)) continue;
+    const m = live.get(id);
+    if (!m || Number(m?.score?.home) !== 0 || Number(m?.score?.away) !== 0) continue;
+    const minute = Number(m?.minute);
+    if (!Number.isFinite(minute) || minute > 42 || minute < 10) continue;
+    const entryMinute = Number(row?.entry_minute);
+    if (!Number.isFinite(entryMinute) || entryMinute < 10 || entryMinute > 21 || Number(row?.hunter_score) < 64) continue;
+    const entryAt = Date.parse(row?.entry_time ?? '');
+    const age = now.getTime() - entryAt;
+    if (!Number.isFinite(age) || age < 120000 || age > 240000) continue;
+    checked++;
+    identityRecoverySeen.add(id);
+    try {
+      const matched = await resolveParallelMatchForHunter(env, m, Number(row.hunter_score));
+      if (matched?.success !== true || matched?.secure_match !== true || !matched?.event_id) {
+        console.log('IDENTITY_RECOVERY_UNMATCHED', id, matched?.matcher_reason ?? null);
+        continue;
+      }
+      const eventId = String(matched.event_id).trim().replace(/\.0+$/, '');
+      if (!/^\d+$/.test(eventId)) continue;
+      const result = await env.DB.prepare(`
+        UPDATE hunter_signals SET
+          cloudbet_event_id = ?,
+          cloudbet_match = COALESCE(?, cloudbet_match),
+          matcher_score = COALESCE(?, matcher_score),
+          updated_at = ?
+        WHERE id = ? AND status = 'TRACKING'
+          AND cloudbet_event_id IS NULL AND entry_odds IS NULL
+      `).bind(eventId, matched.match ?? null, numberOrNull(matched.matcher_score), now.toISOString(), row.id).run();
+      console.log('IDENTITY_RECOVERY', id, eventId, Number(result?.meta?.changes ?? 0));
+      // Deliberately do not store a later quote as entry_odds.
+      // The existing Bet Worker may retry current odds using the locked ID.
+    } catch (error) {
+      console.error('IDENTITY_RECOVERY_ERROR', id, error?.message ?? String(error));
+    }
+  }
+  if (identityRecoverySeen.size > 10000) identityRecoverySeen.clear();
+}
+
 // ============================================================
 // TRACKER
 // ============================================================
@@ -2056,6 +2108,7 @@ async function processTracker(env) {
           hunter_score,
           entry_home_score,
           entry_away_score,
+          cloudbet_event_id,
           telegram_message_id
         FROM hunter_signals
         WHERE status = 'TRACKING'
@@ -2108,6 +2161,10 @@ async function processTracker(env) {
     }
   }
 
+
+  // V6.7.10.38 — bounded, post-entry identity recovery.
+  // Does not backfill historical entry odds or emit Telegram ENTRY.
+  await recoverCloudbetIdentity(env, matches, signals, now);
 
   // ==========================================================
   // CURRENT MATCHES
