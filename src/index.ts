@@ -399,6 +399,9 @@ export default {
 
 
     // V6.7.10.39 — read-only persisted recovery audit endpoint.
+    if (request.method === 'GET' && url.pathname === '/odds-recovery-status') {
+      return json(await getOddsRecoveryStatus(env));
+    }
     if (request.method === 'GET' && url.pathname === '/identity-recovery-status') {
       const result = await identityRecoveryStatus(env);
       return json(result, result.success ? 200 : 500);
@@ -1999,6 +2002,58 @@ async function identityRecoveryStatus(env) {
   }
 }
 
+// V6.7.10.40 — READ-ONLY odds diagnostic following successful identity recovery.
+// Never call /preflight here: deployed Bet Worker may enable wager execution.
+async function ensureOddsRecoveryAudit(env: any) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS odds_recovery_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempted_at TEXT NOT NULL, match_id TEXT NOT NULL,
+    match_name TEXT, event_id TEXT NOT NULL, outcome TEXT NOT NULL,
+    http_status INTEGER, reason TEXT, diagnostic_json TEXT
+  )`).run();
+}
+async function auditRecoveredOdds(env: any, row: any, eventId: string) {
+  const now = new Date().toISOString();
+  let outcome = 'ERROR', httpStatus: number | null = null, reason: string | null = null;
+  let diagnostic: any = null;
+  try {
+    if (!env.BET_WORKER) { outcome = 'BINDING_MISSING'; reason = 'BET_WORKER_BINDING_MISSING'; }
+    else {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 7000);
+      try {
+        const response = await env.BET_WORKER.fetch(new Request(
+          'https://bet-worker.internal/odds-debug?event_id=' + encodeURIComponent(eventId),
+          { method: 'GET', signal: controller.signal }
+        ));
+        httpStatus = response.status;
+        const body = (await response.text()).slice(0, 10000);
+        try { diagnostic = JSON.parse(body); } catch { diagnostic = { raw: body.slice(0, 1000) }; }
+        outcome = response.ok ? 'DIAGNOSTIC_COMPLETE' : 'HTTP_ERROR';
+        reason = response.ok ? null : 'BET_WORKER_HTTP_' + response.status;
+      } finally { clearTimeout(timeout); }
+    }
+  } catch (e: any) { reason = String(e?.message ?? e).slice(0, 500); }
+  try {
+    await ensureOddsRecoveryAudit(env);
+    await env.DB.prepare(`INSERT INTO odds_recovery_audit
+      (attempted_at,match_id,match_name,event_id,outcome,http_status,reason,diagnostic_json)
+      VALUES (?,?,?,?,?,?,?,?)`).bind(now, String(row.match_id), row.match_name ?? null,
+        eventId, outcome, httpStatus, reason, diagnostic ? JSON.stringify(diagnostic).slice(0, 10000) : null).run();
+  } catch (e: any) { console.error('ODDS_RECOVERY_AUDIT_ERROR', e?.message ?? String(e)); }
+}
+async function getOddsRecoveryStatus(env: any) {
+  try {
+    await ensureOddsRecoveryAudit(env);
+    const counts = await env.DB.prepare(`SELECT outcome,COUNT(*) AS count FROM odds_recovery_audit GROUP BY outcome`).all();
+    const rows = await env.DB.prepare(`SELECT attempted_at,match_id,match_name,event_id,outcome,http_status,reason,diagnostic_json FROM odds_recovery_audit ORDER BY id DESC LIMIT 30`).all();
+    return { success:true, module:'ODDS_RECOVERY_STATUS', read_only:true, wager_sent:false,
+      counts: counts.results ?? [], results: (rows.results ?? []).map((r: any) => ({
+        ...r, diagnostic: (() => { try { return JSON.parse(r.diagnostic_json); } catch { return null; } })(), diagnostic_json: undefined
+      })) };
+  } catch (e: any) { return { success:false, module:'ODDS_RECOVERY_STATUS', error:String(e?.message ?? e) }; }
+}
+
 // V6.7.10.38 — Cloudbet identity recovery for transient entry failures.
 // Retry at most once per signal per Worker isolate, and only within
 // the first 2–4 minutes after ENTRY while still 1H 0:0.
@@ -2049,6 +2104,9 @@ async function recoverCloudbetIdentity(env, matches, signals, now) {
       console.log('IDENTITY_RECOVERY', id, eventId, Number(result?.meta?.changes ?? 0));
       await logIdentityRecovery(env, row, now, Number(result?.meta?.changes ?? 0) > 0 ? 'RECOVERED' : 'NOT_UPDATED',
         Number(result?.meta?.changes ?? 0) > 0 ? null : 'CONDITIONAL_UPDATE_NO_CHANGE', eventId, Number(result?.meta?.changes ?? 0));
+      if (Number(result?.meta?.changes ?? 0) > 0) {
+        await auditRecoveredOdds(env, row, eventId);
+      }
       // Deliberately do not store a later quote as entry_odds.
       // The existing Bet Worker may retry current odds using the locked ID.
     } catch (error) {
