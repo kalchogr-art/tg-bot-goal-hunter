@@ -398,6 +398,9 @@ export default {
     const url = new URL(request.url);
 
 
+    if (request.method === 'GET' && url.pathname === '/shadow-coverage-status') {
+      return json(await shadowCoverageStatus(env));
+    }
     // V6.7.10.39 — read-only persisted recovery audit endpoint.
     if (request.method === 'GET' && url.pathname === '/odds-recovery-status') {
       return json(await getOddsRecoveryStatus(env));
@@ -2052,6 +2055,68 @@ async function getOddsRecoveryStatus(env: any) {
         ...r, diagnostic: (() => { try { return JSON.parse(r.diagnostic_json); } catch { return null; } })(), diagnostic_json: undefined
       })) };
   } catch (e: any) { return { success:false, module:'ODDS_RECOVERY_STATUS', error:String(e?.message ?? e) }; }
+}
+
+
+// V6.7.10.41 — SHADOW coverage research, separate from live bet readiness.
+// Quotes returned by /odds-debug are stored as raw diagnostics, never as entry_odds.
+async function ensureShadowCoverageTable(env: any) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shadow_cloudbet_coverage (
+    match_id TEXT PRIMARY KEY, match_name TEXT, entry_time TEXT,
+    entry_minute INTEGER, hunter_score REAL, segment TEXT,
+    checked_at TEXT, outcome TEXT, event_id TEXT, matcher_reason TEXT,
+    odds_http_status INTEGER, odds_diagnostic_json TEXT
+  )`).run();
+}
+async function collectShadowCoverage(env: any, m: any, row: any) {
+  const minute = Number(row.entry_minute), score = Number(row.hunter_score);
+  if (minute < 10 || minute > 25 || score < 60) return;
+  const segment = minute <= 21 ? 'B_SCORE_60_63' : 'C_MINUTE_22_25';
+  const record: any = { outcome: 'UNMATCHED', eventId: null, reason: null, http: null, diagnostic: null };
+  try {
+    const matched = await resolveParallelMatchForHunter(env, m, score);
+    if (matched?.success === true && matched?.secure_match === true && matched?.event_id) {
+      const eventId = String(matched.event_id).trim().replace(/\.0+$/, '');
+      if (/^\d+$/.test(eventId)) {
+        record.eventId = eventId;
+        record.outcome = 'MATCHED';
+        if (env.BET_WORKER) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 7000);
+          try {
+            const response = await env.BET_WORKER.fetch(new Request(
+              'https://bet-worker.internal/odds-debug?event_id=' + encodeURIComponent(eventId),
+              {method: 'GET', signal: controller.signal}
+            ));
+            record.http = response.status;
+            record.diagnostic = (await response.text()).slice(0, 12000);
+            record.outcome = response.ok ? 'ODDS_DIAGNOSTIC_COMPLETE' : 'ODDS_HTTP_ERROR';
+          } finally { clearTimeout(timeout); }
+        } else { record.reason = 'BET_WORKER_BINDING_MISSING'; }
+      } else { record.outcome = 'INVALID_EVENT_ID'; }
+    } else { record.reason = String(matched?.matcher_reason ?? 'NO_SECURE_MATCH'); }
+  } catch (e: any) { record.outcome = 'ERROR'; record.reason = String(e?.message ?? e).slice(0, 300); }
+  try {
+    await ensureShadowCoverageTable(env);
+    await env.DB.prepare(`INSERT OR IGNORE INTO shadow_cloudbet_coverage
+      (match_id,match_name,entry_time,entry_minute,hunter_score,segment,checked_at,outcome,event_id,matcher_reason,odds_http_status,odds_diagnostic_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      String(row.match_id), row.match_name ?? null, row.entry_time ?? null,
+      minute, score, segment, new Date().toISOString(), record.outcome,
+      record.eventId, record.reason, record.http, record.diagnostic
+    ).run();
+  } catch (e: any) { console.error('SHADOW_COVERAGE_WRITE_ERROR', String(e?.message ?? e)); }
+}
+async function shadowCoverageStatus(env: any) {
+  try {
+    await ensureShadowCoverageTable(env);
+    const summary = await env.DB.prepare(`SELECT segment,outcome,COUNT(*) AS count FROM shadow_cloudbet_coverage GROUP BY segment,outcome ORDER BY segment,outcome`).all();
+    const rows = await env.DB.prepare(`SELECT match_id,match_name,entry_time,entry_minute,hunter_score,segment,checked_at,outcome,event_id,matcher_reason,odds_http_status,odds_diagnostic_json FROM shadow_cloudbet_coverage ORDER BY checked_at DESC LIMIT 50`).all();
+    return {success:true,module:'SHADOW_CLOUDBET_COVERAGE',read_only:true,wager_sent:false,
+      summary:summary.results??[],results:(rows.results??[]).map((r:any)=>({...r,
+        odds_diagnostic_json:undefined, odds_diagnostic:(()=>{try{return JSON.parse(r.odds_diagnostic_json)}catch{return r.odds_diagnostic_json}})()
+      })),note:'Diagnostic responses are not verified entry odds; no changes to BET READY or hunter_signals.'};
+  } catch(e:any) {return {success:false,module:'SHADOW_CLOUDBET_COVERAGE',error:String(e?.message??e)};}
 }
 
 // V6.7.10.38 — Cloudbet identity recovery for transient entry failures.
@@ -5202,6 +5267,10 @@ async function createHunterEntry(
     liveRequiredScore === null ||
     hunterScore < liveRequiredScore
   ) {
+    // Shadow lookup is research-only and cannot invoke the bet placement path.
+    if (minute >= 10 && minute <= 25 && hunterScore >= 60) {
+      await collectShadowCoverage(env, m, signal);
+    }
     console.log(
       "HUNTER OBSERVATION ONLY 60-63",
       id,
