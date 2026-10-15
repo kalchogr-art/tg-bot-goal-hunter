@@ -2058,7 +2058,7 @@ async function getOddsRecoveryStatus(env: any) {
 }
 
 
-// V6.7.10.41 — SHADOW coverage research, separate from live bet readiness.
+// V6.7.10.42 — SHADOW coverage research, separate from live bet readiness.
 // Quotes returned by /odds-debug are stored as raw diagnostics, never as entry_odds.
 async function ensureShadowCoverageTable(env: any) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shadow_cloudbet_coverage (
@@ -2107,15 +2107,39 @@ async function collectShadowCoverage(env: any, m: any, row: any) {
     ).run();
   } catch (e: any) { console.error('SHADOW_COVERAGE_WRITE_ERROR', String(e?.message ?? e)); }
 }
+// V6.7.10.42 — compact mobile report; keep raw diagnostics only in D1.
+function compactShadowDiagnostic(raw: any) {
+  if (!raw) return {market_status:'NOT_CHECKED', odds:null, exact_target_found:false};
+  let d: any;
+  try { d = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+  catch { return {market_status:'INVALID_DIAGNOSTIC_JSON', odds:null, exact_target_found:false}; }
+  const event = d?.cloudbet_event ?? d?.event ?? {};
+  const exact = d?.exact_target ?? event?.exact_target ?? null;
+  const found = d?.exact_target_found === true || event?.exact_target_found === true;
+  const candidates = [exact?.odds, exact?.price, exact?.decimal_odds, d?.entry_odds];
+  const price = candidates.map(Number).find(x => Number.isFinite(x) && x > 1) ?? null;
+  const nodes: any[] = Array.isArray(d?.relevant_market_nodes) ? d.relevant_market_nodes :
+    Array.isArray(event?.relevant_market_nodes) ? event.relevant_market_nodes : [];
+  const statuses = [...new Set(nodes.map((n:any)=>String(n?.status??'')).filter(Boolean))].slice(0,5);
+  const market_status = found && price !== null ? 'ODDS_FOUND' :
+    statuses.includes('SELECTION_DISABLED') ? 'SELECTION_DISABLED' :
+    found ? 'TARGET_FOUND_NO_PRICE' : 'TARGET_NOT_FOUND';
+  return {market_status, exact_target_found:found, odds:price, market_statuses:statuses,
+    error:typeof d?.error === 'string' ? d.error.slice(0,180) : null};
+}
 async function shadowCoverageStatus(env: any) {
   try {
     await ensureShadowCoverageTable(env);
     const summary = await env.DB.prepare(`SELECT segment,outcome,COUNT(*) AS count FROM shadow_cloudbet_coverage GROUP BY segment,outcome ORDER BY segment,outcome`).all();
     const rows = await env.DB.prepare(`SELECT match_id,match_name,entry_time,entry_minute,hunter_score,segment,checked_at,outcome,event_id,matcher_reason,odds_http_status,odds_diagnostic_json FROM shadow_cloudbet_coverage ORDER BY checked_at DESC LIMIT 50`).all();
-    return {success:true,module:'SHADOW_CLOUDBET_COVERAGE',read_only:true,wager_sent:false,
-      summary:summary.results??[],results:(rows.results??[]).map((r:any)=>({...r,
-        odds_diagnostic_json:undefined, odds_diagnostic:(()=>{try{return JSON.parse(r.odds_diagnostic_json)}catch{return r.odds_diagnostic_json}})()
-      })),note:'Diagnostic responses are not verified entry odds; no changes to BET READY or hunter_signals.'};
+    return {success:true,module:'SHADOW_CLOUDBET_COVERAGE',version:'V6.7.10.42',read_only:true,wager_sent:false,
+      summary:summary.results??[],results:(rows.results??[]).map((r:any)=>({
+        match_id:r.match_id,match_name:r.match_name,entry_time:r.entry_time,
+        entry_minute:r.entry_minute,hunter_score:r.hunter_score,segment:r.segment,
+        checked_at:r.checked_at,outcome:r.outcome,event_id:r.event_id,
+        matcher_reason:r.matcher_reason,odds_http_status:r.odds_http_status,
+        ...compactShadowDiagnostic(r.odds_diagnostic_json)
+      })),note:'Raw diagnostic remains in D1; odds shown only when an exact target with valid price is verified. No live betting changes.'};
   } catch(e:any) {return {success:false,module:'SHADOW_CLOUDBET_COVERAGE',error:String(e?.message??e)};}
 }
 
