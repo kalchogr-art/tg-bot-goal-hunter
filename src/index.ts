@@ -1499,7 +1499,8 @@ export default {
           : '';
         const readyTelegramMessageId = await sendTelegram(
           env, formatEntryMessage(readyMatch, Number(row?.hunter_score ?? 0),
-            getSofiaTime(new Date()), readyCloudbet, readyBet) + retryLabel
+            getSofiaTime(new Date()), readyCloudbet, readyBet,
+            await directSiteOddsObservationV45(eventId)) + retryLabel
         );
 
         // Future GOAL / NO GOAL replies should attach to the full READY
@@ -5686,7 +5687,8 @@ async function createHunterEntry(
             hunterScore,
             local,
             cloudbetOdds,
-            betReady
+            betReady,
+            await directSiteOddsObservationV45(cloudbetOdds?.event_id ?? betReady?.event_id)
           )
         );
 
@@ -10238,6 +10240,43 @@ async function sendDailyReport(
 }
 
 
+
+// V6.7.10.45 — OBSERVATION ONLY: exact public Cloudbet site-feed odds.
+// A disabled selection can have a visible price. This NEVER affects BET READY,
+// placed bets, existing odds, retries or automatic execution.
+async function directSiteOddsObservationV45(eventId: any): Promise<string> {
+  const id = String(eventId ?? '').trim();
+  if (!/^\d+$/.test(id)) return '— (няма Event ID)';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4500);
+  try {
+    const url = new URL('https://www.cloudbet.com/sports-api/c/v6/sports/events/' + encodeURIComponent(id));
+    url.searchParams.set('entities', 'all');
+    url.searchParams.set('locale', 'en');
+    url.searchParams.set('markets', 'soccer.total_goals_period_first_half');
+    const response = await fetch(url.toString(), {
+      method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal
+    });
+    if (!response.ok) return '— (HTTP ' + response.status + ')';
+    const payload: any = await response.json();
+    const event: any = payload?.event ?? payload;
+    if (event?.id != null && String(event.id) !== id) return '— (Event ID mismatch)';
+    const market = event?.markets?.['soccer.total_goals_period_first_half'];
+    const submarket = market?.submarkets?.['period=1h'];
+    const selections = Array.isArray(submarket?.selections) ? submarket.selections : [];
+    const selection = selections.find((x: any) =>
+      String(x?.outcome ?? '').toLowerCase() === 'over' &&
+      String(x?.params ?? '').toLowerCase() === 'total=0.5');
+    if (!selection) return '— (TARGET_NOT_FOUND)';
+    const price = numberOrNull(selection.price);
+    const status = String(selection.status ?? 'UNKNOWN');
+    if (price === null || price <= 1) return '— (PRICE_NOT_AVAILABLE; ' + status + ')';
+    return price.toFixed(2) + ' (' + status + ')';
+  } catch (e: any) {
+    return '— (' + (e?.name === 'AbortError' ? 'TIMEOUT' : 'FETCH_ERROR') + ')';
+  } finally { clearTimeout(timer); }
+}
+
 // ============================================================
 // TELEGRAM
 // ============================================================
@@ -10527,7 +10566,8 @@ function formatEntryMessage(
   score,
   local,
   cloudbet = null,
-  betReady = null
+  betReady = null,
+  directSiteOdds = null
 ) {
 
   const home =
@@ -10790,6 +10830,7 @@ function formatEntryMessage(
 🔥 HUNTER SCORE: ${score}/100
 
 ${cloudbetText}
+${directSiteOdds !== null ? '\nКоефициент от директно извличане: ' + directSiteOdds : ''}
 
 ${betReadyText}
 
@@ -11269,7 +11310,8 @@ async function processOddsRetryMinute(env: any) {
         attempt_count=?,last_check_at=?,last_reason=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
         .bind(attempt,now,reason,now,id).run();
       if (Number(ended.meta?.changes ?? 0) > 0) {
-        const text=`🔴 ODDS NOT FOUND — 5 MIN\n\n⚽ ${row.match_name}\n📥 ENTRY: ${row.entry_minute}'\n🔥 HUNTER SCORE: ${row.hunter_score}/100\n🔄 Проверки: ${attempt}/6\n❌ NOT_AVAILABLE_WITHIN_5M\nПоследна причина: ${reason}`;
+        const text=`🔴 ODDS NOT FOUND — 5 MIN\n\n⚽ ${row.match_name}\n📥 ENTRY: ${row.entry_minute}'\n🔥 HUNTER SCORE: ${row.hunter_score}/100\n🔄 Проверки: ${attempt}/6\n❌ NOT_AVAILABLE_WITHIN_5M\nПоследна причина: ${reason}
+Коефициент от директно извличане: ${await directSiteOddsObservationV45(eventId)}`;
         const messageId=await sendTelegram(env,text);
         if (messageId != null) await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET notified_at=? WHERE match_id=?`).bind(now,id).run();
       }
