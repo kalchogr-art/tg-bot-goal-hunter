@@ -1434,13 +1434,15 @@ export default {
 
         // Keep the ODDS FOUND notification as a reply when an original
         // Telegram message exists. This is informational only.
-        const oddsFoundMessageId =
-          await sendTelegram(
-            env,
-            message,
-            row?.telegram_message_id ??
-            null
-          );
+        const managedRetry = await env.DB.prepare(
+          "SELECT attempt_count, entry_time FROM hunter_odds_retry_v44 WHERE match_id = ? LIMIT 1"
+        ).bind(matchId).first().catch(() => null);
+        const oddsFoundMessageId = managedRetry ? null : await sendTelegram(
+          env, message, row?.telegram_message_id ?? null
+        );
+        if (managedRetry) await env.DB.prepare(
+          "UPDATE hunter_odds_retry_v44 SET state='FOUND', found_at=?, found_odds=?, updated_at=? WHERE match_id=? AND state='WAITING'"
+        ).bind(nowIso, odds, nowIso, matchId).run();
 
         // V6.7.11 — PENDING_ODDS -> READY_TO_BET FORWARD
         // Once real odds are found, publish the SAME Hunter signal again
@@ -1492,17 +1494,13 @@ export default {
           account_balance: null
         };
 
-        const readyTelegramMessageId =
-          await sendTelegram(
-            env,
-            formatEntryMessage(
-              readyMatch,
-              Number(row?.hunter_score ?? 0),
-              getSofiaTime(new Date()),
-              readyCloudbet,
-              readyBet
-            )
-          );
+        const retryLabel = managedRetry
+          ? `\n\n🔄 ODDS FOUND: Проверка №${Number(managedRetry.attempt_count || 0)}\n⏳ След ${Math.max(0, Math.round((Date.now()-Date.parse(managedRetry.entry_time))/60000))} мин.`
+          : '';
+        const readyTelegramMessageId = await sendTelegram(
+          env, formatEntryMessage(readyMatch, Number(row?.hunter_score ?? 0),
+            getSofiaTime(new Date()), readyCloudbet, readyBet) + retryLabel
+        );
 
         // Future GOAL / NO GOAL replies should attach to the full READY
         // signal, not to the old WAITING/ODDS FOUND notification.
@@ -1931,16 +1929,12 @@ export default {
     ctx
   ) {
 
-    ctx.waitUntil(
-      processTracker(env)
-        .catch(error => {
-          console.error(
-            "TRACKER ERROR",
-            error?.message ||
-            String(error)
-          );
-        })
-    );
+    ctx.waitUntil((async () => {
+      try { await processTracker(env); }
+      catch (error) { console.error('TRACKER ERROR', error?.message || String(error)); }
+      try { await processOddsRetryMinute(env); }
+      catch (error) { console.error('ODDS RETRY ERROR', error?.message || String(error)); }
+    })());
   }
 };
 
@@ -2058,7 +2052,7 @@ async function getOddsRecoveryStatus(env: any) {
 }
 
 
-// V6.7.10.43 — SHADOW coverage research, separate from live bet readiness.
+// V6.7.10.44 — SHADOW coverage research, separate from live bet readiness.
 // Quotes returned by /odds-debug are stored as raw diagnostics, never as entry_odds.
 async function ensureShadowCoverageTable(env: any) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shadow_cloudbet_coverage (
@@ -2132,7 +2126,7 @@ async function collectShadowCoverage(env: any, m: any, row: any) {
     ).run();
   } catch (e: any) { console.error('SHADOW_COVERAGE_WRITE_ERROR', String(e?.message ?? e)); }
 }
-// V6.7.10.43 — compact mobile report; keep raw diagnostics only in D1.
+// V6.7.10.44 — compact mobile report; keep raw diagnostics only in D1.
 function compactShadowDiagnostic(raw: any) {
   if (!raw) return {market_status:'NOT_CHECKED', odds:null, exact_target_found:false};
   let d: any;
@@ -2157,7 +2151,7 @@ async function shadowCoverageStatus(env: any) {
     await ensureShadowCoverageTable(env);
     const summary = await env.DB.prepare(`SELECT segment,outcome,COUNT(*) AS count FROM shadow_cloudbet_coverage GROUP BY segment,outcome ORDER BY segment,outcome`).all();
     const rows = await env.DB.prepare(`SELECT match_id,match_name,entry_time,entry_minute,hunter_score,segment,checked_at,outcome,event_id,matcher_reason,odds_http_status,odds_diagnostic_json FROM shadow_cloudbet_coverage ORDER BY checked_at DESC LIMIT 50`).all();
-    return {success:true,module:'SHADOW_CLOUDBET_COVERAGE',version:'V6.7.10.43',read_only:true,wager_sent:false,
+    return {success:true,module:'SHADOW_CLOUDBET_COVERAGE',version:'V6.7.10.44',read_only:true,wager_sent:false,
       summary:summary.results??[],results:(rows.results??[]).map((r:any)=>({
         match_id:r.match_id,match_name:r.match_name,entry_time:r.entry_time,
         entry_minute:r.entry_minute,hunter_score:r.hunter_score,segment:r.segment,
@@ -5672,8 +5666,18 @@ async function createHunterEntry(
     !shadowEntry &&
     shouldSendHunterEntryToTelegram(minute, hunterScore);
 
+  const hasEntryOdds =
+    numberOrNull(cloudbetOdds?.entry_odds ?? cloudbetOdds?.price ?? betReady?.current_odds) > 1;
+  // V6.7.10.44: suppress only WAITING Telegram; keep Hunter DB/stats/tracking.
+  if (sendHunterTelegram && !hasEntryOdds) {
+    await oddsRetryRegister(env, {
+      match_id: id, match_name: matchName, event_id: cloudbetOdds?.event_id ?? betReady?.event_id ?? null,
+      entry_time: nowIso, entry_minute: minute, hunter_score: hunterScore,
+      initial_reason: betReady?.reason ?? cloudbetOdds?.matcher_reason ?? 'ODDS_WAITING'
+    });
+  }
   const telegramMessageId =
-    !sendHunterTelegram
+    !(sendHunterTelegram && hasEntryOdds)
       ? null
       : await sendTelegram(
           env,
@@ -11152,3 +11156,128 @@ function getSofiaDateParts(value) {
   }
 }
 
+
+
+// V6.7.10.44 — minute CRON retry, independent of Hunter signal lifecycle.
+// The exact market is sourced only from the Bet Worker's /odds-debug same-event diagnostic.
+async function ensureOddsRetryV44(env: any) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS hunter_odds_retry_v44 (
+    match_id TEXT PRIMARY KEY, match_name TEXT, event_id TEXT, entry_time TEXT NOT NULL,
+    entry_minute INTEGER, hunter_score REAL, initial_reason TEXT,
+    state TEXT NOT NULL DEFAULT 'WAITING', attempt_count INTEGER NOT NULL DEFAULT 1,
+    last_check_at TEXT, next_check_at TEXT, last_reason TEXT,
+    found_at TEXT, found_odds REAL, notified_at TEXT, updated_at TEXT
+  )`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS hunter_odds_retry_attempts_v44 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, match_id TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL, checked_at TEXT NOT NULL,
+    reason TEXT, event_id TEXT, odds REAL, http_status INTEGER,
+    UNIQUE(match_id, attempt_number)
+  )`).run();
+}
+async function oddsRetryRegister(env: any, r: any) {
+  await ensureOddsRetryV44(env);
+  const now = new Date().toISOString();
+  const next = new Date(Date.parse(r.entry_time) + 60000).toISOString();
+  await env.DB.prepare(`INSERT OR IGNORE INTO hunter_odds_retry_v44
+    (match_id, match_name, event_id, entry_time, entry_minute, hunter_score,
+     initial_reason, state, attempt_count, last_check_at, next_check_at, last_reason, updated_at)
+    VALUES (?,?,?,?,?,?,?,'WAITING',1,?,?,?,?)`)
+    .bind(String(r.match_id), r.match_name, r.event_id == null ? null : String(r.event_id),
+      r.entry_time, r.entry_minute, r.hunter_score, r.initial_reason,
+      now, next, r.initial_reason, now).run();
+  await env.DB.prepare(`INSERT OR IGNORE INTO hunter_odds_retry_attempts_v44
+    (match_id, attempt_number, checked_at, reason, event_id, odds, http_status)
+    VALUES (?,1,?,?,?,NULL,NULL)`)
+    .bind(String(r.match_id), now, r.initial_reason, r.event_id == null ? null : String(r.event_id)).run();
+}
+function exactOddsFromDebugV44(payload: any): number | null {
+  const event = payload?.cloudbet_event;
+  if (payload?.success !== true || event?.fetched !== true ||
+      event?.same_event_id !== true || event?.exact_target_found !== true) return null;
+  const target = event.exact_target;
+  if (!target || typeof target !== 'object') return null;
+  // Strict market identity: never infer from team-total or unrelated market nodes.
+  const market = String(target.market_key ?? target.market ?? target.marketKey ?? '');
+  const sub = String(target.submarket_key ?? target.submarket ?? target.period ?? '');
+  const outcome = String(target.outcome ?? '').toLowerCase();
+  const params = String(target.params ?? '').toLowerCase();
+  const status = String(target.status ?? target.state ?? '').toUpperCase();
+  if (market !== 'soccer.total_goals_period_first_half' || sub !== 'period=1h' ||
+      outcome !== 'over' || params !== 'total=0.5' ||
+      status.includes('DISABLED') || status.includes('SUSPENDED') || status.includes('CLOSED')) return null;
+  const price = numberOrNull(target.price ?? target.odds);
+  return price !== null && price > 1 ? price : null;
+}
+async function processOddsRetryMinute(env: any) {
+  await ensureOddsRetryV44(env);
+  const now = new Date().toISOString();
+  const due = await env.DB.prepare(`SELECT r.*, s.status AS hunter_status, s.entry_odds AS stored_odds,
+    s.cloudbet_event_id AS stored_event_id FROM hunter_odds_retry_v44 r
+    LEFT JOIN hunter_signals s ON s.match_id=r.match_id
+    WHERE r.state='WAITING' AND r.next_check_at <= ? ORDER BY r.entry_time LIMIT 40`)
+    .bind(now).all();
+  for (const row of due.results ?? []) {
+    const id = String(row.match_id);
+    const age = Date.now() - Date.parse(String(row.entry_time));
+    if (row.hunter_status !== 'TRACKING' || numberOrNull(row.stored_odds) > 1) {
+      await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
+        .bind(numberOrNull(row.stored_odds)>1?'FOUND':'STOPPED', now, id).run();
+      continue;
+    }
+    const attempt = Math.min(6, Number(row.attempt_count) + 1);
+    let reason = 'EVENT_ID_MISSING', http: number | null = null, odds: number | null = null;
+    const eventId = String(row.event_id ?? row.stored_event_id ?? '').trim();
+    if (eventId && env.BET_WORKER) {
+      try {
+        const response = await env.BET_WORKER.fetch(new Request(
+          'https://bet-worker.internal/odds-debug?event_id='+encodeURIComponent(eventId)));
+        http = response.status;
+        if (response.ok) {
+          const payload = await response.json();
+          odds = exactOddsFromDebugV44(payload);
+          reason = odds !== null ? 'EXACT_TARGET_AVAILABLE' :
+            payload?.cloudbet_event?.exact_target_found === true ? 'EXACT_TARGET_NOT_ENABLED_OR_UNVERIFIED' : 'TARGET_NOT_FOUND';
+        } else reason = 'BET_WORKER_HTTP_'+response.status;
+      } catch (e: any) { reason = 'BET_WORKER_ERROR_'+String(e?.message ?? e).slice(0,100); }
+    } else if (!env.BET_WORKER) reason='BET_WORKER_BINDING_MISSING';
+    await env.DB.prepare(`INSERT OR IGNORE INTO hunter_odds_retry_attempts_v44
+      (match_id,attempt_number,checked_at,reason,event_id,odds,http_status) VALUES (?,?,?,?,?,?,?)`)
+      .bind(id,attempt,now,reason,eventId || null,odds,http).run();
+    if (odds !== null && eventId) {
+      // Re-check Hunter state atomically; callback must not turn an ended match into READY.
+      const updated = await env.DB.prepare(`UPDATE hunter_signals SET entry_odds=?, odds_available=1,
+        cloudbet_event_id=?, updated_at=? WHERE match_id=? AND status='TRACKING'
+        AND entry_odds IS NULL AND cloudbet_event_id=?`)
+        .bind(odds,eventId,now,id,eventId).run();
+      if (Number(updated.meta?.changes ?? 0) > 0) {
+        await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='FOUND', attempt_count=?,
+          found_at=?,found_odds=?,last_reason=?,last_check_at=?,updated_at=? WHERE match_id=?`)
+          .bind(attempt,now,odds,reason,now,now,id).run();
+        const text = `🎯 HUNTER ENTRY — BET READY\n\n⚽ ${row.match_name}\n📥 ENTRY: ${row.entry_minute}'\n🔥 HUNTER SCORE: ${row.hunter_score}/100\n🎲 1H OVER 0.5: ${odds.toFixed(2)}\n🆔 Event: ${eventId}\n\n🔄 ODDS FOUND: Проверка №${attempt}\n⏳ След ${Math.max(0,Math.round(age/60000))} мин.`;
+        const messageId = await sendTelegram(env,text);
+        if (messageId != null) {
+          await env.DB.prepare(`UPDATE hunter_signals SET telegram_message_id=? WHERE match_id=? AND status='TRACKING'`)
+            .bind(messageId,id).run();
+          await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET notified_at=? WHERE match_id=?`).bind(now,id).run();
+        }
+        continue;
+      }
+    }
+    if (attempt >= 6 || age >= 300000) {
+      const ended = await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='NOT_FOUND',
+        attempt_count=?,last_check_at=?,last_reason=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
+        .bind(attempt,now,reason,now,id).run();
+      if (Number(ended.meta?.changes ?? 0) > 0) {
+        const text=`🔴 ODDS NOT FOUND — 5 MIN\n\n⚽ ${row.match_name}\n📥 ENTRY: ${row.entry_minute}'\n🔥 HUNTER SCORE: ${row.hunter_score}/100\n🔄 Проверки: ${attempt}/6\n❌ NOT_AVAILABLE_WITHIN_5M\nПоследна причина: ${reason}`;
+        const messageId=await sendTelegram(env,text);
+        if (messageId != null) await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET notified_at=? WHERE match_id=?`).bind(now,id).run();
+      }
+    } else {
+      const next = new Date(Date.parse(String(row.entry_time)) + attempt*60000).toISOString();
+      await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET attempt_count=?,last_check_at=?,
+        next_check_at=?,last_reason=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
+        .bind(attempt,now,next,reason,now,id).run();
+    }
+  }
+}
