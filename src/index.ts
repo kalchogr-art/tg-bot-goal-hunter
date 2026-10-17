@@ -4558,6 +4558,9 @@ async function getAiMatchForHunter(env, m, hunterScore) {
     const accepted = result?.accepted === true && eventId !== null && confidence !== null && confidence >= 0.90 && categoryGuardOk;
     return {
       success:accepted, accepted, event_id:accepted ? eventId : null,
+      diagnostic_candidate_event_id:eventId,
+      diagnostic_candidate_match:result?.cloudbet_match ?? result?.candidate?.match ?? null,
+      diagnostic_ai_accepted:result?.accepted === true,
       match:accepted ? (result?.cloudbet_match ?? result?.candidate?.match ?? null) : null,
       confidence, category_guard_ok:categoryGuardOk,
       reason:accepted ? (result?.reason || "AI_MATCH_ACCEPTED") :
@@ -4594,21 +4597,83 @@ async function resolveParallelMatchForHunter(env, m, hunterScore) {
   try { mechanical = await mechanicalPromise; }
   catch(error) { mechanical={success:false,event_id:null,matcher_reason:"MATCHER_EXCEPTION",matcher_attempts:0,matcher_error:error?.message||String(error)}; }
   if (mechanical?.success === true && mechanical?.event_id) {
-    return {...mechanical,match_source:"MECHANICAL",ai_started_in_parallel:true};
+    return {...mechanical,match_source:"MECHANICAL",ai_started_in_parallel:true,
+      ai_diagnostic_status:"STARTED_NOT_AWAITED"};
   }
   let ai;
   try { ai = await aiPromise; }
   catch(error) { ai={success:false,accepted:false,event_id:null,confidence:null,reason:"AI_MATCHER_EXCEPTION",error:error?.message||String(error)}; }
   if (ai?.success === true && ai?.accepted === true && ai?.event_id) {
-    return {...aiMatchToCloudbetResult(ai),mechanical_reason:mechanical?.matcher_reason??"MATCHER_NO_MATCH",mechanical_attempts:mechanical?.matcher_attempts??0,ai_started_in_parallel:true};
+    return {...aiMatchToCloudbetResult(ai),mechanical_reason:mechanical?.matcher_reason??"MATCHER_NO_MATCH",mechanical_attempts:mechanical?.matcher_attempts??0,ai_started_in_parallel:true,
+      ai_candidate_event_id:ai?.diagnostic_candidate_event_id??null,ai_candidate_match:ai?.diagnostic_candidate_match??null,ai_category_guard_ok:ai?.category_guard_ok??null};
   }
   return {
     success:false,event_id:null,match:null,
     matcher_reason:ai?.reason ?? mechanical?.matcher_reason ?? "MATCHERS_NO_MATCH",
     matcher_attempts:mechanical?.matcher_attempts??0,
     mechanical_reason:mechanical?.matcher_reason??null,ai_reason:ai?.reason??null,
-    ai_confidence:numberOrNull(ai?.confidence),secure_match:false,match_source:"UNMATCHED",ai_started_in_parallel:true
+    ai_confidence:numberOrNull(ai?.confidence),secure_match:false,match_source:"UNMATCHED",ai_started_in_parallel:true,
+    ai_candidate_event_id:ai?.diagnostic_candidate_event_id??null,
+    ai_candidate_match:ai?.diagnostic_candidate_match??null,
+    ai_category_guard_ok:ai?.category_guard_ok??null,
+    ai_raw_accepted:ai?.diagnostic_ai_accepted??null,
+    mechanical_candidate_event_id:mechanical?.best_event_id??null,
+    mechanical_candidate_match:mechanical?.best_match??null,
+    selection_status:mechanical?.selection_status??null
   };
+}
+
+// V6.7.10.47 — persistent ENTRY matching audit (diagnostic only).
+// Only runs for the existing live-eligible entry path. Never changes acceptance or betting.
+async function saveHunterEntryMatchAudit(env, signal, matched) {
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS hunter_entry_match_audit_v47 (
+      signal_id TEXT PRIMARY KEY, match_id TEXT, match_name TEXT,
+      entry_time TEXT, entry_minute INTEGER, hunter_score REAL,
+      checked_at TEXT NOT NULL, match_source TEXT, matched INTEGER NOT NULL DEFAULT 0,
+      event_id TEXT, cloudbet_match TEXT, entry_odds REAL,
+      odds_available INTEGER, selection_status TEXT,
+      matcher_reason TEXT, mechanical_reason TEXT, matcher_attempts INTEGER,
+      ai_reason TEXT, ai_confidence REAL, ai_category_guard_ok INTEGER,
+      ai_candidate_event_id TEXT, ai_candidate_match TEXT,
+      ai_raw_accepted INTEGER, ai_diagnostic_status TEXT,
+      mechanical_candidate_event_id TEXT, mechanical_candidate_match TEXT,
+      diagnostic_json TEXT
+    )`).run();
+    const v = matched ?? {};
+    const tri = x => x == null ? null : (x === true ? 1 : 0);
+    const diagnostic = {
+      matcher_error: v.matcher_error ?? null,
+      ai_started_in_parallel: v.ai_started_in_parallel ?? null,
+      secure_match: v.secure_match ?? null,
+      market_url: v.market_url ?? null,
+      mechanical_attempts: v.mechanical_attempts ?? null
+    };
+    await env.DB.prepare(`INSERT OR REPLACE INTO hunter_entry_match_audit_v47 (
+      signal_id, match_id, match_name, entry_time, entry_minute, hunter_score,
+      checked_at, match_source, matched, event_id, cloudbet_match, entry_odds,
+      odds_available, selection_status, matcher_reason, mechanical_reason, matcher_attempts,
+      ai_reason, ai_confidence, ai_category_guard_ok, ai_candidate_event_id,
+      ai_candidate_match, ai_raw_accepted, ai_diagnostic_status,
+      mechanical_candidate_event_id, mechanical_candidate_match, diagnostic_json
+    ) VALUES (${Array(27).fill('?').join(',')})`).bind(
+      String(signal.id), String(signal.match_id), signal.match_name ?? null,
+      signal.entry_time ?? null, signal.entry_minute ?? null, signal.hunter_score ?? null,
+      new Date().toISOString(), v.match_source ?? 'LOOKUP_ERROR',
+      v.success === true && !!v.event_id ? 1 : 0,
+      v.event_id == null ? null : String(v.event_id), v.match ?? null,
+      numberOrNull(v.price), tri(v.odds_available), v.selection_status ?? null,
+      v.matcher_reason ?? null, v.mechanical_reason ?? null, v.matcher_attempts ?? null,
+      v.ai_reason ?? null, numberOrNull(v.ai_confidence), tri(v.ai_category_guard_ok),
+      v.ai_candidate_event_id == null ? null : String(v.ai_candidate_event_id),
+      v.ai_candidate_match ?? null, tri(v.ai_raw_accepted),
+      v.ai_diagnostic_status ?? null,
+      v.mechanical_candidate_event_id == null ? null : String(v.mechanical_candidate_event_id),
+      v.mechanical_candidate_match ?? null, JSON.stringify(diagnostic)
+    ).run();
+  } catch (e) {
+    console.error('HUNTER_ENTRY_MATCH_AUDIT_V47_ERROR', e?.message ?? String(e));
+  }
 }
 
 // ============================================================
@@ -5359,6 +5424,9 @@ async function createHunterEntry(
       null;
   }
 
+
+  // Persistent diagnostic snapshot for every eligible entry, including UNMATCHED.
+  await saveHunterEntryMatchAudit(env, signal, cloudbetOdds);
 
   // ==========================================================
   // SAVE ENTRY ODDS TO D1
