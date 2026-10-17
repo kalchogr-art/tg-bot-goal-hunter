@@ -5669,7 +5669,10 @@ async function createHunterEntry(
 
   const hasEntryOdds =
     numberOrNull(cloudbetOdds?.entry_odds ?? cloudbetOdds?.price ?? betReady?.current_odds) > 1;
-  // V6.7.10.44: suppress only WAITING Telegram; keep Hunter DB/stats/tracking.
+  // V6.7.10.46: odds availability must NOT gate HUNTER ENTRY Telegram.
+  // Keep the retry registration for missing odds, but send the ENTRY for
+  // every eligible normal Hunter signal (including UNMATCHED / NOT_FOUND).
+  // BET READY and betting safety checks are unchanged.
   if (sendHunterTelegram && !hasEntryOdds) {
     await oddsRetryRegister(env, {
       match_id: id, match_name: matchName, event_id: cloudbetOdds?.event_id ?? betReady?.event_id ?? null,
@@ -5678,7 +5681,7 @@ async function createHunterEntry(
     });
   }
   const telegramMessageId =
-    !(sendHunterTelegram && hasEntryOdds)
+    !sendHunterTelegram
       ? null
       : await sendTelegram(
           env,
