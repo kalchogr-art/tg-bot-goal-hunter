@@ -1,3 +1,4 @@
+// V6.7.10.49 — RESEARCH IN hunter_signals; LIVE LOGIC UNCHANGED
 // V6.7.10.38 — bounded identity recovery (no retrospective odds backfill)
 // V6.7.10.37 — ADDITIVE READ-ONLY PUBLIC SITE HISTORY API
 // - Adds GET /public-site-history only.
@@ -2053,6 +2054,70 @@ async function getOddsRecoveryStatus(env: any) {
 }
 
 
+// V6.7.10.49 — Research fields stored ON THE EXISTING hunter_signals ROW.
+// These columns are observation-only. Live ENTRY, Telegram and betting never read them.
+async function saveResearchEntrySnapshotV48(env: any, m: any, row: any, lookup: any, path: string) {
+  try {
+    const minute = Number(row?.entry_minute);
+    const score = Number(row?.hunter_score);
+    if (!(minute >= 10 && minute <= 25 && score >= 60)) return;
+    const columns: Record<string, string> = {
+      research_lookup_path: 'TEXT', research_lookup_at: 'TEXT',
+      research_matched: 'INTEGER', research_event_id: 'TEXT',
+      research_cloudbet_match: 'TEXT', research_odds: 'REAL',
+      research_odds_available: 'INTEGER', research_selection_status: 'TEXT',
+      research_matcher_reason: 'TEXT', research_match_source: 'TEXT',
+      research_ai_confidence: 'REAL', research_ai_candidate_event_id: 'TEXT',
+      research_ai_candidate_match: 'TEXT', research_odds_http_status: 'INTEGER',
+      research_odds_diagnostic_json: 'TEXT', research_match_snapshot_json: 'TEXT',
+      research_lookup_snapshot_json: 'TEXT'
+    };
+    // D1 SQLite: adding a column is idempotent only by checking table_info first.
+    const info = await env.DB.prepare('PRAGMA table_info(hunter_signals)').all();
+    const existing = new Set((info.results ?? []).map((x: any) => String(x.name)));
+    for (const [name, type] of Object.entries(columns)) {
+      if (!existing.has(name)) {
+        try { await env.DB.prepare(`ALTER TABLE hunter_signals ADD COLUMN ${name} ${type}`).run(); }
+        catch (e: any) {
+          // Concurrent Workers can race during the first schema upgrade.
+          if (!/duplicate column name/i.test(String(e?.message ?? e))) throw e;
+        }
+      }
+    }
+    const v = lookup ?? {};
+    const shadow = path === 'SHADOW';
+    const matched = shadow ? !!v.eventId : (v.success === true && !!v.event_id);
+    const oddsDiagnostic = shadow ? v.diagnostic : null;
+    let exact: any = null;
+    if (oddsDiagnostic) { try { const parsed = JSON.parse(oddsDiagnostic); exact = parsed?.exact_target_found ? parsed?.exact_target : null; } catch {} }
+    const price = shadow ? Number(exact?.odds ?? exact?.price ?? exact?.decimal_odds) : Number(v.price);
+    const odds = Number.isFinite(price) && price > 1 ? price : null;
+    const status = shadow ? (exact?.selection_status ?? exact?.status ?? null) : (v.selection_status ?? null);
+    const available = shadow ? (exact ? (status === 'SELECTION_ENABLED' ? 1 : status === 'SELECTION_DISABLED' ? 0 : null) : 0)
+                             : (v.odds_available == null ? null : v.odds_available ? 1 : 0);
+    const safeJson = (value: any) => { try { return JSON.stringify(value ?? null); } catch { return JSON.stringify({error:'SERIALIZE_FAILED'}); } };
+    await env.DB.prepare(`UPDATE hunter_signals SET
+      research_lookup_path=?, research_lookup_at=?, research_matched=?, research_event_id=?,
+      research_cloudbet_match=?, research_odds=?, research_odds_available=?,
+      research_selection_status=?, research_matcher_reason=?, research_match_source=?,
+      research_ai_confidence=?, research_ai_candidate_event_id=?, research_ai_candidate_match=?,
+      research_odds_http_status=?, research_odds_diagnostic_json=?,
+      research_match_snapshot_json=?, research_lookup_snapshot_json=?
+      WHERE match_id=? AND entry_time=?`).bind(
+      path, new Date().toISOString(), matched ? 1 : 0,
+      shadow ? v.eventId ?? null : v.event_id == null ? null : String(v.event_id),
+      v.match ?? null, odds, available, status,
+      shadow ? v.reason ?? null : v.matcher_reason ?? null,
+      shadow ? 'SHADOW' : v.match_source ?? 'LOOKUP_ERROR',
+      shadow ? null : numberOrNull(v.ai_confidence),
+      shadow ? null : v.ai_candidate_event_id == null ? null : String(v.ai_candidate_event_id),
+      shadow ? null : v.ai_candidate_match ?? null,
+      shadow ? v.http ?? null : null, oddsDiagnostic,
+      safeJson(m), safeJson(v), String(row.match_id), String(row.entry_time)
+    ).run();
+  } catch (e: any) { console.error('HUNTER_RESEARCH_V49_WRITE_ERROR', String(e?.message ?? e)); }
+}
+
 // V6.7.10.44 — SHADOW coverage research, separate from live bet readiness.
 // Quotes returned by /odds-debug are stored as raw diagnostics, never as entry_odds.
 async function ensureShadowCoverageTable(env: any) {
@@ -2067,13 +2132,14 @@ async function collectShadowCoverage(env: any, m: any, row: any) {
   const minute = Number(row.entry_minute), score = Number(row.hunter_score);
   if (minute < 10 || minute > 25 || score < 60) return;
   const segment = minute <= 21 ? 'B_SCORE_60_63' : 'C_MINUTE_22_25';
-  const record: any = { outcome: 'UNMATCHED', eventId: null, reason: null, http: null, diagnostic: null };
+  const record: any = { outcome: 'UNMATCHED', eventId: null, match: null, reason: null, http: null, diagnostic: null };
   try {
     const matched = await resolveParallelMatchForHunter(env, m, score);
     if (matched?.success === true && matched?.secure_match === true && matched?.event_id) {
       const eventId = String(matched.event_id).trim().replace(/\.0+$/, '');
       if (/^\d+$/.test(eventId)) {
         record.eventId = eventId;
+        record.match = matched?.match ?? null;
         record.outcome = 'MATCHED';
         if (env.BET_WORKER) {
           const controller = new AbortController();
@@ -2126,6 +2192,7 @@ async function collectShadowCoverage(env: any, m: any, row: any) {
       record.eventId, record.reason, record.http, record.diagnostic
     ).run();
   } catch (e: any) { console.error('SHADOW_COVERAGE_WRITE_ERROR', String(e?.message ?? e)); }
+  return record;
 }
 // V6.7.10.44 — compact mobile report; keep raw diagnostics only in D1.
 function compactShadowDiagnostic(raw: any) {
@@ -5378,7 +5445,8 @@ async function createHunterEntry(
   ) {
     // Shadow lookup is research-only and cannot invoke the bet placement path.
     if (minute >= 10 && minute <= 25 && hunterScore >= 60) {
-      await collectShadowCoverage(env, m, signal);
+      const shadowResultV48 = await collectShadowCoverage(env, m, signal);
+      await saveResearchEntrySnapshotV48(env, m, signal, shadowResultV48, 'SHADOW');
     }
     console.log(
       "HUNTER OBSERVATION ONLY 60-63",
@@ -5427,6 +5495,7 @@ async function createHunterEntry(
 
   // Persistent diagnostic snapshot for every eligible entry, including UNMATCHED.
   await saveHunterEntryMatchAudit(env, signal, cloudbetOdds);
+  await saveResearchEntrySnapshotV48(env, m, signal, cloudbetOdds, 'LIVE');
 
   // ==========================================================
   // SAVE ENTRY ODDS TO D1
