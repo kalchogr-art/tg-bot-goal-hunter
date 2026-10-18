@@ -29,7 +29,7 @@
 // - hunter_signals observation/history capture: 1H 0:0, minute 10–42, Score >=60.
 // - Every captured row continues through GOAL / NO GOAL result tracking.
 // - /stats keeps minute, score, league, hour, goal timing and other Hunter history.
-// - LIVE Telegram / Matcher promotion remains ONLY 10–21′ + Score >=64.
+// - LIVE Telegram / Matcher promotion remains ONLY 10–25′ + Score >=60.
 // - BET READY and /betstats logic are unchanged.
 // - Score 60–64 and minute 22–42 observation rows do NOT enter the live betting pipeline.
 // - Root status now reports stats_capture and live_strategy separately.
@@ -42,14 +42,14 @@
 //
 // // V6.7.10.34 — /STATS SCORE >=60 + ENTRY MINUTE FIX
 // - /stats is explicitly Hunter history Score >=60.
-// - LIVE / Telegram / BET READY remain 10–21′ + Score >=64.
+// - LIVE / Telegram / BET READY remain 10–25′ + Score >=60.
 // - Score 60–63 continues to be D1/result-tracking observation only.
 // - Fixes monthly and daily /stats entry-minute groups:
 //   10–19, 20–24, 25–29, 30–34, 35–42.
 // - /today and /betstats remain unchanged.
 //
 // // V6.7.10.34 — SCORE 60–64 OBSERVATION
-// LIVE remains 10–21′ + Score >=64.
+// LIVE remains 10–25′ + Score >=60.
 // Score 60–63 is D1/result-tracking research only (GOAL HIT / NO GOAL).
 // No Telegram, Cloudbet Matcher, Bet Worker, odds lookup or BET READY for 60–64.
 // /stats splits 60–64 and 65–69 so the 5-point difference is measurable.
@@ -58,7 +58,7 @@
 // 
 
 // V6.7.10.34 behavior:
-// - Telegram: ALL Hunter signals passing 10–21′ + Score >=64
+// - Telegram: ALL Hunter signals passing 10–25′ + Score >=60
 // - Telegram does not wait for MATCHED / ODDS / BET READY
 // - BET READY counting/filtering remains unchanged
 // - /stats minute groups restored to full normal Hunter history 10–42′
@@ -301,8 +301,8 @@ const FLASHSCORE_HEADERS = {
 const REPORT_ELIGIBLE_SQL = `
   entry_odds IS NOT NULL
   AND entry_odds > 1
-  AND entry_minute BETWEEN 10 AND 21
-  AND hunter_score >= 64
+  AND entry_minute BETWEEN 10 AND 25
+  AND hunter_score >= 60
 `;
 
 // /stats HUNTER HISTORY: keep the complete historical Hunter sample.
@@ -321,8 +321,8 @@ const BET_READY_HISTORY_SQL = `
   AND entry_odds IS NOT NULL
   AND entry_odds > 1
   AND odds_available = 1
-  AND entry_minute BETWEEN 10 AND 21
-  AND hunter_score >= 64
+  AND entry_minute BETWEEN 10 AND 25
+  AND hunter_score >= 60
 `;
 
 // V6.7.10.36 — manual stats reset requested by user.
@@ -1671,7 +1671,7 @@ export default {
           version: "V6.7.10.34 TELEGRAM ALL FILTERED + FULL STATS",
           date: local.date,
           entry: Number(row?.total || 0),
-          filter: "10-21_SCORE_GTE_64_BET_READY"
+          filter: "10-25_SCORE_GTE_60_BET_READY"
         });
       } catch (error) {
         return json({
@@ -1752,7 +1752,7 @@ export default {
             success: true,
             action: "LIVE_CHECK",
             mode: "READ_ONLY",
-            filter: "10-21_SCORE_64"
+            filter: "10-25_SCORE_60"
           });
         }
 
@@ -1770,7 +1770,7 @@ export default {
             success: true,
             action: "YESTERDAY_CHECK",
             mode: "READ_ONLY",
-            population: "D1_10_21_SCORE_GTE_64"
+            population: "D1_10_25_SCORE_GTE_60"
           });
         }
 
@@ -2250,7 +2250,7 @@ async function recoverCloudbetIdentity(env, matches, signals, now) {
     const minute = Number(m?.minute);
     if (!Number.isFinite(minute) || minute > 42 || minute < 10) continue;
     const entryMinute = Number(row?.entry_minute);
-    if (!Number.isFinite(entryMinute) || entryMinute < 10 || entryMinute > 21 || Number(row?.hunter_score) < 64) continue;
+    if (!Number.isFinite(entryMinute) || entryMinute < 10 || entryMinute > 25 || Number(row?.hunter_score) < 60) continue;
     const entryAt = Date.parse(row?.entry_time ?? '');
     const age = now.getTime() - entryAt;
     if (!Number.isFinite(age) || age < 120000 || age > 240000) continue;
@@ -3046,7 +3046,7 @@ async function resolveTrackingGoal(
   trackingMap.delete(id);
 
 
-  if (!isShadowSignal(existing)) {
+  if (!isShadowSignal(existing) && existing.telegram_message_id != null) {
 
     await sendTelegram(
       env,
@@ -3109,7 +3109,7 @@ async function resolveTrackingNoGoal(
 
   trackingMap?.delete?.(id);
 
-  if (!isShadowSignal(existing)) {
+  if (!isShadowSignal(existing) && existing.telegram_message_id != null) {
     await sendTelegram(
       env,
       formatNoGoalMessage(
@@ -5789,6 +5789,28 @@ async function createHunterEntry(
     }
   }
 
+  // V6.7.10.51: DIRECT EXACT-MARKET ODDS, MANUAL BET READY.
+  // Match must already be accepted and event ID locked. No wager is sent.
+  const directEventId = cloudbetOdds?.success === true ? String(cloudbetOdds.event_id ?? '').trim() : '';
+  if (directEventId && !(numberOrNull(cloudbetOdds?.price) > 1 && cloudbetOdds?.odds_available === true)) {
+    const direct = await directSiteOddsLookupV50(directEventId);
+    if (direct.odds !== null) {
+      try {
+        const updated = await env.DB.prepare(`UPDATE hunter_signals SET entry_odds=?, odds_available=1,
+          research_odds=?, research_odds_available=1, research_selection_status='SELECTION_ENABLED',
+          research_event_id=?, research_lookup_at=?, updated_at=?
+          WHERE id=? AND status='TRACKING' AND cloudbet_event_id=?
+          AND (entry_odds IS NULL OR entry_odds<=1)`)
+          .bind(direct.odds,direct.odds,directEventId,new Date().toISOString(),new Date().toISOString(),insertedId,directEventId).run();
+        if (Number(updated.meta?.changes ?? 0) > 0) {
+          cloudbetOdds={...cloudbetOdds,price:direct.odds,entry_odds:direct.odds,odds_available:true};
+          betReady={...(betReady??{}),checked:true,ready:true,reason:'DIRECT_ENABLED_MANUAL',
+            action:'MANUAL_BET_READY',current_odds:direct.odds,event_id:directEventId};
+        }
+      } catch(e:any) { console.error('DIRECT_ODDS_DB_SYNC_ERROR',id,String(e?.message??e)); }
+    }
+  }
+
   // ==========================================================
   // TELEGRAM ENTRY
   // ==========================================================
@@ -5798,9 +5820,9 @@ async function createHunterEntry(
   // V6.7.10.34:
   // Telegram visibility is independent from Cloudbet readiness.
   // Every NORMAL Hunter signal passing the live strategy filter
-  // (10–21′ + Score >=64) is sent immediately, including
+  // (10–25′ + Score >=60) is sent immediately, including
   // UNMATCHED / WAITING_ODDS. BET READY accounting remains separate.
-  const sendHunterTelegram =
+  const sendHunterTelegramEligible =
     !shadowEntry &&
     shouldSendHunterEntryToTelegram(minute, hunterScore);
 
@@ -5810,13 +5832,17 @@ async function createHunterEntry(
   // Keep the retry registration for missing odds, but send the ENTRY for
   // every eligible normal Hunter signal (including UNMATCHED / NOT_FOUND).
   // BET READY and betting safety checks are unchanged.
-  if (sendHunterTelegram && !hasEntryOdds) {
+  if (sendHunterTelegramEligible && !hasEntryOdds) {
     await oddsRetryRegister(env, {
       match_id: id, match_name: matchName, event_id: cloudbetOdds?.event_id ?? betReady?.event_id ?? null,
       entry_time: nowIso, entry_minute: minute, hunter_score: hunterScore,
       initial_reason: betReady?.reason ?? cloudbetOdds?.matcher_reason ?? 'ODDS_WAITING'
     });
   }
+  // V6.7.10.51: VIRTUAL signals stay in D1 but never notify until confirmed odds.
+  const sendHunterTelegram = sendHunterTelegramEligible && hasEntryOdds &&
+    (betReady?.ready === true || (cloudbetOdds?.odds_available === true &&
+      numberOrNull(cloudbetOdds?.price ?? cloudbetOdds?.entry_odds) > 1));
   const telegramMessageId =
     !sendHunterTelegram
       ? null
@@ -6147,7 +6173,7 @@ function getTrackingHunterScore(minute) {
   // Store/result-track every normal Hunter candidate from 10–42′ at Score >=60.
   // This is ONLY the observation/history population used by /stats.
   // Live Telegram / Matcher / BET READY eligibility stays controlled by
-  // getRequiredHunterScore() and remains 10–21′ + Score >=64.
+  // getRequiredHunterScore() and remains 10–25′ + Score >=60.
   if (m >= 10 && m <= 42) return 60;
 
   return null;
@@ -6158,15 +6184,15 @@ function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
 
   // V6.7.10.26 — LIVE BET READY TEST FILTER:
-  // only 10–21′ with Hunter Score >=64.
-  if (m >= 10 && m <= 21) return 64;
+  // only 10–25′ with Hunter Score >=60.
+  if (m >= 10 && m <= 25) return 60;
 
   return null;
 }
 
 // V6.7.10.26 — TELEGRAM VISIBILITY
 // Telegram ENTRY uses the SAME strategy filter as the live Hunter:
-// 10–21′ and Hunter Score >=64.
+// 10–25′ and Hunter Score >=60.
 // It does NOT require Cloudbet MATCHED, odds availability or BET READY.
 // Those pipeline states remain informational and BET READY accounting is unchanged.
 function shouldSendHunterEntryToTelegram(minute, hunterScore) {
@@ -8244,7 +8270,7 @@ ${formatEarlyScoreSplit(earlyScoreSplit)}
   message +=
 `\n━━━━━━━━━━━━━━━━
 🎲 Само мачове с реален entry odds
-🎯 10–21′: Score ≥64 | 22′+ НЕ СЕ ВЗИМАТ
+🎯 LIVE 10–25′: Score ≥60
 🕐 Europe/Sofia`;
 
   return message;
@@ -8722,7 +8748,7 @@ async function buildBetReadyStats(env) {
 
   message += `\n━━━━━━━━━━━━━━━━
 ✅ BET READY за целия ${currentMonth}
-🎯 10–21′: Score >=64 | 22′+ НЕ СЕ ВЗИМАТ
+🎯 10–25′: Score >=60 | 22′+ НЕ СЕ ВЗИМАТ
 ♻️ Старите записи се преизчисляват по същия филтър
 💾 Не са изтрити от D1
 🕐 Europe/Sofia`;
@@ -8901,7 +8927,7 @@ async function buildLiveHunterDiagnosticsMessage(env) {
 ♻️ Already tracking: ${f.already_tracking || 0}
 🆕 New eligible: ${f.new_eligible || 0}
 
-🎯 LIVE FILTER: 10–21′ + Score >=64
+🎯 LIVE FILTER: 10–25′ + Score >=60
 🔒 READ ONLY`;
 
   const eligible = Array.isArray(data?.eligible) ? data.eligible : [];
@@ -9415,7 +9441,7 @@ async function build2025Stats(env) {
 
   return `📊 HUNTER 20–25′ ANALYSIS
 Score ≥60 | STATS ONLY
-Live/BET READY: 10–21′ Score ≥64
+Live/BET READY: 10–25′ Score ≥60
 
 🔄 RESET: ${STATS_2025_RESET_LABEL}
 Старите D1 записи са запазени.
@@ -10384,37 +10410,37 @@ async function sendDailyReport(
 // V6.7.10.45 — OBSERVATION ONLY: exact public Cloudbet site-feed odds.
 // A disabled selection can have a visible price. This NEVER affects BET READY,
 // placed bets, existing odds, retries or automatic execution.
-async function directSiteOddsObservationV45(eventId: any): Promise<string> {
-  const id = String(eventId ?? '').trim();
-  if (!/^\d+$/.test(id)) return '— (няма Event ID)';
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4500);
+async function directSiteOddsLookupV50(eventId: any): Promise<{odds: number|null; status: string; reason: string}> {
+  const id=String(eventId??'').trim();
+  if (!/^\d+$/.test(id)) return {odds:null,status:'UNKNOWN',reason:'EVENT_ID_MISSING'};
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),4500);
   try {
-    const url = new URL('https://www.cloudbet.com/sports-api/c/v6/sports/events/' + encodeURIComponent(id));
-    url.searchParams.set('entities', 'all');
-    url.searchParams.set('locale', 'en');
-    url.searchParams.set('markets', 'soccer.total_goals_period_first_half');
-    const response = await fetch(url.toString(), {
-      method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal
-    });
-    if (!response.ok) return '— (HTTP ' + response.status + ')';
-    const payload: any = await response.json();
-    const event: any = payload?.event ?? payload;
-    if (event?.id != null && String(event.id) !== id) return '— (Event ID mismatch)';
-    const market = event?.markets?.['soccer.total_goals_period_first_half'];
-    const submarket = market?.submarkets?.['period=1h'];
-    const selections = Array.isArray(submarket?.selections) ? submarket.selections : [];
-    const selection = selections.find((x: any) =>
-      String(x?.outcome ?? '').toLowerCase() === 'over' &&
-      String(x?.params ?? '').toLowerCase() === 'total=0.5');
-    if (!selection) return '— (TARGET_NOT_FOUND)';
-    const price = numberOrNull(selection.price);
-    const status = String(selection.status ?? 'UNKNOWN');
-    if (price === null || price <= 1) return '— (PRICE_NOT_AVAILABLE; ' + status + ')';
-    return price.toFixed(2) + ' (' + status + ')';
-  } catch (e: any) {
-    return '— (' + (e?.name === 'AbortError' ? 'TIMEOUT' : 'FETCH_ERROR') + ')';
-  } finally { clearTimeout(timer); }
+    const url=new URL('https://www.cloudbet.com/sports-api/c/v6/sports/events/'+encodeURIComponent(id));
+    url.searchParams.set('entities','all');
+    url.searchParams.set('locale','en');
+    url.searchParams.set('markets','soccer.total_goals_period_first_half');
+    const response=await fetch(url.toString(),{method:'GET',headers:{accept:'application/json'},signal:controller.signal});
+    if(!response.ok) return {odds:null,status:'UNKNOWN',reason:'DIRECT_HTTP_'+response.status};
+    const payload:any=await response.json();
+    const event:any=payload?.event??payload;
+    if(event?.id!=null && String(event.id)!==id) return {odds:null,status:'UNKNOWN',reason:'EVENT_ID_MISMATCH'};
+    const market=event?.markets?.['soccer.total_goals_period_first_half'];
+    const submarket=market?.submarkets?.['period=1h'];
+    const selections=Array.isArray(submarket?.selections)?submarket.selections:[];
+    const selection=selections.find((x:any)=>String(x?.outcome??'').toLowerCase()==='over' && String(x?.params??'').toLowerCase()==='total=0.5');
+    if(!selection) return {odds:null,status:'UNKNOWN',reason:'DIRECT_TARGET_NOT_FOUND'};
+    const status=String(selection.status??'UNKNOWN').toUpperCase();
+    if(status!=='SELECTION_ENABLED') return {odds:null,status,reason:'DIRECT_NOT_ENABLED'};
+    const odds=numberOrNull(selection.price);
+    if(odds===null||odds<=1) return {odds:null,status,reason:'DIRECT_PRICE_INVALID'};
+    return {odds,status,reason:'DIRECT_ENABLED'};
+  } catch(e:any) { return {odds:null,status:'UNKNOWN',reason:e?.name==='AbortError'?'DIRECT_TIMEOUT':'DIRECT_FETCH_ERROR'}; }
+  finally {clearTimeout(timer);}
+}
+async function directSiteOddsObservationV45(eventId:any):Promise<string> {
+  const r=await directSiteOddsLookupV50(eventId);
+  return r.odds===null?'— ('+r.reason+')':r.odds.toFixed(2)+' ('+r.status+')';
 }
 
 // ============================================================
@@ -10886,7 +10912,7 @@ function formatEntryMessage(
   ) {
 
     betReadyText =
-      "💰 BET READY: ✅ YES";
+      "💰 BET READY: ✅ YES (MANUAL)";
 
     const currentOdds =
       numberOrNull(
@@ -10974,7 +11000,7 @@ ${directSiteOdds !== null ? '\nКоефициент от директно изв
 
 ${betReadyText}
 
-🎯 Условие: 10–21′ | Score ≥64
+🎯 Условие: 10–25′ | Score ≥60
 
 🕐 ${local.text}
 
@@ -11339,13 +11365,15 @@ function getSofiaDateParts(value) {
 
 
 
-// V6.7.10.44 — minute CRON retry, independent of Hunter signal lifecycle.
+// V6.7.10.53 — five minute CRON retries (+1,+2,+3,+4,+5), independent of Hunter signal lifecycle.
 // The exact market is sourced only from the Bet Worker's /odds-debug same-event diagnostic.
 async function ensureOddsRetryV44(env: any) {
+  try { await env.DB.prepare(`ALTER TABLE hunter_signals ADD COLUMN bet_ready_at TEXT`).run(); }
+  catch (_) { /* Column already exists on later CRON runs. */ }
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS hunter_odds_retry_v44 (
     match_id TEXT PRIMARY KEY, match_name TEXT, event_id TEXT, entry_time TEXT NOT NULL,
     entry_minute INTEGER, hunter_score REAL, initial_reason TEXT,
-    state TEXT NOT NULL DEFAULT 'WAITING', attempt_count INTEGER NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'WAITING', attempt_count INTEGER NOT NULL DEFAULT 0,
     last_check_at TEXT, next_check_at TEXT, last_reason TEXT,
     found_at TEXT, found_odds REAL, notified_at TEXT, updated_at TEXT
   )`).run();
@@ -11363,14 +11391,11 @@ async function oddsRetryRegister(env: any, r: any) {
   await env.DB.prepare(`INSERT OR IGNORE INTO hunter_odds_retry_v44
     (match_id, match_name, event_id, entry_time, entry_minute, hunter_score,
      initial_reason, state, attempt_count, last_check_at, next_check_at, last_reason, updated_at)
-    VALUES (?,?,?,?,?,?,?,'WAITING',1,?,?,?,?)`)
+    VALUES (?,?,?,?,?,?,?,'WAITING',0,?,?,?,?)`)
     .bind(String(r.match_id), r.match_name, r.event_id == null ? null : String(r.event_id),
       r.entry_time, r.entry_minute, r.hunter_score, r.initial_reason,
       now, next, r.initial_reason, now).run();
-  await env.DB.prepare(`INSERT OR IGNORE INTO hunter_odds_retry_attempts_v44
-    (match_id, attempt_number, checked_at, reason, event_id, odds, http_status)
-    VALUES (?,1,?,?,?,NULL,NULL)`)
-    .bind(String(r.match_id), now, r.initial_reason, r.event_id == null ? null : String(r.event_id)).run();
+  // Initial odds lookup belongs to ENTRY, not to the five CRON retry attempts.
 }
 function exactOddsFromDebugV44(payload: any): number | null {
   const event = payload?.cloudbet_event;
@@ -11386,7 +11411,7 @@ function exactOddsFromDebugV44(payload: any): number | null {
   const status = String(target.status ?? target.state ?? '').toUpperCase();
   if (market !== 'soccer.total_goals_period_first_half' || sub !== 'period=1h' ||
       outcome !== 'over' || params !== 'total=0.5' ||
-      status.includes('DISABLED') || status.includes('SUSPENDED') || status.includes('CLOSED')) return null;
+      status !== 'SELECTION_ENABLED') return null;
   const price = numberOrNull(target.price ?? target.odds);
   return price !== null && price > 1 ? price : null;
 }
@@ -11406,7 +11431,7 @@ async function processOddsRetryMinute(env: any) {
         .bind(numberOrNull(row.stored_odds)>1?'FOUND':'STOPPED', now, id).run();
       continue;
     }
-    const attempt = Math.min(6, Number(row.attempt_count) + 1);
+    const attempt = Math.min(5, Number(row.attempt_count) + 1);
     let reason = 'EVENT_ID_MISSING', http: number | null = null, odds: number | null = null;
     const eventId = String(row.event_id ?? row.stored_event_id ?? '').trim();
     if (eventId && env.BET_WORKER) {
@@ -11422,20 +11447,48 @@ async function processOddsRetryMinute(env: any) {
         } else reason = 'BET_WORKER_HTTP_'+response.status;
       } catch (e: any) { reason = 'BET_WORKER_ERROR_'+String(e?.message ?? e).slice(0,100); }
     } else if (!env.BET_WORKER) reason='BET_WORKER_BINDING_MISSING';
+    if (odds === null && eventId) {
+      const direct=await directSiteOddsLookupV50(eventId);
+      if (direct.odds!==null) { odds=direct.odds; reason='DIRECT_ENABLED_MANUAL'; }
+      else reason += '|'+direct.reason;
+    }
     await env.DB.prepare(`INSERT OR IGNORE INTO hunter_odds_retry_attempts_v44
       (match_id,attempt_number,checked_at,reason,event_id,odds,http_status) VALUES (?,?,?,?,?,?,?)`)
       .bind(id,attempt,now,reason,eventId || null,odds,http).run();
     if (odds !== null && eventId) {
+      // Fail closed: a quote alone does not prove a match is still 1H 0:0.
+      let liveStillEligible = false;
+      try {
+        const liveResponse = await env.V27.fetch(new Request('https://v27.internal/',
+          {method:'GET',headers:{Accept:'application/json'}}));
+        if (liveResponse.ok) {
+          const liveData:any = await liveResponse.json();
+          const liveMatch = (Array.isArray(liveData?.matches)?liveData.matches:[])
+            .find((m:any)=>String(m?.id??'')===id);
+          const liveMinute = Number(liveMatch?.minute);
+          liveStillEligible = !!liveMatch && liveData?.success===true &&
+            Number(liveMatch?.score?.home)===0 && Number(liveMatch?.score?.away)===0 &&
+            Number.isFinite(liveMinute) && liveMinute>=10 && liveMinute<=42 &&
+            !String(liveMatch?.period??liveMatch?.stage??'').toLowerCase().includes('2h');
+        }
+      } catch (e:any) { console.error('VIRTUAL_LIVE_RECHECK_ERROR',id,String(e?.message??e)); }
+      if (!liveStillEligible) {
+        await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='STOPPED',
+          last_reason='LIVE_0_0_1H_NOT_CONFIRMED',updated_at=? WHERE match_id=? AND state='WAITING'`)
+          .bind(now,id).run();
+        continue;
+      }
       // Re-check Hunter state atomically; callback must not turn an ended match into READY.
       const updated = await env.DB.prepare(`UPDATE hunter_signals SET entry_odds=?, odds_available=1,
-        cloudbet_event_id=?, updated_at=? WHERE match_id=? AND status='TRACKING'
-        AND entry_odds IS NULL AND cloudbet_event_id=?`)
-        .bind(odds,eventId,now,id,eventId).run();
+        cloudbet_event_id=?, research_odds=?, research_odds_available=1,
+        research_selection_status='SELECTION_ENABLED', research_event_id=?, research_lookup_at=?, bet_ready_at=?, updated_at=? WHERE match_id=? AND status='TRACKING'
+        AND (entry_odds IS NULL OR entry_odds<=1) AND cloudbet_event_id=?`)
+        .bind(odds,eventId,odds,eventId,now,now,now,id,eventId).run();
       if (Number(updated.meta?.changes ?? 0) > 0) {
         await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='FOUND', attempt_count=?,
           found_at=?,found_odds=?,last_reason=?,last_check_at=?,updated_at=? WHERE match_id=?`)
           .bind(attempt,now,odds,reason,now,now,id).run();
-        const text = `🎯 HUNTER ENTRY — BET READY\n\n⚽ ${row.match_name}\n📥 ENTRY: ${row.entry_minute}'\n🔥 HUNTER SCORE: ${row.hunter_score}/100\n🎲 1H OVER 0.5: ${odds.toFixed(2)}\n🆔 Event: ${eventId}\n\n🔄 ODDS FOUND: Проверка №${attempt}\n⏳ След ${Math.max(0,Math.round(age/60000))} мин.`;
+        const text = `🎯 HUNTER ENTRY — BET READY (MANUAL)\n📊 LIVE 10–25′ · Score ≥60\n\n⚽ ${row.match_name}\n📥 VIRTUAL ENTRY: ${row.entry_minute}'\n🔥 HUNTER SCORE: ${row.hunter_score}/100\n🎲 1H OVER 0.5: ${odds.toFixed(2)}\n🆔 Event: ${eventId}\n\n🔄 BET READY АКТИВИРАН: ${getSofiaTime(new Date()).text}\n🔄 ODDS FOUND: Проверка №${attempt}\n⏳ След ${Math.max(0,Math.round(age/60000))} мин.`;
         const messageId = await sendTelegram(env,text);
         if (messageId != null) {
           await env.DB.prepare(`UPDATE hunter_signals SET telegram_message_id=? WHERE match_id=? AND status='TRACKING'`)
@@ -11445,18 +11498,17 @@ async function processOddsRetryMinute(env: any) {
         continue;
       }
     }
-    if (attempt >= 6 || age >= 300000) {
+    if (attempt >= 5) {
       const ended = await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='NOT_FOUND',
         attempt_count=?,last_check_at=?,last_reason=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
         .bind(attempt,now,reason,now,id).run();
       if (Number(ended.meta?.changes ?? 0) > 0) {
-        const text=`🔴 ODDS NOT FOUND — 5 MIN\n\n⚽ ${row.match_name}\n📥 ENTRY: ${row.entry_minute}'\n🔥 HUNTER SCORE: ${row.hunter_score}/100\n🔄 Проверки: ${attempt}/6\n❌ NOT_AVAILABLE_WITHIN_5M\nПоследна причина: ${reason}
-Коефициент от директно извличане: ${await directSiteOddsObservationV45(eventId)}`;
-        const messageId=await sendTelegram(env,text);
-        if (messageId != null) await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET notified_at=? WHERE match_id=?`).bind(now,id).run();
+        // VIRTUAL expires silently: do not send ODDS NOT FOUND to Telegram.
+        console.log('VIRTUAL_ODDS_EXPIRED_SILENT', id, reason);
       }
     } else {
-      const next = new Date(Date.parse(String(row.entry_time)) + attempt*60000).toISOString();
+      // Five CRON retries are scheduled at ENTRY + 1, 2, 3, 4, 5 minutes.
+      const next = new Date(Date.parse(String(row.entry_time)) + (attempt+1)*60000).toISOString();
       await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET attempt_count=?,last_check_at=?,
         next_check_at=?,last_reason=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
         .bind(attempt,now,next,reason,now,id).run();
