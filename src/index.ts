@@ -2263,6 +2263,7 @@ async function recoverCloudbetIdentity(env, matches, signals, now) {
         await logIdentityRecovery(env, row, now, 'UNMATCHED', matched?.matcher_reason ?? 'NO_SECURE_MATCH');
         continue;
       }
+      reason = reason+'|SIGNAL_UPDATE_REJECTED_STATE_OR_EVENT_ID';
       const eventId = String(matched.event_id).trim().replace(/\.0+$/, '');
       if (!/^\d+$/.test(eventId)) {
         await logIdentityRecovery(env, row, now, 'INVALID_EVENT_ID', 'NON_NUMERIC_EVENT_ID');
@@ -5838,6 +5839,13 @@ async function createHunterEntry(
       entry_time: nowIso, entry_minute: minute, hunter_score: hunterScore,
       initial_reason: betReady?.reason ?? cloudbetOdds?.matcher_reason ?? 'ODDS_WAITING'
     });
+  }
+  // V6.7.10.54: persist the first confirmed BET READY time for initial ENTRY odds.
+  // Do not fabricate readiness for a virtual entry.
+  if (sendHunterTelegramEligible && hasEntryOdds) {
+    await env.DB.prepare(`UPDATE hunter_signals SET bet_ready_at=COALESCE(bet_ready_at,?),updated_at=?
+      WHERE id=? AND status='TRACKING' AND odds_available=1 AND entry_odds>1`)
+      .bind(new Date().toISOString(),new Date().toISOString(),insertedId).run();
   }
   // V6.7.10.51: VIRTUAL signals stay in D1 but never notify until confirmed odds.
   const sendHunterTelegram = sendHunterTelegramEligible && hasEntryOdds &&
@@ -11365,7 +11373,7 @@ function getSofiaDateParts(value) {
 
 
 
-// V6.7.10.53 — five minute CRON retries (+1,+2,+3,+4,+5), independent of Hunter signal lifecycle.
+// V6.7.10.54 — five minute CRON retries (+1,+2,+3,+4,+5), independent of Hunter signal lifecycle.
 // The exact market is sourced only from the Bet Worker's /odds-debug same-event diagnostic.
 async function ensureOddsRetryV44(env: any) {
   try { await env.DB.prepare(`ALTER TABLE hunter_signals ADD COLUMN bet_ready_at TEXT`).run(); }
@@ -11458,24 +11466,53 @@ async function processOddsRetryMinute(env: any) {
     if (odds !== null && eventId) {
       // Fail closed: a quote alone does not prove a match is still 1H 0:0.
       let liveStillEligible = false;
+      let liveReason = 'V27_UNAVAILABLE';
       try {
-        const liveResponse = await env.V27.fetch(new Request('https://v27.internal/',
-          {method:'GET',headers:{Accept:'application/json'}}));
-        if (liveResponse.ok) {
-          const liveData:any = await liveResponse.json();
-          const liveMatch = (Array.isArray(liveData?.matches)?liveData.matches:[])
-            .find((m:any)=>String(m?.id??'')===id);
-          const liveMinute = Number(liveMatch?.minute);
-          liveStillEligible = !!liveMatch && liveData?.success===true &&
-            Number(liveMatch?.score?.home)===0 && Number(liveMatch?.score?.away)===0 &&
-            Number.isFinite(liveMinute) && liveMinute>=10 && liveMinute<=42 &&
-            !String(liveMatch?.period??liveMatch?.stage??'').toLowerCase().includes('2h');
+        if (!env.V27) {
+          liveReason = 'V27_BINDING_MISSING';
+        } else {
+          const liveResponse = await env.V27.fetch(new Request('https://v27.internal/',
+            {method:'GET',headers:{Accept:'application/json'}}));
+          if (!liveResponse.ok) {
+            liveReason = 'V27_HTTP_'+liveResponse.status;
+          } else {
+            const liveData:any = await liveResponse.json();
+            const matches = Array.isArray(liveData?.matches) ? liveData.matches : [];
+            const liveMatch = matches.find((m:any)=>String(m?.id??'')===id);
+            if (liveData?.success !== true) liveReason = 'V27_SUCCESS_FALSE';
+            else if (!liveMatch) liveReason = 'V27_MATCH_NOT_PRESENT';
+            else {
+              const minute = Number(liveMatch.minute);
+              const period = String(liveMatch.period??'').toUpperCase();
+              const firstHalf = period==='1H' || period==='FIRST' || period==='FIRST HALF' ||
+                period==='1ST HALF' || period.includes('1H');
+              const home = Number(liveMatch?.score?.home);
+              const away = Number(liveMatch?.score?.away);
+              if (!firstHalf) liveReason='NOT_FIRST_HALF_'+period.slice(0,30);
+              else if (home!==0 || away!==0) liveReason='SCORE_NOT_0_0';
+              else if (!Number.isFinite(minute) || minute<10 || minute>42) liveReason='MINUTE_NOT_ELIGIBLE';
+              else { liveStillEligible=true; liveReason='LIVE_0_0_1H_CONFIRMED'; }
+            }
+          }
         }
-      } catch (e:any) { console.error('VIRTUAL_LIVE_RECHECK_ERROR',id,String(e?.message??e)); }
+      } catch (e:any) {
+        liveReason='V27_RECHECK_ERROR_'+String(e?.message??e).slice(0,80);
+        console.error('VIRTUAL_LIVE_RECHECK_ERROR',id,String(e?.message??e));
+      }
       if (!liveStillEligible) {
-        await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='STOPPED',
-          last_reason='LIVE_0_0_1H_NOT_CONFIRMED',updated_at=? WHERE match_id=? AND state='WAITING'`)
-          .bind(now,id).run();
+        // A quote is not sufficient to declare BET READY. Keep an explicit reason.
+        // A transient/unavailable feed may recover on the next minute; do not silently
+        // mark a potentially valid quote as permanently STOPPED.
+        const definitelyIneligible = liveReason==='SCORE_NOT_0_0' ||
+          liveReason.startsWith('NOT_FIRST_HALF_') || liveReason==='MINUTE_NOT_ELIGIBLE';
+        const next = new Date(Date.parse(String(row.entry_time)) + (attempt+1)*60000).toISOString();
+        const state = definitelyIneligible ? 'STOPPED' : (attempt>=5 ? 'NOT_FOUND' : 'WAITING');
+        await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state=?,attempt_count=?,
+          last_check_at=?,next_check_at=?,last_reason=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
+          .bind(state,attempt,now,next,'ODDS_'+reason+'|'+liveReason,now,id).run();
+        await env.DB.prepare(`UPDATE hunter_odds_retry_attempts_v44 SET reason=? WHERE match_id=? AND attempt_number=?`)
+          .bind(reason+'|'+liveReason,id,attempt).run();
+        console.log('VIRTUAL_ODDS_RECHECK_BLOCKED',id,reason,odds,liveReason,state);
         continue;
       }
       // Re-check Hunter state atomically; callback must not turn an ended match into READY.
@@ -11497,6 +11534,9 @@ async function processOddsRetryMinute(env: any) {
         }
         continue;
       }
+      reason = reason+'|SIGNAL_UPDATE_REJECTED_STATE_OR_EVENT_ID';
+      await env.DB.prepare(`UPDATE hunter_odds_retry_attempts_v44 SET reason=? WHERE match_id=? AND attempt_number=?`)
+        .bind(reason,id,attempt).run();
     }
     if (attempt >= 5) {
       const ended = await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='NOT_FOUND',
