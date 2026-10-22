@@ -301,7 +301,7 @@ const FLASHSCORE_HEADERS = {
 const REPORT_ELIGIBLE_SQL = `
   entry_odds IS NOT NULL
   AND entry_odds > 1
-  AND entry_minute BETWEEN 10 AND 25
+  AND entry_minute BETWEEN 10 AND 21
   AND hunter_score >= 60
 `;
 
@@ -321,7 +321,7 @@ const BET_READY_HISTORY_SQL = `
   AND entry_odds IS NOT NULL
   AND entry_odds > 1
   AND odds_available = 1
-  AND entry_minute BETWEEN 10 AND 25
+  AND entry_minute BETWEEN 10 AND 21
   AND hunter_score >= 60
 `;
 
@@ -1671,7 +1671,7 @@ export default {
           version: "V6.7.10.34 TELEGRAM ALL FILTERED + FULL STATS",
           date: local.date,
           entry: Number(row?.total || 0),
-          filter: "10-25_SCORE_GTE_60_BET_READY"
+          filter: "10-21_SCORE_GTE_60_BET_READY"
         });
       } catch (error) {
         return json({
@@ -1752,7 +1752,7 @@ export default {
             success: true,
             action: "LIVE_CHECK",
             mode: "READ_ONLY",
-            filter: "10-25_SCORE_60"
+            filter: "10-21_SCORE_60"
           });
         }
 
@@ -6192,15 +6192,15 @@ function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
 
   // V6.7.10.26 — LIVE BET READY TEST FILTER:
-  // only 10–25′ with Hunter Score >=60.
-  if (m >= 10 && m <= 25) return 60;
+  // only 10–21′ with Hunter Score >=60.
+  if (m >= 10 && m <= 21) return 60;
 
   return null;
 }
 
 // V6.7.10.26 — TELEGRAM VISIBILITY
 // Telegram ENTRY uses the SAME strategy filter as the live Hunter:
-// 10–25′ and Hunter Score >=60.
+// 10–21′ and Hunter Score >=60.
 // It does NOT require Cloudbet MATCHED, odds availability or BET READY.
 // Those pipeline states remain informational and BET READY accounting is unchanged.
 function shouldSendHunterEntryToTelegram(minute, hunterScore) {
@@ -8935,7 +8935,7 @@ async function buildLiveHunterDiagnosticsMessage(env) {
 ♻️ Already tracking: ${f.already_tracking || 0}
 🆕 New eligible: ${f.new_eligible || 0}
 
-🎯 LIVE FILTER: 10–25′ + Score >=60
+🎯 LIVE FILTER: 10–21′ + Score >=60
 🔒 READ ONLY`;
 
   const eligible = Array.isArray(data?.eligible) ? data.eligible : [];
