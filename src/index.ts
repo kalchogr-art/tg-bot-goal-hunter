@@ -705,7 +705,9 @@ export default {
                 readyEntryOdds > 1
               );
 
+            const v2Eligible = passesHunterV2BetReady(row);
             const betReady =
+              v2Eligible &&
               readyEventId &&
               readyOddsAvailable &&
               readyEntryOdds !== null &&
@@ -1273,6 +1275,14 @@ export default {
 
         const nowIso =
           new Date().toISOString();
+
+        const candidate = await env.DB.prepare(`SELECT entry_minute,hunter_score,
+          attack_score,goal_pressure FROM hunter_signals
+          WHERE match_id=? AND status='TRACKING' LIMIT 1`).bind(matchId).first();
+        if (!passesHunterV2BetReady(candidate)) {
+          return json({success:true,action:'V2_FILTERED',bet_ready:false,
+            match_id:matchId,reason:'ATTACK_OR_PRESSURE_OUTSIDE_V2'});
+        }
 
         const update =
           await env.DB
@@ -5460,6 +5470,16 @@ async function createHunterEntry(
   }
 
 
+  // V2: preserve the signal in D1 and result tracking, but do not promote
+  // non-qualifying entries into the Cloudbet/BET READY pipeline.
+  if (!passesHunterV2BetReady({
+    entry_minute: minute, hunter_score: hunterScore,
+    attack_score: attackScore, goal_pressure: goalPressure
+  })) {
+    console.log('HUNTER_V2_BET_READY_FILTERED', id, minute, hunterScore, attackScore, goalPressure);
+    return;
+  }
+
   // ==========================================================
   // CLOUDBET ODDS
   //
@@ -5844,7 +5864,9 @@ async function createHunterEntry(
   // Do not fabricate readiness for a virtual entry.
   if (sendHunterTelegramEligible && hasEntryOdds) {
     await env.DB.prepare(`UPDATE hunter_signals SET bet_ready_at=COALESCE(bet_ready_at,?),updated_at=?
-      WHERE id=? AND status='TRACKING' AND odds_available=1 AND entry_odds>1`)
+      WHERE id=? AND status='TRACKING' AND odds_available=1 AND entry_odds>1
+      AND attack_score>=90 AND goal_pressure>=20.6 AND goal_pressure<24.5
+      AND entry_minute BETWEEN 10 AND 21 AND hunter_score>=60`)
       .bind(new Date().toISOString(),new Date().toISOString(),insertedId).run();
   }
   // V6.7.10.51: VIRTUAL signals stay in D1 but never notify until confirmed odds.
@@ -6187,6 +6209,19 @@ function getTrackingHunterScore(minute) {
   return null;
 }
 
+
+// V2 BET READY gate: frozen entry-time metrics, no later live-stat substitution.
+function passesHunterV2BetReady(entry: any): boolean {
+  const minute = Number(entry?.entry_minute);
+  const score = Number(entry?.hunter_score);
+  const attack = Number(entry?.attack_score);
+  const pressure = Number(entry?.goal_pressure);
+  return entry?.attack_score != null && entry?.goal_pressure != null &&
+    Number.isFinite(minute) && minute >= 10 && minute <= 21 &&
+    Number.isFinite(score) && score >= 60 &&
+    Number.isFinite(attack) && attack >= 90 &&
+    Number.isFinite(pressure) && pressure >= 20.6 && pressure < 24.5;
+}
 
 function getRequiredHunterScore(minute) {
   const m = Number(minute || 0);
@@ -11427,12 +11462,21 @@ async function processOddsRetryMinute(env: any) {
   await ensureOddsRetryV44(env);
   const now = new Date().toISOString();
   const due = await env.DB.prepare(`SELECT r.*, s.status AS hunter_status, s.entry_odds AS stored_odds,
-    s.cloudbet_event_id AS stored_event_id FROM hunter_odds_retry_v44 r
+    s.cloudbet_event_id AS stored_event_id, s.attack_score AS v2_attack,
+    s.goal_pressure AS v2_pressure FROM hunter_odds_retry_v44 r
     LEFT JOIN hunter_signals s ON s.match_id=r.match_id
     WHERE r.state='WAITING' AND r.next_check_at <= ? ORDER BY r.entry_time LIMIT 40`)
     .bind(now).all();
   for (const row of due.results ?? []) {
     const id = String(row.match_id);
+    if (!passesHunterV2BetReady({entry_minute:row.entry_minute,
+      hunter_score:row.hunter_score,attack_score:row.v2_attack,
+      goal_pressure:row.v2_pressure})) {
+      await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state='STOPPED',
+        last_reason='V2_FILTERED',updated_at=? WHERE match_id=? AND state='WAITING'`)
+        .bind(now,id).run();
+      continue;
+    }
     const age = Date.now() - Date.parse(String(row.entry_time));
     if (row.hunter_status !== 'TRACKING' || numberOrNull(row.stored_odds) > 1) {
       await env.DB.prepare(`UPDATE hunter_odds_retry_v44 SET state=?,updated_at=? WHERE match_id=? AND state='WAITING'`)
